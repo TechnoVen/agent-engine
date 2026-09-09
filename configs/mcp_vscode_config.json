@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "agent-engine": {
+      "command": "/home/nadir/agent_engine/.venv/bin/python",
+      "args": [
+        "/home/nadir/agent_engine/server/mcp_server.py"
+      ],
+      "env": {
+        "PYTHONPATH": "/home/nadir/agent_engine"
+      }
+    }
+  }
+}

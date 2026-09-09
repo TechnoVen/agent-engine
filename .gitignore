@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+ENV/
+env/
+
+# Agent Engine specific
+logs/
+*.log
+.agent_history/
+data/audit_sentry.db
+data/chroma/
+workspace/
+models/*.gguf   # if you don't want to commit large model files (optional)
+*.enc           # encrypted backups (optional)
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Streamlit
+.streamlit/
+
+# Environment
+.env
+*.env
+.env.*

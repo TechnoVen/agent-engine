@@ -1,0 +1,29 @@
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments & packages
+.venv/
+venv/
+node_modules/
+
+# Local databases & persistent vectors
+*.db
+*.sqlite
+*.sqlite3
+data/chroma/
+data/
+logs/
+
+# Testing & Git
+.pytest_cache/
+.git/
+.coverage
+
+# Internal system files to prevent recursive audit loops
+watcher.py
+conftest.py
+pytest.ini
+.agentignore

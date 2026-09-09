@@ -1,0 +1,9 @@
+extensions:
+  agent-engine:
+    name: AgentEngine
+    type: stdio
+    cmd: /home/nadir/agent_engine/.venv/bin/python
+    args:
+      - /home/nadir/agent_engine/server/mcp_server.py
+    envs:
+      PYTHONPATH: /home/nadir/agent_engine
