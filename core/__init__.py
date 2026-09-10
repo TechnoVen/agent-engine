@@ -14,7 +14,15 @@ except Exception:
 
 from core.engine import AgentPipeline, DynamicSignatureBuilder, LowCodeAgent, NodeConfig
 from core.harness import AgentHarness, train_and_optimize
-from core.memory import AgentMemory, RAGModule
+from core.memory import (
+    AgentMemory,
+    Observation,
+    ObservationalMemory,
+    PreferenceExtractor,
+    RAGModule,
+    ScoredObservation,
+    SessionSummarizer,
+)
 
 # from core.router import ModelRouter, get_language_model
 from core.router import ModelRouter
@@ -29,6 +37,11 @@ __all__ = [
     "get_language_model",
     "AgentMemory",
     "RAGModule",
+    "ObservationalMemory",
+    "Observation",
+    "ScoredObservation",
+    "PreferenceExtractor",
+    "SessionSummarizer",
     "AgentHarness",
     "train_and_optimize",
     "SkillTemplate",

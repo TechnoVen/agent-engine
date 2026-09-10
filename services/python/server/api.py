@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from core.config import get_feature_flags, require_flag, set_flag_override
-from core.memory import AgentMemory
+from core.memory import AgentMemory, ObservationalMemory
 from core.pipelines import get_pipeline_registry
 from core.router import ModelRouter
 from core.storage import get_storage_backend
@@ -51,6 +51,7 @@ v1_router = APIRouter(prefix="/v1")
 # Singletons for memory and router
 router_instance = ModelRouter()
 memory_instance = AgentMemory()
+observational_memory_instance = ObservationalMemory()
 
 # In-memory queues for global SSE event subscribers
 _event_subscribers: List[asyncio.Queue] = []
@@ -142,6 +143,41 @@ class IngestMemoryRequest(BaseModel):
 class IngestMemoryResponse(BaseModel):
     document_id: str
     count: int
+
+
+class ObservationRecordRequest(BaseModel):
+    content: str
+    category: str = "general"
+    importance: float = 5.0
+    session_id: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class ObservationRecordResponse(BaseModel):
+    id: str
+    content: str
+    category: str
+    importance: float
+    created_at: float
+    session_id: Optional[str] = None
+
+
+class ScoredObservationItem(BaseModel):
+    id: str
+    content: str
+    category: str
+    importance: float
+    created_at: float
+    session_id: Optional[str] = None
+    relevance_score: float
+    importance_score: float
+    recency_score: float
+    final_score: float
+
+
+class ObservationQueryResponse(BaseModel):
+    query: str
+    observations: List[ScoredObservationItem]
 
 
 class PatchInfo(BaseModel):
@@ -442,6 +478,62 @@ async def ingest_memory(req: IngestMemoryRequest):
         metadatas=[{"source": req.source, "timestamp": now_iso}],
     )
     return IngestMemoryResponse(document_id=ids[0], count=memory_instance.count())
+
+
+@v1_router.post("/memory/observe", response_model=ObservationRecordResponse)
+async def record_observation(req: ObservationRecordRequest):
+    """Record an atomic observation, user preference, or project fact into observational memory."""
+    obs = observational_memory_instance.record_observation(
+        content=req.content,
+        category=req.category,
+        importance=req.importance,
+        session_id=req.session_id,
+        metadata=req.metadata,
+    )
+    return ObservationRecordResponse(
+        id=obs.id,
+        content=obs.content,
+        category=obs.category,
+        importance=obs.importance,
+        created_at=obs.created_at,
+        session_id=obs.session_id,
+    )
+
+
+@v1_router.get("/memory/observations", response_model=ObservationQueryResponse)
+async def query_observations(
+    query: str = Query(..., description="Query to search observational memory"),
+    top_k: int = Query(5, ge=1, le=50, description="Max observations to retrieve"),
+    alpha: float = Query(0.5, ge=0.0, le=1.0, description="Weight for semantic relevance"),
+    beta: float = Query(0.3, ge=0.0, le=1.0, description="Weight for importance score"),
+    gamma: float = Query(0.2, ge=0.0, le=1.0, description="Weight for recency/temporal decay"),
+    decay_lambda: float = Query(0.05, ge=0.0, description="Temporal decay rate per day"),
+):
+    """Retrieve observations scored by semantic relevance, importance, and temporal decay."""
+    scored = observational_memory_instance.query_observations(
+        query=query,
+        n_results=top_k,
+        alpha=alpha,
+        beta=beta,
+        gamma=gamma,
+        decay_lambda=decay_lambda,
+    )
+    items = [
+        ScoredObservationItem(
+            id=s.observation.id,
+            content=s.observation.content,
+            category=s.observation.category,
+            importance=s.observation.importance,
+            created_at=s.observation.created_at,
+            session_id=s.observation.session_id,
+            relevance_score=s.relevance_score,
+            importance_score=s.importance_score,
+            recency_score=s.recency_score,
+            final_score=s.final_score,
+        )
+        for s in scored
+    ]
+    return ObservationQueryResponse(query=query, observations=items)
 
 
 @v1_router.get("/patches", response_model=List[PatchInfo])

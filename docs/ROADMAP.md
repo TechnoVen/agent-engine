@@ -77,7 +77,12 @@
   - **Acceptance Criteria:** New pipelines register via decorator; discoverable via API `/v1/pipelines`.
   - **Dependencies:** 1.1
   - **Status:** ✅ DONE
-- [ ] **Task 1.3 — Memory Upgrade (Observational Memory)** (Cross-session importance scoring)
+- [x] **Task 1.3 — Memory Upgrade (Observational Memory)** (Cross-session importance scoring)
+  - **User Story:** As P3, I want my agent to remember my preferences across sessions.
+  - **Deliverables:** `core/memory/observational.py` (session summarization, importance scoring, preference extractor), `core/memory/vector.py`, `core/memory/__init__.py`, API endpoints `POST /v1/memory/observe` and `GET /v1/memory/observations`.
+  - **Acceptance Criteria:** Memory retrieves relevant facts from sessions 7+ days old; scores decay gracefully according to Stanford Generative Agents formula.
+  - **Dependencies:** 0.3
+  - **Status:** ✅ DONE
 - [ ] **Task 1.4 — Guardrail Policy Engine** (Central YAML rules, risk scoring, tool interception)
 - [ ] **Task 1.5 — Cost Tracker** (Per-request, per-agent, per-model spend ledger)
 - [ ] **Task 1.6 — Session Store Unification** (Cross-agent unified session model)

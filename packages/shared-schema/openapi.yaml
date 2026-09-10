@@ -213,6 +213,67 @@ paths:
               schema:
                 $ref: '#/components/schemas/IngestMemoryResponse'
 
+  /memory/observe:
+    post:
+      summary: Record an atomic observation, user preference, or project fact into observational memory
+      operationId: recordObservation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ObservationRecordRequest'
+      responses:
+        '200':
+          description: Observation recorded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObservationRecordResponse'
+
+  /memory/observations:
+    get:
+      summary: Retrieve observations scored by semantic relevance, importance, and temporal decay
+      operationId: queryObservations
+      parameters:
+        - name: query
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: top_k
+          in: query
+          schema:
+            type: integer
+            default: 5
+        - name: alpha
+          in: query
+          schema:
+            type: number
+            default: 0.5
+        - name: beta
+          in: query
+          schema:
+            type: number
+            default: 0.3
+        - name: gamma
+          in: query
+          schema:
+            type: number
+            default: 0.2
+        - name: decay_lambda
+          in: query
+          schema:
+            type: number
+            default: 0.05
+      responses:
+        '200':
+          description: Scored observations matching query
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObservationQueryResponse'
+
   /patches:
     get:
       summary: List staged code patches
@@ -530,6 +591,76 @@ components:
           type: string
         count:
           type: integer
+
+    ObservationRecordRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+        category:
+          type: string
+          default: general
+        importance:
+          type: number
+          default: 5.0
+        session_id:
+          type: string
+        metadata:
+          type: object
+
+    ObservationRecordResponse:
+      type: object
+      required: [id, content, category, importance, created_at]
+      properties:
+        id:
+          type: string
+        content:
+          type: string
+        category:
+          type: string
+        importance:
+          type: number
+        created_at:
+          type: number
+        session_id:
+          type: string
+
+    ScoredObservationItem:
+      type: object
+      required: [id, content, category, importance, created_at, relevance_score, importance_score, recency_score, final_score]
+      properties:
+        id:
+          type: string
+        content:
+          type: string
+        category:
+          type: string
+        importance:
+          type: number
+        created_at:
+          type: number
+        session_id:
+          type: string
+        relevance_score:
+          type: number
+        importance_score:
+          type: number
+        recency_score:
+          type: number
+        final_score:
+          type: number
+
+    ObservationQueryResponse:
+      type: object
+      required: [query, observations]
+      properties:
+        query:
+          type: string
+        observations:
+          type: array
+          items:
+            $ref: '#/components/schemas/ScoredObservationItem'
 
     PatchInfo:
       type: object
