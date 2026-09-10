@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-engine.local/schemas/events.schema.json",
+  "title": "AgentEngineEvents",
+  "description": "Schema for Server-Sent Events (SSE) emitted by Agent Engine Python sidecar",
+  "oneOf": [
+    { "$ref": "#/$defs/TokenEvent" },
+    { "$ref": "#/$defs/ToolCallEvent" },
+    { "$ref": "#/$defs/ApprovalRequestEvent" },
+    { "$ref": "#/$defs/PatchStagedEvent" },
+    { "$ref": "#/$defs/CostUpdateEvent" },
+    { "$ref": "#/$defs/AgentStatusEvent" }
+  ],
+  "$defs": {
+    "TokenEvent": {
+      "type": "object",
+      "properties": {
+        "event": { "type": "string", "const": "token" },
+        "session_id": { "type": "string" },
+        "delta": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["event", "session_id", "delta", "timestamp"]
+    },
+    "ToolCallEvent": {
+      "type": "object",
+      "properties": {
+        "event": { "type": "string", "const": "tool_call" },
+        "session_id": { "type": "string" },
+        "tool_name": { "type": "string" },
+        "arguments": { "type": "object" },
+        "call_id": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["event", "session_id", "tool_name", "arguments", "call_id", "timestamp"]
+    },
+    "ApprovalRequestEvent": {
+      "type": "object",
+      "properties": {
+        "event": { "type": "string", "const": "approval_request" },
+        "request_id": { "type": "string" },
+        "session_id": { "type": "string" },
+        "action": { "type": "string" },
+        "risk_level": { "type": "string", "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+        "risk_score": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+        "diff_preview": { "type": ["string", "null"] },
+        "description": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["event", "request_id", "session_id", "action", "risk_level", "risk_score", "timestamp"]
+    },
+    "PatchStagedEvent": {
+      "type": "object",
+      "properties": {
+        "event": { "type": "string", "const": "patch_staged" },
+        "patch_id": { "type": "integer" },
+        "file_path": { "type": "string" },
+        "patch_type": { "type": "string" },
+        "risk_level": { "type": "string" },
+        "report": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["event", "patch_id", "file_path", "patch_type", "risk_level", "report", "timestamp"]
+    },
+    "CostUpdateEvent": {
+      "type": "object",
+      "properties": {
+        "event": { "type": "string", "const": "cost_update" },
+        "session_id": { "type": "string" },
+        "model": { "type": "string" },
+        "prompt_tokens": { "type": "integer", "minimum": 0 },
+        "completion_tokens": { "type": "integer", "minimum": 0 },
+        "cost_usd": { "type": "number", "minimum": 0.0 },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["event", "session_id", "model", "prompt_tokens", "completion_tokens", "cost_usd", "timestamp"]
+    },
+    "AgentStatusEvent": {
+      "type": "object",
+      "properties": {
+        "event": { "type": "string", "const": "agent_status" },
+        "agent_name": { "type": "string" },
+        "project": { "type": "string" },
+        "status": { "type": "string", "enum": ["idle", "busy", "waiting_approval", "error", "offline"] },
+        "current_task": { "type": ["string", "null"] },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["event", "agent_name", "status", "timestamp"]
+    }
+  }
+}

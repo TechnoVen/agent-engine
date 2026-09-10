@@ -1,14 +1,9 @@
-import pytest
 import dspy
-from core.engine import (
-    NodeConfig,
-    DynamicSignatureBuilder,
-    LowCodeAgent,
-    AgentPipeline,
-    _GLOBAL_TOOL_REGISTRY
-)
-from core.memory import AgentMemory, RAGModule
+
+from core.engine import DynamicSignatureBuilder, LowCodeAgent, NodeConfig
+from core.memory import AgentMemory
 from core.router import ModelRouter
+
 
 def test_dynamic_signature_generation():
     """Verify that DynamicSignatureBuilder generates valid DSPy Signature classes."""
@@ -18,9 +13,9 @@ def test_dynamic_signature_generation():
         inputs={"code_snippet": "Source code text to review"},
         outputs={
             "vulnerabilities": "List of discovered security issues",
-            "risk_level": "Calculated risk severity (Low, Med, High, Critical)"
+            "risk_level": "Calculated risk severity (Low, Med, High, Critical)",
         },
-        reasoning_type="cot"
+        reasoning_type="cot",
     )
 
     sig_class = DynamicSignatureBuilder.build(config)
@@ -30,27 +25,23 @@ def test_dynamic_signature_generation():
     assert "risk_level" in sig_class.fields
     assert sig_class.__doc__ == "Audit source code for OWASP vulnerabilities."
 
+
 def test_lowcode_agent_initialization():
     """Verify LowCodeAgent initializes ChainOfThought and ReAct correctly."""
     # 1. Chain of Thought agent
     cot_config = NodeConfig(
-        name="Explainer",
-        inputs=["topic"],
-        outputs=["summary"],
-        reasoning_type="cot"
+        name="Explainer", inputs=["topic"], outputs=["summary"], reasoning_type="cot"
     )
     cot_agent = LowCodeAgent(cot_config)
     assert isinstance(cot_agent.processor, dspy.ChainOfThought)
 
     # 2. Predict agent
     pred_config = NodeConfig(
-        name="Translator",
-        inputs=["english"],
-        outputs=["french"],
-        reasoning_type="predict"
+        name="Translator", inputs=["english"], outputs=["french"], reasoning_type="predict"
     )
     pred_agent = LowCodeAgent(pred_config)
     assert isinstance(pred_agent.processor, dspy.Predict)
+
 
 def test_agent_memory_persistence(tmp_path):
     """Verify AgentMemory can store, query, and count vector embeddings in ChromaDB."""
@@ -62,7 +53,7 @@ def test_agent_memory_persistence(tmp_path):
     docs = [
         "FastAPI is a modern web framework for Python.",
         "DSPy optimizes prompts for language models programmatically.",
-        "ChromaDB is an open-source AI application database."
+        "ChromaDB is an open-source AI application database.",
     ]
     ids = memory.add_documents(docs)
     assert len(ids) == 3
@@ -72,6 +63,7 @@ def test_agent_memory_persistence(tmp_path):
     retrieved = memory.retrieve_passages("How to optimize prompts with DSPy?", n_results=1)
     assert len(retrieved) == 1
     assert "DSPy optimizes prompts" in retrieved[0]
+
 
 def test_router_status_and_instantiation():
     """Verify ModelRouter status inspects providers and creates configured LM objects."""

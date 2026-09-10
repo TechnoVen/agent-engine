@@ -1,0 +1,28 @@
+{
+  "id": "summarize_meeting_notes",
+  "name": "Summarize Meeting Notes",
+  "description": "Analyze raw meeting transcripts, discussion logs, or scratchpad notes to generate a polished executive summary, a concise list of key decisions made, and an actionable checklist of follow-up tasks with assignees and target deadlines.",
+  "version": "1.0.0",
+  "category": "Productivity",
+  "tags": [
+    "meetings",
+    "notes",
+    "executive-brief",
+    "action-items"
+  ],
+  "inputs": {
+    "meeting_notes": "Raw transcript or rough meeting notes",
+    "participants": "List of attendees and key stakeholders present"
+  },
+  "outputs": {
+    "executive_summary": "High-level summary of meeting agenda, key takeaways, and strategic alignment",
+    "key_decisions": "Numbered list of explicit decisions agreed upon by the team",
+    "action_items": "Bulleted checklist of tasks with designated owners and deadlines"
+  },
+  "reasoning_type": "cot",
+  "tools": [],
+  "sample_inputs": {
+    "meeting_notes": "Quarterly Sprint Sync (Sept 2026):\nAlice: Our API latency spiked to 450ms during peak load on the auth service.\nBob: I traced it to unindexed PostgreSQL queries on session_tokens. I can add a composite B-tree index by Wednesday.\nCarol: We need to roll out the new ChromaDB vector search endpoint by Friday for the mobile team. Client SDK is ready.\nAlice: Agreed. Bob handles the DB index patch, Carol merges the vector service. I will notify the mobile team once staging passes verification on Thursday.",
+    "participants": "Alice (Engineering Lead), Bob (Backend Infra), Carol (AI/Vector Systems)"
+  }
+}

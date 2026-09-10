@@ -1,0 +1,33 @@
+{
+  "id": "weekly_report_jira_notion",
+  "name": "Draft Weekly Report from Jira/Notion",
+  "description": "Synthesize fragmented Jira ticket updates, GitHub PR milestones, and Notion status notes into a cohesive, structured weekly status report formatted for management and cross-functional stakeholders.",
+  "version": "1.0.0",
+  "category": "Engineering",
+  "tags": [
+    "jira",
+    "notion",
+    "weekly-report",
+    "engineering-management"
+  ],
+  "inputs": {
+    "completed_issues": "Bullet points or ticket IDs of tasks completed during this sprint cycle",
+    "in_progress_tasks": "Active tasks, code reviews, and WIP milestones currently underway",
+    "blockers": "Technical hurdles, dependency wait times, or infrastructure issues impeding velocity",
+    "team_name": "Name of team or business domain"
+  },
+  "outputs": {
+    "executive_brief": "Executive elevator summary of weekly sprint velocity, major ship milestones, and team momentum",
+    "key_highlights": "Grouped list of delivered achievements and user-facing value additions",
+    "risk_analysis": "Assessment of current blockers with recommended mitigation strategies",
+    "next_week_commitments": "Core commitments scheduled for the upcoming weekly cycle"
+  },
+  "reasoning_type": "cot",
+  "tools": [],
+  "sample_inputs": {
+    "completed_issues": "- [ENG-402] Shipped FastMCP server with stdio transport\n- [ENG-415] Completed DSPy dynamic router failover integration\n- [ENG-418] Fixed llama-server health-check timeout on IPv6",
+    "in_progress_tasks": "- [ENG-422] ChromaDB persistent metadata indexing for agent blueprints\n- [ENG-430] OpenClaw skill templates drag-and-drop studio UI",
+    "blockers": "- GPU memory quota pending approval for 70B model evaluation cluster\n- Awaiting external API rate limit increase from Anthropic",
+    "team_name": "Autonomous Agent Systems Core Team"
+  }
+}

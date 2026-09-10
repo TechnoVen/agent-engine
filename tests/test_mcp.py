@@ -1,12 +1,13 @@
 import json
-import pytest
+
 from server.mcp_server import (
-    mcp,
     get_system_telemetry,
     ingest_agent_memory,
+    list_staged_patches,
+    mcp,
     query_agent_memory,
-    list_staged_patches
 )
+
 
 def test_mcp_tool_registration():
     """Verify all expected tools are exposed via FastMCP."""
@@ -18,10 +19,13 @@ def test_mcp_tool_registration():
         "execute_dynamic_blueprint",
         "list_staged_patches",
         "apply_staged_patch_by_id",
-        "get_system_telemetry"
+        "get_system_telemetry",
+        "list_skill_templates",
+        "execute_skill_template",
     ]
     for exp in expected_tools:
         assert exp in tool_names, f"Missing MCP tool: {exp}"
+
 
 def test_system_telemetry_tool():
     """Verify get_system_telemetry outputs valid JSON and hardware stats."""
@@ -33,13 +37,18 @@ def test_system_telemetry_tool():
     assert "indexed_memory_documents" in data
     assert data["ram_total_gb"] > 0
 
+
 def test_mcp_memory_lifecycle():
     """Verify memory ingestion and query via MCP tool functions."""
-    ingest_res = ingest_agent_memory("MCP allows IDEs like VS Code to invoke external agent tools directly.", source_title="mcp_test")
+    ingest_res = ingest_agent_memory(
+        "MCP allows IDEs like VS Code to invoke external agent tools directly.",
+        source_title="mcp_test",
+    )
     assert "Successfully indexed" in ingest_res
 
     query_res = query_agent_memory("How does MCP connect to IDEs?", top_k=1)
     assert "VS Code" in query_res or "MCP allows" in query_res
+
 
 def test_list_staged_patches_tool():
     """Verify list_staged_patches returns a string report."""

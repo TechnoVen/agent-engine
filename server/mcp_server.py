@@ -1,8 +1,8 @@
+import json
 import os
 import sys
-import json
+
 import psutil
-from typing import Optional, Dict, Any, List
 
 # Ensure project root is in sys.path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -10,26 +10,21 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 # Ensure numpy pre-import for DSPy compatibility
-import numpy
-import dspy
 from mcp.server.fastmcp import FastMCP
 
-from core.router import ModelRouter
 from core.engine import LowCodeAgent, NodeConfig
-from core.memory import AgentMemory, RAGModule
+from core.memory import AgentMemory
+from core.router import ModelRouter
+from core.templates import TemplateManager
 from server.watcher import (
     AutonomousPatchEngine,
-    get_staged_patches,
     apply_staged_patch,
-    reject_staged_patch,
-    stage_patch_record
+    get_staged_patches,
+    stage_patch_record,
 )
 
 # Initialize FastMCP server
-mcp = FastMCP(
-    "AgentEngine",
-    dependencies=["dspy", "chromadb", "pydantic", "psutil", "watchdog"]
-)
+mcp = FastMCP("AgentEngine", dependencies=["dspy", "chromadb", "pydantic", "psutil", "watchdog"])
 
 # Initialize shared components
 router = ModelRouter()
@@ -62,7 +57,7 @@ def analyze_and_fix_code(code: str, file_path: str = "snippet.py") -> str:
         report=report,
         original_code=code,
         patched_code=patched_code,
-        status="staged"
+        status="staged",
     )
 
     response = (
@@ -96,10 +91,10 @@ def ingest_agent_memory(document_text: str, source_title: str = "ide_note") -> s
     Store new text, documentation, or code architectural notes into the local ChromaDB RAG memory.
     """
     import datetime
+
     now_iso = datetime.datetime.now().isoformat()
     ids = memory.add_documents(
-        documents=[document_text],
-        metadatas=[{"source": source_title, "timestamp": now_iso}]
+        documents=[document_text], metadatas=[{"source": source_title, "timestamp": now_iso}]
     )
     return f"Successfully indexed document into vector memory (ID: {ids[0]}). Total count: {memory.count()}"
 
@@ -110,7 +105,7 @@ def execute_dynamic_blueprint(
     description: str,
     inputs_comma_separated: str,
     outputs_comma_separated: str,
-    payload_json: str
+    payload_json: str,
 ) -> str:
     """
     Dynamically compile and execute a custom DSPy agent blueprint on the fly.
@@ -119,16 +114,12 @@ def execute_dynamic_blueprint(
     - payload_json: JSON string with matching input key-values, e.g. '{"code": "...", "goal": "..."}'
     """
     router.initialize_and_configure()
-    
+
     in_list = [s.strip() for s in inputs_comma_separated.split(",") if s.strip()]
     out_list = [s.strip() for s in outputs_comma_separated.split(",") if s.strip()]
-    
+
     config = NodeConfig(
-        name=name,
-        description=description,
-        inputs=in_list,
-        outputs=out_list,
-        reasoning_type="cot"
+        name=name, description=description, inputs=in_list, outputs=out_list, reasoning_type="cot"
     )
 
     try:
@@ -140,11 +131,7 @@ def execute_dynamic_blueprint(
     prediction = agent(**payload)
     pred_dict = prediction.toDict() if hasattr(prediction, "toDict") else dict(prediction)
 
-    return json.dumps({
-        "agent": name,
-        "inputs": payload,
-        "results": pred_dict
-    }, indent=2)
+    return json.dumps({"agent": name, "inputs": payload, "results": pred_dict}, indent=2)
 
 
 @mcp.tool()
@@ -182,19 +169,80 @@ def get_system_telemetry() -> str:
     """
     ram = psutil.virtual_memory()
     router_status = router.get_status()
-    
+
     telemetry = {
         "cpu_usage_percent": psutil.cpu_percent(interval=0.1),
-        "ram_total_gb": round(ram.total / (1024 ** 3), 2),
-        "ram_available_gb": round(ram.available / (1024 ** 3), 2),
+        "ram_total_gb": round(ram.total / (1024**3), 2),
+        "ram_available_gb": round(ram.available / (1024**3), 2),
         "ram_used_percent": ram.percent,
         "ollama_active": router_status["ollama_live"],
         "llamacpp_active": router_status["llamacpp_live"],
         "primary_provider": router_status["primary_provider"],
         "active_model": router_status["active_model"],
-        "indexed_memory_documents": memory.count()
+        "indexed_memory_documents": memory.count(),
     }
     return json.dumps(telemetry, indent=2)
+
+
+@mcp.tool()
+def list_skill_templates() -> str:
+    """
+    List all available OpenClaw skill templates discovered in configs/templates/.
+    Provides template ID, name, category, description, and input parameters.
+    """
+    templates = TemplateManager.list_templates()
+    if not templates:
+        return "No skill templates found in configs/templates/."
+
+    catalog = []
+    for t in templates:
+        catalog.append(
+            {
+                "id": t.id,
+                "name": t.name,
+                "category": t.category,
+                "description": t.description,
+                "inputs": list(t.inputs.keys()) if isinstance(t.inputs, dict) else t.inputs,
+                "outputs": list(t.outputs.keys()) if isinstance(t.outputs, dict) else t.outputs,
+                "sample_inputs": t.sample_inputs,
+            }
+        )
+    return json.dumps(catalog, indent=2)
+
+
+@mcp.tool()
+def execute_skill_template(template_id: str, payload_json: str = "{}") -> str:
+    """
+    Execute a pre-built OpenClaw skill template by its template_id.
+    Pass input parameters as a JSON object string in payload_json.
+    """
+    template = TemplateManager.get_template(template_id)
+    if not template:
+        return f"Error: Skill template '{template_id}' was not found in configs/templates/."
+
+    try:
+        payload = json.loads(payload_json) if payload_json else {}
+    except Exception as e:
+        return f"Error parsing payload_json: {e}"
+
+    # If payload is empty, default to sample inputs
+    if not payload and template.sample_inputs:
+        payload = template.sample_inputs
+
+    router.initialize_and_configure()
+    agent = template.create_agent()
+    prediction = agent(**payload)
+    pred_dict = prediction.toDict() if hasattr(prediction, "toDict") else dict(prediction)
+
+    return json.dumps(
+        {
+            "template_id": template.id,
+            "template_name": template.name,
+            "inputs": payload,
+            "results": pred_dict,
+        },
+        indent=2,
+    )
 
 
 if __name__ == "__main__":

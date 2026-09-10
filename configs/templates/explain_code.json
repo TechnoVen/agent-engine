@@ -1,0 +1,25 @@
+{
+  "id": "explain_code",
+  "name": "Explain Code",
+  "description": "Provide a clear, line-by-line architectural and logic explanation of any code snippet.",
+  "version": "1.0.0",
+  "category": "Code",
+  "tags": [
+    "code",
+    "explanation",
+    "education"
+  ],
+  "inputs": [
+    "code_snippet",
+    "language"
+  ],
+  "outputs": [
+    "explanation"
+  ],
+  "reasoning_type": "cot",
+  "tools": [],
+  "sample_inputs": {
+    "code_snippet": "async def fetch_metrics(session, url):\n    async with session.get(url) as resp:\n        return await resp.json()",
+    "language": "Python"
+  }
+}

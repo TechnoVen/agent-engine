@@ -1,0 +1,27 @@
+{
+  "id": "email_draft_from_brief",
+  "name": "Email Draft from Brief",
+  "description": "Write a professional, context-appropriate email based on key points.",
+  "version": "1.0.0",
+  "category": "Productivity",
+  "tags": [
+    "email",
+    "communication",
+    "writing"
+  ],
+  "inputs": [
+    "recipient",
+    "tone",
+    "key_points"
+  ],
+  "outputs": [
+    "draft_email"
+  ],
+  "reasoning_type": "cot",
+  "tools": [],
+  "sample_inputs": {
+    "recipient": "Engineering Leadership",
+    "tone": "Professional and concise",
+    "key_points": "Successfully integrated 12 OpenClaw templates; test suite passing 100%; ready for staging deployment."
+  }
+}

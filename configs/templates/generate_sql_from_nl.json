@@ -1,0 +1,30 @@
+{
+  "id": "generate_sql_from_nl",
+  "name": "Generate SQL from Natural Language",
+  "description": "Convert business questions and natural language data requests into precise, ANSI/dialect-specific SQL queries with schema grounding, table joins, index considerations, and brief explanations.",
+  "version": "1.0.0",
+  "category": "Data",
+  "tags": [
+    "sql",
+    "database",
+    "analytics",
+    "nlp-to-sql"
+  ],
+  "inputs": {
+    "natural_language_query": "The question or analytical report requested in plain English",
+    "database_schema": "DDL definitions or schema summary of relevant tables and foreign keys",
+    "sql_dialect": "Target dialect such as PostgreSQL, BigQuery, SQLite, or MySQL"
+  },
+  "outputs": {
+    "sql_query": "Production-ready, formatted SQL query with proper aliases and joins",
+    "explanation": "Brief breakdown of the query logic, join strategy, and aggregation functions",
+    "performance_tips": "Indexing recommendations and potential partition prune suggestions"
+  },
+  "reasoning_type": "cot",
+  "tools": [],
+  "sample_inputs": {
+    "natural_language_query": "Find the top 5 customers who spent the most money in Q3 2026, including their total spend, total order count, and email address.",
+    "database_schema": "TABLE customers (id INT PRIMARY KEY, email VARCHAR(255), created_at TIMESTAMP);\nTABLE orders (id INT PRIMARY KEY, customer_id INT REFERENCES customers(id), order_date DATE, total_amount NUMERIC(10,2), status VARCHAR(50));",
+    "sql_dialect": "PostgreSQL"
+  }
+}

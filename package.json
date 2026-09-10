@@ -1,0 +1,12 @@
+{
+  "name": "agent-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent Engine — Cross-platform, local-first, multi-agent studio",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint"
+  },
+  "packageManager": "pnpm@9.15.0"
+}

@@ -470,11 +470,10 @@
             <div class="hero-badge">⚡ Autonomous Local Engine &bull; Control Center v1.0</div>
             <h1 class="hero-title">Autonomous Agent Engine Control Center</h1>
             <p class="hero-desc">Complete operational manual with real-world examples for the Multi-Agent Sentry, Dynamic Blueprint Compiler, ChromaDB Persistent RAG Memory, and Hardware Telemetry Dashboard.</p>
-            
-            <div class="quick-stats">
+                     <div class="quick-stats">
                 <div class="stat-badge"><div class="stat-dot"></div> Control Center: <strong>http://localhost:8501</strong></div>
-                <div class="stat-badge"><div class="stat-dot"></div> Model: <strong>qwen2.5-coder:3b</strong> (Ollama)</div>
-                <div class="stat-badge"><div class="stat-dot"></div> Verification: <strong>12 / 12 Tests Passing</strong></div>
+                <div class="stat-badge"><div class="stat-dot"></div> Model: <strong>qwen2.5-coder:3b</strong> (Ollama / llama-server)</div>
+                <div class="stat-badge"><div class="stat-dot"></div> Verification: <strong>24 / 24 Tests Passing (100%)</strong></div>
                 <div class="stat-badge"><div class="stat-dot"></div> Dev Folder: <strong>/home/nadir/code</strong></div>
             </div>
         </header>
@@ -483,9 +482,9 @@
         <div class="nav-pills">
             <a href="#overview">Architecture</a>
             <a href="#sentry-tab">🛡️ Sentry & Code Patches</a>
-            <a href="#compiler-tab">🧠 Dynamic Agent Studio</a>
+            <a href="#compiler-tab">🧠 Dynamic Agent Studio & Templates</a>
             <a href="#memory-tab">📚 RAG Vector Memory</a>
-            <a href="#speedometer-tab">⚡ Speedometer & Benchmark</a>
+            <a href="#speedometer-tab">⚡ Speedometer & Sandbox</a>
             <a href="#goose-cli">Goose CLI Workflow</a>
             <a href="#cli-ref">CLI Commands</a>
         </div>
@@ -493,18 +492,24 @@
         <!-- Section 1: Overview -->
         <section id="overview">
             <h2 class="section-title">1. Control Center Overview & Architecture</h2>
-            <p class="section-desc">The Control Center is hosted locally on port <code>8501</code> (<code>http://localhost:8501</code>). It bridges local hardware compute, multi-model LLM routing, SQLite audit staging, and persistent vector memory.</p>
+            <p class="section-desc">The Control Center is hosted locally on port <code>8501</code> (<code>http://localhost:8501</code>). It bridges local hardware compute, multi-model LLM routing, SQLite audit staging, persistent vector memory, and OpenClaw skill templates.</p>
 
             <div class="diagram-container">
 [ User & IDEs ] ──( Goose CLI / VS Code / Cursor / Control Center )──┐
                                                                      ▼
-[ SQLite Staging DB ] ◄───( Code Sentry Watcher )◄─── [ FastMCP Server (7 Tools) ]
+[ SQLite Staging DB ] ◄───( Code Sentry Watcher )◄─── [ FastMCP Server (9 Tools) ]
         ▲                                                            │
         │ 1-Click Approval                                           ▼
 [ Source Code Files ] ◄────────────────────────────────── [ Dynamic DSPy Engine ]
 (e.g., ~/code/*.py)                                                  ▲
-                                                                     │
-[ Multi-Model Router ] ───► [ Ollama: qwen2.5-coder:3b ] ───────► [ ChromaDB Vector RAG ]
+        ▲                                                            │
+        │                                             [ OpenClaw Skill Templates ]
+        │                                             (JSON in configs/templates/)
+        │                                                            ▲
+        │                                                            │
+[ Multi-Model Router ] ───► [ Ollama / llama.cpp ] ──────────────► [ ChromaDB Vector RAG ]
+                               (Cloud Fallback: Gemini)
+            </div>[ Ollama: qwen2.5-coder:3b ] ───────► [ ChromaDB Vector RAG ]
                               (Cloud Fallback: Gemini)
             </div>
         </section>
@@ -550,19 +555,84 @@
             </div>
         </section>
 
-        <!-- Section 3: Tab 2 - Dynamic Agent Studio -->
+        <!-- Section 3: Tab 2 - Dynamic Agent Studio & OpenClaw Templates -->
         <section id="compiler-tab">
             <div class="studio-tab-card">
                 <div class="studio-header">
-                    <div class="studio-title">🧠 Tab 2: Dynamic Agent Studio (Low-Code DSPy Compiler)</div>
-                    <span class="badge-pill badge-pro">Visual Meta-Programming</span>
+                    <div class="studio-title">🧠 Tab 2: Dynamic Agent Studio & OpenClaw Skill Templates</div>
+                    <span class="badge-pill badge-pro">Zero-Code AI Workflows</span>
                 </div>
-                <p class="card-desc">Construct and compile arbitrary AI agents visually by declaring signatures, inputs, outputs, and reasoning modules in real time.</p>
+                <p class="card-desc">Construct, compile, import, and export reusable AI agent workflows visually. Declare inputs, outputs, and reasoning modules in real time, or pick pre-built OpenClaw skill templates.</p>
+
+                <!-- OpenClaw Skill Templates Feature Box -->
+                <div class="example-box" style="border-left: 4px solid #3b82f6; margin-bottom: 24px;">
+                    <h3 style="color: #60a5fa; margin-bottom: 8px;">📦 Feature Highlight: OpenClaw Skill Templates (Beginner-Friendly!)</h3>
+                    <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 12px;">
+                        <strong>What is a Skill Template?</strong> Think of it as a <em>reusable recipe card</em>. You don't need to write Python code. You just declare:
+                        <strong>Inputs</strong> (the ingredients you provide), <strong>Outputs</strong> (what you want back), and <strong>Reasoning</strong> (how the model thinks).
+                    </p>
+
+                    <h4 style="color: #fff; margin: 12px 0 6px 0;">3 Pre-Built Templates (Included & Ready to Run):</h4>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Template Name</th>
+                                    <th>Purpose</th>
+                                    <th>Inputs</th>
+                                    <th>Outputs</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>📦 Summarize Meeting Notes</strong></td>
+                                    <td>Extracts executive summary, decisions, and action items with owners & deadlines.</td>
+                                    <td><code>meeting_notes, participants</code></td>
+                                    <td><code>executive_summary, key_decisions, action_items</code></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>📦 Draft Weekly Report</strong></td>
+                                    <td>Consolidates Jira/Notion items, completed work, and blockers into an executive report.</td>
+                                    <td><code>completed_issues, in_progress_tasks, blockers, team_name</code></td>
+                                    <td><code>executive_brief, key_highlights, risk_analysis, next_week_commitments</code></td>
+                                </tr>
+                                <tr>
+                                    <td><strong>📦 Generate SQL from NL</strong></td>
+                                    <td>Converts natural language questions into schema-grounded, production-ready SQL queries.</td>
+                                    <td><code>natural_language_query, database_schema, sql_dialect</code></td>
+                                    <td><code>sql_query, explanation, performance_tips</code></td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h4 style="color: #fff; margin: 16px 0 6px 0;">How to Run in 3 Easy Steps:</h4>
+                    <ol style="color: var(--text-secondary); margin-left: 20px; font-size: 0.9rem; line-height: 1.6;">
+                        <li><strong>Select a Template:</strong> In Tab 2, click the <em>"Select Skill Template / Workflow"</em> dropdown. The Node Name, Description, Input/Output fields, and test data will auto-populate automatically!</li>
+                        <li><strong>Review Inputs:</strong> Check the pre-filled inputs in the right column. The <em>Context Window Utilization</em> progress bar shows token usage in real time.</li>
+                        <li><strong>Click "🚀 Compile & Run Blueprint":</strong> In seconds, the agent executes and displays the clean structured JSON results and execution telemetry.</li>
+                    </ol>
+
+                    <h4 style="color: #fff; margin: 16px 0 6px 0;">📥 Import & 📤 Export:</h4>
+                    <p style="color: var(--text-secondary); font-size: 0.9rem;">
+                        Use the <strong>"📥 Import Template"</strong> popover at the top right to upload or paste any JSON template. Use <strong>"📤 Export Template"</strong> to download your current design or save it permanently to <code>configs/templates/</code>.
+                    </p>
+
+                    <h4 style="color: #fff; margin: 16px 0 6px 0;">OpenClaw Headless Bot Bridge (3-Line Python Integration):</h4>
+                    <pre><code>from core.templates import load_template_agent
+
+# Dynamically loads and compiles the agent from configs/templates/
+agent = load_template_agent("summarize_meeting_notes")
+result = agent(meeting_notes="Sync: Bob finishes backend Wed, Carol ships QA Fri.", participants="Bob, Carol")
+
+print(result.executive_summary)
+print(result.action_items)</code></pre>
+                </div>
 
                 <!-- Detailed Real-World Example -->
                 <div class="example-box">
-                    <h3 style="color: #c084fc; margin-bottom: 8px;">📖 Real-World Example: Building a FastAPI CRUD Route Generator</h3>
-                    <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 12px;">Here is how you configure a custom agent in Tab 2 to generate type-safe FastAPI endpoints on the fly:</p>
+                    <h3 style="color: #c084fc; margin-bottom: 8px;">📖 Custom Blueprint Example: Building a FastAPI CRUD Route Generator</h3>
+                    <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 12px;">Here is how you configure a custom agent from scratch in Tab 2 to generate type-safe FastAPI endpoints on the fly:</p>
 
                     <div class="table-wrap">
                         <table>
@@ -576,7 +646,7 @@
                         </table>
                     </div>
 
-                    <h4 style="color: #fff; margin: 14px 0 6px 0;">Running the Agent Visually:</h4>
+                    <h4 style="color: #fff; margin: 14px 0 6px 0;">Running the Custom Agent Visually:</h4>
                     <p style="color: var(--text-secondary); font-size: 0.9rem;">The Control Center generates 3 text inputs for your declared fields. Enter:</p>
                     <pre><code>model_name: "CustomerOrder"
 pydantic_schema: "id: int, customer_id: int, total_amount: float, status: str"
@@ -652,14 +722,14 @@ Metadata: {"source": "network_policy.md", "timestamp": "2026-08-28T10:15:00"}</c
             </div>
         </section>
 
-        <!-- Section 5: Tab 4 - LLM Speedometer & Benchmark -->
+        <!-- Section 5: Tab 4 - LLM Speedometer & Interactive Sandbox -->
         <section id="speedometer-tab">
             <div class="studio-tab-card">
                 <div class="studio-header">
-                    <div class="studio-title">⚡ Tab 4: Local Model Speedometer & Latency Benchmark</div>
-                    <span class="badge-pill badge-live">Hardware Profiling</span>
+                    <div class="studio-title">⚡ Tab 4: Local Model Speedometer & Interactive Sandbox</div>
+                    <span class="badge-pill badge-live">Hardware Profiling & Safe Testing</span>
                 </div>
-                <p class="card-desc">Measure real-time token generation throughput (tokens/sec) and inference response latency on your AMD Ryzen 5 PRO 2400G CPU and Radeon Vega graphics.</p>
+                <p class="card-desc">Measure real-time token generation throughput (tokens/sec) and latency on your local hardware, then immediately test and auto-repair generated solutions in an interactive execution sandbox.</p>
 
                 <!-- Detailed Speedometer Example -->
                 <div class="example-box">
@@ -705,13 +775,29 @@ Metadata: {"source": "network_policy.md", "timestamp": "2026-08-28T10:15:00"}</c
                         </table>
                     </div>
                 </div>
+
+                <!-- Interactive Sandbox Feature Box -->
+                <div class="example-box" style="border-left: 4px solid #10b981; margin-top: 20px;">
+                    <h3 style="color: #34d399; margin-bottom: 8px;">🧪 Interactive Execution Sandbox & 1-Click Auto-Repair</h3>
+                    <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 12px;">
+                        After benchmarking, the model's generated Python solution automatically loads into the <strong>Interactive Execution Sandbox</strong>. You can edit, run, and auto-fix code safely without leaving your browser!
+                    </p>
+
+                    <h4 style="color: #fff; margin: 12px 0 6px 0;">Key Sandbox Features (Designed for Beginners):</h4>
+                    <ul style="color: var(--text-secondary); margin-left: 20px; font-size: 0.9rem; line-height: 1.6;">
+                        <li><strong>▶️ Run Code:</strong> Executes the code in a secure, isolated namespace with built-in libraries (<code>math</code>, <code>json</code>, <code>datetime</code>, <code>typing</code>). Output and return values render below the editor.</li>
+                        <li><strong>🪄 Auto-Wrap in Function Definition:</strong> If the model outputs a naked <code>return ...</code> outside a function, Python throws a <code>SyntaxError</code>. The engine detects this automatically and shows a 1-click button to wrap the code inside <code>def solution(): ...</code> and immediately execute it!</li>
+                        <li><strong>🧹 Strip Backticks & Clean:</strong> Removes markdown fences like <code>```python ... ```</code> that models sometimes wrap their code in.</li>
+                        <li><strong>🔄 Reset to Solution:</strong> Restores the original unmodified code from the benchmark run.</li>
+                    </ul>
+                </div>
             </div>
         </section>
 
         <!-- Section 6: Goose CLI Developer Workflow -->
         <section id="goose-cli">
             <h2 class="section-title">2. Goose AI Developer Workflow in ~/code</h2>
-            <p class="section-desc">Goose is your terminal-based developer agent. It connects directly to <code>qwen2.5-coder:3b</code> on Ollama and uses all 7 Agent Engine FastMCP tools.</p>
+            <p class="section-desc">Goose is your terminal-based developer agent. It connects directly to <code>qwen2.5-coder:3b</code> on Ollama and uses all 9 Agent Engine FastMCP tools (including <code>list_skill_templates</code> and <code>execute_skill_template</code>).</p>
 
             <ol class="step-list">
                 <li class="step-item">
@@ -721,6 +807,10 @@ Metadata: {"source": "network_policy.md", "timestamp": "2026-08-28T10:15:00"}</c
                 <li class="step-item">
                     <div class="step-heading">Search Vector Memory via Goose</div>
                     <pre><code>> Use query_agent_memory to search for information about our DSPy router and LowCodeAgent.</code></pre>
+                </li>
+                <li class="step-item">
+                    <div class="step-heading">Execute OpenClaw Skill Template via Goose</div>
+                    <pre><code>> Use execute_skill_template with template_id "summarize_meeting_notes" to process our standup notes.</code></pre>
                 </li>
                 <li class="step-item">
                     <div class="step-heading">Check Sentry Staged Patches</div>
@@ -751,6 +841,14 @@ Metadata: {"source": "network_policy.md", "timestamp": "2026-08-28T10:15:00"}</c
                             <td>Launch the Streamlit Control Center on <code>http://localhost:8501</code>.</td>
                         </tr>
                         <tr>
+                            <td><code>python skills/dspy_template_skill.py --list</code></td>
+                            <td>List all discovered OpenClaw JSON skill templates.</td>
+                        </tr>
+                        <tr>
+                            <td><code>python skills/dspy_template_skill.py --template &lt;id&gt;</code></td>
+                            <td>Execute an OpenClaw skill template with default sample data.</td>
+                        </tr>
+                        <tr>
                             <td><code>python main.py watch --dir ~/code</code></td>
                             <td>Start the Code Sentry file watcher on <code>~/code</code> (staged patch review mode).</td>
                         </tr>
@@ -776,7 +874,7 @@ Metadata: {"source": "network_policy.md", "timestamp": "2026-08-28T10:15:00"}</c
                         </tr>
                         <tr>
                             <td><code>python main.py mcp</code></td>
-                            <td>Start the FastMCP stdio server for IDE integrations.</td>
+                            <td>Start the FastMCP stdio server (9 tools) for IDE integrations.</td>
                         </tr>
                         <tr>
                             <td><code>python main.py rag-demo</code></td>
@@ -784,7 +882,7 @@ Metadata: {"source": "network_policy.md", "timestamp": "2026-08-28T10:15:00"}</c
                         </tr>
                         <tr>
                             <td><code>pytest -v</code></td>
-                            <td>Run all 12 automated verification unit and integration tests.</td>
+                            <td>Run all 24 automated verification unit and integration tests (100% passing).</td>
                         </tr>
                     </tbody>
                 </table>

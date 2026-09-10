@@ -1,0 +1,562 @@
+openapi: 3.1.0
+info:
+  title: Agent Engine Local API
+  description: Local HTTP and SSE interface between Agent Engine Tauri Shell and Python Sidecar
+  version: 1.0.0
+servers:
+  - url: http://127.0.0.1:8765/v1
+    description: Local sidecar instance
+paths:
+  /chat/completions:
+    post:
+      summary: Send a chat prompt and receive a stream or direct response
+      operationId: chatCompletions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: Streaming SSE response or completed JSON message
+          content:
+            text/event-stream:
+              schema:
+                type: string
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatResponse'
+
+  /events:
+    get:
+      summary: Subscribe to global server-sent events
+      operationId: streamEvents
+      responses:
+        '200':
+          description: Real-time event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  /agents:
+    get:
+      summary: List all available and active agents
+      operationId: listAgents
+      responses:
+        '200':
+          description: List of agents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AgentInfo'
+
+  /skills:
+    get:
+      summary: List installed skills and templates
+      operationId: listSkills
+      responses:
+        '200':
+          description: List of skills and templates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SkillInfo'
+    post:
+      summary: Execute a specific skill or template
+      operationId: executeSkill
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecuteSkillRequest'
+      responses:
+        '200':
+          description: Execution result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecuteSkillResponse'
+
+  /workflows:
+    get:
+      summary: List registered workflows
+      operationId: listWorkflows
+      responses:
+        '200':
+          description: List of workflows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WorkflowInfo'
+    post:
+      summary: Run a workflow
+      operationId: runWorkflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RunWorkflowRequest'
+      responses:
+        '200':
+          description: Workflow execution status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowExecutionResponse'
+
+  /memory:
+    get:
+      summary: Query memory via semantic vector search
+      operationId: queryMemory
+      parameters:
+        - name: query
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: top_k
+          in: query
+          schema:
+            type: integer
+            default: 5
+      responses:
+        '200':
+          description: Retrieved memory passages
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MemoryQueryResponse'
+    post:
+      summary: Ingest document into vector memory
+      operationId: ingestMemory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/IngestMemoryRequest'
+      responses:
+        '200':
+          description: Ingestion confirmation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IngestMemoryResponse'
+
+  /patches:
+    get:
+      summary: List staged code patches
+      operationId: listPatches
+      responses:
+        '200':
+          description: Staged patches
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PatchInfo'
+  /patches/{patch_id}/apply:
+    post:
+      summary: Apply a staged patch by ID
+      operationId: applyPatch
+      parameters:
+        - name: patch_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Application result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResult'
+
+  /patches/{patch_id}/reject:
+    post:
+      summary: Reject a staged patch by ID
+      operationId: rejectPatch
+      parameters:
+        - name: patch_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Rejection result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResult'
+
+  /telemetry:
+    get:
+      summary: Get hardware resource telemetry and model router status
+      operationId: getTelemetry
+      responses:
+        '200':
+          description: System telemetry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TelemetryResponse'
+
+  /telemetry/cost:
+    get:
+      summary: Get token usage and cost metrics
+      operationId: getCostMetrics
+      parameters:
+        - name: group_by
+          in: query
+          schema:
+            type: string
+            enum: [agent, model, project, day]
+            default: day
+      responses:
+        '200':
+          description: Cost aggregation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CostMetricsResponse'
+
+  /auth/session:
+    get:
+      summary: Get current authenticated session info
+      operationId: getAuthSession
+      responses:
+        '200':
+          description: User session details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+
+  /registry/search:
+    get:
+      summary: Search for skills or agent bundles in registry
+      operationId: searchRegistry
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Registry search results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+  /flags:
+    get:
+      summary: Get current feature flag states
+      operationId: getFeatureFlags
+      responses:
+        '200':
+          description: Feature flag states and active overrides
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeatureFlagsResponse'
+
+  /flags/{flag_name}:
+    post:
+      summary: Set runtime override for a feature flag
+      operationId: setFeatureFlagOverride
+      parameters:
+        - name: flag_name
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value:
+                  type: boolean
+      responses:
+        '200':
+          description: Flag override result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResult'
+
+components:
+  schemas:
+    FeatureFlagsResponse:
+      type: object
+      required: [flags]
+      properties:
+        flags:
+          type: object
+          properties:
+            tenant_mode:
+              type: string
+            enable_multi_user:
+              type: boolean
+            enable_registry:
+              type: boolean
+            enable_cloud_sync:
+              type: boolean
+            enable_acp:
+              type: boolean
+            enable_auto_patch_apply:
+              type: boolean
+    ChatRequest:
+      type: object
+      required: [prompt]
+      properties:
+        prompt:
+          type: string
+        session_id:
+          type: string
+        model:
+          type: string
+        stream:
+          type: boolean
+          default: true
+        skill_id:
+          type: string
+
+    ChatResponse:
+      type: object
+      required: [response, session_id]
+      properties:
+        response:
+          type: string
+        session_id:
+          type: string
+        tool_calls:
+          type: array
+          items:
+            type: object
+        cost_usd:
+          type: number
+
+    AgentInfo:
+      type: object
+      required: [id, name, status]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+        project:
+          type: string
+        current_task:
+          type: string
+
+    SkillInfo:
+      type: object
+      required: [id, name]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        category:
+          type: string
+        description:
+          type: string
+        inputs:
+          type: array
+          items:
+            type: string
+        outputs:
+          type: array
+          items:
+            type: string
+
+    ExecuteSkillRequest:
+      type: object
+      required: [skill_id]
+      properties:
+        skill_id:
+          type: string
+        payload:
+          type: object
+
+    ExecuteSkillResponse:
+      type: object
+      required: [skill_id, results]
+      properties:
+        skill_id:
+          type: string
+        results:
+          type: object
+
+    WorkflowInfo:
+      type: object
+      required: [id, name, steps]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        steps:
+          type: array
+          items:
+            type: string
+
+    RunWorkflowRequest:
+      type: object
+      required: [workflow_id]
+      properties:
+        workflow_id:
+          type: string
+        inputs:
+          type: object
+
+    WorkflowExecutionResponse:
+      type: object
+      required: [execution_id, status]
+      properties:
+        execution_id:
+          type: string
+        status:
+          type: string
+
+    MemoryQueryResponse:
+      type: object
+      required: [query, passages]
+      properties:
+        query:
+          type: string
+        passages:
+          type: array
+          items:
+            type: string
+
+    IngestMemoryRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+        source:
+          type: string
+
+    IngestMemoryResponse:
+      type: object
+      required: [document_id, count]
+      properties:
+        document_id:
+          type: string
+        count:
+          type: integer
+
+    PatchInfo:
+      type: object
+      required: [id, file_path, patch_type, risk_level, status]
+      properties:
+        id:
+          type: integer
+        file_path:
+          type: string
+        patch_type:
+          type: string
+        risk_level:
+          type: string
+        report:
+          type: string
+        status:
+          type: string
+        timestamp:
+          type: string
+
+    ActionResult:
+      type: object
+      required: [success, message]
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+
+    TelemetryResponse:
+      type: object
+      required: [cpu_usage_percent, ram_used_percent, primary_provider]
+      properties:
+        cpu_usage_percent:
+          type: number
+        ram_used_percent:
+          type: number
+        ram_total_gb:
+          type: number
+        ram_available_gb:
+          type: number
+        primary_provider:
+          type: string
+        active_model:
+          type: string
+        ollama_active:
+          type: boolean
+        llamacpp_active:
+          type: boolean
+        indexed_memory_documents:
+          type: integer
+
+    CostMetricsResponse:
+      type: object
+      required: [total_cost_usd, breakdown]
+      properties:
+        total_cost_usd:
+          type: number
+        breakdown:
+          type: array
+          items:
+            type: object
+
+    AuthSession:
+      type: object
+      required: [user_id, role]
+      properties:
+        user_id:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+        tenant_id:
+          type: string
+
+    RegistryPackage:
+      type: object
+      required: [id, name, version]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        author:
+          type: string

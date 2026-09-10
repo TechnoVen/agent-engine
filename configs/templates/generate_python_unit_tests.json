@@ -1,0 +1,25 @@
+{
+  "id": "generate_python_unit_tests",
+  "name": "Generate Python Unit Tests",
+  "description": "Write comprehensive pytest test cases, fixtures, and edge cases for a given function.",
+  "version": "1.0.0",
+  "category": "Code",
+  "tags": [
+    "testing",
+    "pytest",
+    "python"
+  ],
+  "inputs": [
+    "function_code",
+    "test_framework"
+  ],
+  "outputs": [
+    "test_code"
+  ],
+  "reasoning_type": "cot",
+  "tools": [],
+  "sample_inputs": {
+    "function_code": "def calculate_discount(price: float, discount_percent: float) -> float:\n    if price < 0 or discount_percent < 0 or discount_percent > 100:\n        raise ValueError(\"Invalid inputs\")\n    return round(price * (1 - discount_percent / 100), 2)",
+    "test_framework": "pytest"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "id": "code_review_checklist",
+  "name": "Code Review Checklist",
+  "description": "Generate an automated security, performance, and style review checklist for Python code.",
+  "version": "1.0.0",
+  "category": "Engineering",
+  "tags": [
+    "security",
+    "code-review",
+    "checklist"
+  ],
+  "inputs": [
+    "code",
+    "ruleset"
+  ],
+  "outputs": [
+    "checklist",
+    "score"
+  ],
+  "reasoning_type": "cot",
+  "tools": [],
+  "sample_inputs": {
+    "code": "def query_user(user_id):\n    cursor.execute(\"SELECT * FROM users WHERE id = %s\" % user_id)\n    return cursor.fetchall()",
+    "ruleset": "OWASP Top 10 + PEP 8"
+  }
+}

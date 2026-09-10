@@ -1,0 +1,13 @@
+[project]
+name = "agent-engine-sdk"
+version = "0.1.0"
+description = "Agent Engine Python Client SDK & Packaging Tools"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.32.0",
+    "pydantic>=2.10.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

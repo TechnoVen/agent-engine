@@ -18,11 +18,16 @@ env/
 logs/
 *.log
 .agent_history/
-data/audit_sentry.db
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+data/*.db*
 data/chroma/
 workspace/
-models/*.gguf   # if you don't want to commit large model files (optional)
-*.enc           # encrypted backups (optional)
+models/*.gguf
+*.enc
 
 # IDE
 .vscode/

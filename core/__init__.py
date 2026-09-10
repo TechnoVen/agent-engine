@@ -1,6 +1,8 @@
 """
 Core DSPy Agent Engine package.
 """
+
+# ruff: noqa: I001, F401
 import numpy  # Pre-load numpy before dspy lazy imports
 import dspy
 
@@ -10,10 +12,13 @@ try:
 except Exception:
     pass
 
-from core.engine import LowCodeAgent, NodeConfig, DynamicSignatureBuilder, AgentPipeline
-from core.router import ModelRouter, get_language_model
-from core.memory import AgentMemory, RAGModule
+from core.engine import AgentPipeline, DynamicSignatureBuilder, LowCodeAgent, NodeConfig
 from core.harness import AgentHarness, train_and_optimize
+from core.memory import AgentMemory, RAGModule
+
+# from core.router import ModelRouter, get_language_model
+from core.router import ModelRouter
+from core.templates import SkillTemplate, TemplateManager, load_template_agent
 
 __all__ = [
     "LowCodeAgent",
@@ -26,4 +31,7 @@ __all__ = [
     "RAGModule",
     "AgentHarness",
     "train_and_optimize",
+    "SkillTemplate",
+    "TemplateManager",
+    "load_template_agent",
 ]

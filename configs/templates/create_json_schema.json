@@ -1,0 +1,25 @@
+{
+  "id": "create_json_schema",
+  "name": "Create JSON Schema",
+  "description": "Derive a formal Draft-7 JSON schema from example data or payload.",
+  "version": "1.0.0",
+  "category": "Data",
+  "tags": [
+    "json",
+    "schema",
+    "validation"
+  ],
+  "inputs": [
+    "sample_data",
+    "schema_name"
+  ],
+  "outputs": [
+    "json_schema"
+  ],
+  "reasoning_type": "predict",
+  "tools": [],
+  "sample_inputs": {
+    "sample_data": "{\"id\": 101, \"username\": \"nadir\", \"roles\": [\"admin\", \"dev\"], \"active\": true}",
+    "schema_name": "UserProfile"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "generate_api_endpoint",
+  "name": "Generate API Endpoint from Specification",
+  "description": "Create a production-ready FastAPI endpoint stub with Pydantic validation from an OpenAPI spec.",
+  "version": "1.0.0",
+  "category": "Engineering",
+  "tags": [
+    "api",
+    "fastapi",
+    "rest"
+  ],
+  "inputs": [
+    "spec_description",
+    "path",
+    "method"
+  ],
+  "outputs": [
+    "endpoint_code",
+    "documentation"
+  ],
+  "reasoning_type": "cot",
+  "tools": [],
+  "sample_inputs": {
+    "spec_description": "Endpoint to register a new tenant and return an API key token with status 201.",
+    "path": "/api/v1/tenants",
+    "method": "POST"
+  }
+}

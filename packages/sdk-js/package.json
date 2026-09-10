@@ -1,0 +1,15 @@
+{
+  "name": "@agent-engine/sdk",
+  "version": "0.1.0",
+  "description": "Agent Engine TypeScript/JavaScript Client SDK",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "echo 'JS SDK build placeholder'",
+    "test": "echo 'JS SDK test placeholder'",
+    "lint": "echo 'JS SDK lint placeholder'"
+  },
+  "dependencies": {
+    "@agent-engine/shared-schema": "workspace:*"
+  }
+}

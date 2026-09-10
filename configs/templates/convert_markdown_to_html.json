@@ -1,0 +1,25 @@
+{
+  "id": "convert_markdown_to_html",
+  "name": "Convert Markdown to HTML",
+  "description": "Transform Markdown content into clean, semantic HTML with styling options.",
+  "version": "1.0.0",
+  "category": "Text",
+  "tags": [
+    "markdown",
+    "html",
+    "formatting"
+  ],
+  "inputs": [
+    "markdown_content",
+    "style_preference"
+  ],
+  "outputs": [
+    "html_output"
+  ],
+  "reasoning_type": "predict",
+  "tools": [],
+  "sample_inputs": {
+    "markdown_content": "# Executive Brief\n\n- **Project:** Agent Engine\n- **Status:** Complete\n\n> All systems operational.",
+    "style_preference": "Modern clean with inline CSS"
+  }
+}

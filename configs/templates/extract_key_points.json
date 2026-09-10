@@ -1,0 +1,26 @@
+{
+  "id": "extract_key_points",
+  "name": "Extract Key Points from Document",
+  "description": "Identify core arguments, facts, and key takeaways from long text.",
+  "version": "1.0.0",
+  "category": "Text",
+  "tags": [
+    "text",
+    "summarization",
+    "extraction"
+  ],
+  "inputs": [
+    "document_text",
+    "max_points"
+  ],
+  "outputs": [
+    "key_points",
+    "themes"
+  ],
+  "reasoning_type": "cot",
+  "tools": [],
+  "sample_inputs": {
+    "document_text": "Artificial intelligence agents in 2026 are shifting from simple prompt-response interactions to multi-agent orchestrations with local inference, structured memory caches, and dynamic execution sandboxes. This reduces API dependency and ensures enterprise data privacy.",
+    "max_points": "3"
+  }
+}

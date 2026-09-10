@@ -1,0 +1,27 @@
+{
+  "id": "translate_code_language",
+  "name": "Translate Code to Another Language",
+  "description": "Convert code idiomatic constructs from one programming language to another.",
+  "version": "1.0.0",
+  "category": "Code",
+  "tags": [
+    "code",
+    "translation",
+    "polyglot"
+  ],
+  "inputs": [
+    "source_code",
+    "source_lang",
+    "target_lang"
+  ],
+  "outputs": [
+    "translated_code"
+  ],
+  "reasoning_type": "react",
+  "tools": [],
+  "sample_inputs": {
+    "source_code": "function deduplicate(arr) {\n    return [...new Set(arr)];\n}",
+    "source_lang": "JavaScript",
+    "target_lang": "Python"
+  }
+}

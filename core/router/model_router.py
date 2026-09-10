@@ -1,4 +1,4 @@
-# core/router.py
+# core/router/model_router.py
 import logging
 import os
 import sys
@@ -54,23 +54,29 @@ class ModelRouter:
 
     def check_local_ollama_health(self) -> bool:
         """Check if Ollama is reachable."""
-        try:
-            resp = requests.get(
-                "http://localhost:11434/api/tags", timeout=REQUEST_TIMEOUT
-            )
-            return resp.status_code == 200
-        except Exception:  # noqa: BLE001
-            return False
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+        for host in [base_url, "http://127.0.0.1:11434", "http://localhost:11434"]:
+            try:
+                resp = requests.get(f"{host}/api/tags", timeout=REQUEST_TIMEOUT)
+                if resp.status_code == 200:
+                    return True
+            except Exception:
+                continue
+        return False
 
     def check_local_llamacpp_health(self) -> bool:
         """Check if llama.cpp server is reachable."""
-        try:
-            resp = requests.get(
-                "http://localhost:8080/v1/models", timeout=REQUEST_TIMEOUT
-            )
-            return resp.status_code == 200
-        except Exception:  # noqa: BLE001
-            return False
+        host_env = os.getenv("LLAMACPP_HOST", "http://127.0.0.1:8080/v1")
+        if not host_env.endswith("/v1"):
+            host_env = host_env.rstrip("/") + "/v1"
+        for host in [host_env, "http://127.0.0.1:8080/v1", "http://localhost:8080/v1"]:
+            try:
+                resp = requests.get(f"{host}/models", timeout=REQUEST_TIMEOUT)
+                if resp.status_code == 200:
+                    return True
+            except Exception:
+                continue
+        return False
 
     def get_status(self) -> dict[str, Any]:
         """Return health and key status for all providers."""
@@ -95,6 +101,22 @@ class ModelRouter:
                 online = self._check_api_key(p)
             status[f"{p}_live"] = online
             status[f"{p}_key_present"] = self._check_api_key(p)
+
+        # Primary and fallback providers
+        available = [
+            p
+            for p in self.provider_priority
+            if status.get(f"{p}_live") or status.get(f"{p}_key_present")
+        ]
+        status["primary_provider"] = (
+            available[0]
+            if available
+            else (self.provider_priority[0] if self.provider_priority else "llamacpp")
+        )
+        status["fallback_provider"] = available[1] if len(available) > 1 else "llamacpp"
+        status["active_model"] = self._configured_label or os.getenv(
+            "LOCAL_MODEL_NAME", "qwen2.5-coder-3b-instruct-q4_k_m"
+        )
         return status
 
     def get_available_providers(self) -> list[str]:
@@ -120,13 +142,27 @@ class ModelRouter:
         return available
 
     def create_lm(
-        self, provider: str, cache: bool = True, num_ctx: int = 4096
+        self, provider: str, cache: bool = True, num_ctx: int = 4096, **kwargs: Any
     ) -> tuple[dspy.LM, str]:
         """Instantiate a dspy.LM for the given provider using core.models.get_model_provider."""
         from core.models import get_model_provider
 
-        lm = get_model_provider(provider_name=provider, cache=cache, max_tokens=num_ctx)
-        label = f"{provider} (ctx={num_ctx})"
+        model_name = kwargs.get("model") or kwargs.get("model_name")
+        api_key = kwargs.get("api_key")
+        if api_key:
+            key_name = f"{provider.upper()}_API_KEY"
+            os.environ[key_name] = api_key
+
+        lm = get_model_provider(
+            provider_name=provider,
+            model_name=model_name,
+            cache=cache,
+            max_tokens=num_ctx,
+        )
+        if provider == "openai":
+            label = f"OpenAI ({model_name or 'gpt-4o-mini'})"
+        else:
+            label = f"{provider.capitalize()} (ctx={num_ctx})"
         return lm, label
 
     def initialize_and_configure(
@@ -139,9 +175,10 @@ class ModelRouter:
         if force_provider:
             # Check if the forced provider is available
             status = self.get_status()
-            if not status.get(
-                f"{force_provider}_live", False
-            ) and force_provider not in ["ollama", "llamacpp"]:
+            if not status.get(f"{force_provider}_live", False) and force_provider not in [
+                "ollama",
+                "llamacpp",
+            ]:
                 # For cloud providers, live means key present
                 if not status.get(f"{force_provider}_key_present", False):
                     logger.warning(
@@ -160,9 +197,7 @@ class ModelRouter:
                 logger.info(f"Configured LM: {label}")
                 return lm, label
             except Exception as e:  # noqa: BLE001
-                logger.error(
-                    f"Failed to initialize forced provider '{force_provider}': {e}"
-                )
+                logger.error(f"Failed to initialize forced provider '{force_provider}': {e}")
                 # Fall through to priority selection
 
         # Priority‑based selection
@@ -182,9 +217,7 @@ class ModelRouter:
                     continue
 
         # Ultimate fallback: try local llama.cpp directly
-        logger.warning(
-            "No provider from priority list succeeded; falling back to local llama.cpp."
-        )
+        logger.warning("No provider from priority list succeeded; falling back to local llama.cpp.")
         try:
             lm, label = self.create_lm("llamacpp", cache=cache, num_ctx=num_ctx)
             dspy.settings.configure(lm=lm, cache=cache)

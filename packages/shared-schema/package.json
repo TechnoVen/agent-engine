@@ -1,0 +1,10 @@
+{
+  "name": "@agent-engine/shared-schema",
+  "version": "0.1.0",
+  "description": "Shared OpenAPI contract and JSON Schemas for Agent Engine",
+  "main": "index.js",
+  "files": [
+    "openapi.yaml",
+    "events.schema.json"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "@agent-engine/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Agent Engine Desktop Shell (Tauri v2 + React/TypeScript)",
+  "scripts": {
+    "dev": "echo 'Desktop dev shell placeholder'",
+    "build": "echo 'Desktop build placeholder'",
+    "lint": "echo 'Desktop lint placeholder'",
+    "test": "echo 'Desktop test placeholder'"
+  },
+  "dependencies": {
+    "@agent-engine/shared-schema": "workspace:*"
+  }
+}
