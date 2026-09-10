@@ -10,7 +10,7 @@
 | Milestone | Phases | Scope | Status |
 |---|---|---|---|
 | **M0 — Foundations** | Phase 0 | Monorepo layout, API contract, storage repo, feature flags, CI/CD | 🟢 COMPLETED |
-| **M1 — Hardened Core** | Phase 1 | Router, pipelines, memory, policy, cost tracker, session store | ⚪ PENDING |
+| **M1 — Hardened Core** | Phase 1 | Router, pipelines, memory, policy, cost tracker, session store | 🟡 IN PROGRESS |
 | **M2 — Desktop Alpha** | Phases 2–3 | Tauri shell + Kimi-style chat interface | ⚪ PENDING |
 | **M3 — Dashboard Beta** | Phase 4 | Control dashboard, approvals queue, live telemetry | ⚪ PENDING |
 | **M4 — Agent Hub** | Phases 5–6 | Agent adapters + multi-tool skill management | ⚪ PENDING |
@@ -65,7 +65,12 @@
 
 ## Phase 1 — Core Engine Hardening (Milestone M1)
 
-- [ ] **Task 1.1 — Model Router Hardening** (Health checks, circuit breaker, fallback chain)
+- [x] **Task 1.1 — Model Router Hardening** (Health checks, circuit breaker, fallback chain)
+  - **User Story:** As P1, I want the system to keep working if my cloud provider goes down.
+  - **Deliverables:** `core/router/circuit_breaker.py`, `core/router/health.py`, `core/router/config.yaml`, `core/router/config.py`, updated `core/router/model_router.py`.
+  - **Acceptance Criteria:** Outage triggers fast fallback (<2s); circuit breaker fast-fails; logs show traversal chain.
+  - **Dependencies:** 0.3
+  - **Status:** ✅ DONE
 - [ ] **Task 1.2 — DSPy Pipeline Registry** (Modular agent pipeline registration)
 - [ ] **Task 1.3 — Memory Upgrade (Observational Memory)** (Cross-session importance scoring)
 - [ ] **Task 1.4 — Guardrail Policy Engine** (Central YAML rules, risk scoring, tool interception)

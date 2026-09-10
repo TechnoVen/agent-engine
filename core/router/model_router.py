@@ -2,11 +2,14 @@
 import logging
 import os
 import sys
-from typing import Any
+from typing import Any, Callable
 
 import dspy
-import requests
 from dotenv import load_dotenv
+
+from core.router.circuit_breaker import CircuitBreaker
+from core.router.config import RouterConfigFile, load_router_config
+from core.router.health import HealthProber
 
 # Ensure core.models is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -14,72 +17,48 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 load_dotenv()
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
-    handlers=[logging.StreamHandler()],
-)
 logger = logging.getLogger("agent_engine.router")
-
-# Read configuration from .env
-PROVIDER_PRIORITY = os.getenv(
-    "PROVIDER_PRIORITY", "ollama,llamacpp,gemini,openai,deepseek,groq,kimi"
-).split(",")
-REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "5"))
 
 
 class ModelRouter:
-    """Smart router that selects the best available LLM provider based on health and priority."""
+    """
+    Hardened smart router with circuit breaker, active latency probing,
+    per-task preference chains, and resilient fallback execution.
+    """
 
-    def __init__(self):
-        self.provider_priority = [p.strip() for p in PROVIDER_PRIORITY if p.strip()]
-        self._configured_lm = None
-        self._configured_label = None
+    def __init__(
+        self,
+        config: RouterConfigFile | None = None,
+        circuit_breaker: CircuitBreaker | None = None,
+        health_prober: HealthProber | None = None,
+    ) -> None:
+        self.config = config or load_router_config()
+        self.provider_priority = list(self.config.default_priority)
+        self.circuit_breaker = circuit_breaker or CircuitBreaker(self.config.circuit_breaker)
+        self.health_prober = health_prober or HealthProber(
+            default_timeout=self.config.health_check.timeout_seconds,
+            cache_ttl_seconds=self.config.health_check.cache_ttl_seconds,
+        )
+        self._configured_lm: dspy.LM | None = None
+        self._configured_label: str | None = None
+        self._active_provider: str | None = None
 
     def _check_api_key(self, provider: str) -> bool:
         """Return True if the provider requires an API key and it is present."""
-        key_map = {
-            "gemini": "GEMINI_API_KEY",
-            "openai": "OPENAI_API_KEY",
-            "anthropic": "ANTHROPIC_API_KEY",
-            "deepseek": "DEEPSEEK_API_KEY",
-            "groq": "GROQ_API_KEY",
-            "kimi": "KIMI_API_KEY",
-        }
-        env_var = key_map.get(provider)
-        if env_var:
-            return bool(os.getenv(env_var))
-        # Local providers (ollama, llamacpp) don't need an API key
-        return True
+        return self.health_prober._check_api_key(provider)
 
     def check_local_ollama_health(self) -> bool:
         """Check if Ollama is reachable."""
-        base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
-        for host in [base_url, "http://127.0.0.1:11434", "http://localhost:11434"]:
-            try:
-                resp = requests.get(f"{host}/api/tags", timeout=REQUEST_TIMEOUT)
-                if resp.status_code == 200:
-                    return True
-            except Exception:
-                continue
-        return False
+        res = self.health_prober.probe_ollama()
+        return res.online
 
     def check_local_llamacpp_health(self) -> bool:
         """Check if llama.cpp server is reachable."""
-        host_env = os.getenv("LLAMACPP_HOST", "http://127.0.0.1:8080/v1")
-        if not host_env.endswith("/v1"):
-            host_env = host_env.rstrip("/") + "/v1"
-        for host in [host_env, "http://127.0.0.1:8080/v1", "http://localhost:8080/v1"]:
-            try:
-                resp = requests.get(f"{host}/models", timeout=REQUEST_TIMEOUT)
-                if resp.status_code == 200:
-                    return True
-            except Exception:
-                continue
-        return False
+        res = self.health_prober.probe_llamacpp()
+        return res.online
 
-    def get_status(self) -> dict[str, Any]:
-        """Return health and key status for all providers."""
+    def get_status(self, force_refresh: bool = False) -> dict[str, Any]:
+        """Return comprehensive health, latency, circuit state, and key status for all providers."""
         providers = [
             "ollama",
             "llamacpp",
@@ -90,23 +69,28 @@ class ModelRouter:
             "groq",
             "kimi",
         ]
-        status = {}
+        probe_results = self.health_prober.probe_all(
+            providers=providers, force_refresh=force_refresh
+        )
+        status: dict[str, Any] = {}
+
         for p in providers:
-            if p == "ollama":
-                online = self.check_local_ollama_health()
-            elif p == "llamacpp":
-                online = self.check_local_llamacpp_health()
-            else:
-                # For cloud providers, we can't easily ping; we treat as "online" if key is present
-                online = self._check_api_key(p)
+            probe = probe_results.get(p)
+            online = probe.online if probe else False
+            latency = probe.latency_ms if probe else 0.0
+            circuit_state = self.circuit_breaker.get_state(p)
+
             status[f"{p}_live"] = online
+            status[f"{p}_latency_ms"] = latency
+            status[f"{p}_circuit_state"] = circuit_state.value
             status[f"{p}_key_present"] = self._check_api_key(p)
 
-        # Primary and fallback providers
+        # Primary and fallback providers respecting circuit breaker and priority
         available = [
             p
             for p in self.provider_priority
-            if status.get(f"{p}_live") or status.get(f"{p}_key_present")
+            if (status.get(f"{p}_live") or status.get(f"{p}_key_present"))
+            and self.circuit_breaker.can_attempt(p)
         ]
         status["primary_provider"] = (
             available[0]
@@ -117,28 +101,40 @@ class ModelRouter:
         status["active_model"] = self._configured_label or os.getenv(
             "LOCAL_MODEL_NAME", "qwen2.5-coder-3b-instruct-q4_k_m"
         )
+        status["active_provider"] = self._active_provider or status["primary_provider"]
+        status["circuit_breakers"] = self.circuit_breaker.get_status()
         return status
 
-    def get_available_providers(self) -> list[str]:
-        """Return a list of provider names that are currently available (health + key)."""
+    def get_available_providers(self, task_type: str | None = None) -> list[str]:
+        """
+        Return an ordered list of providers available for invocation,
+        filtering out providers whose circuit breaker is OPEN.
+        """
         status = self.get_status()
-        available = []
-        for p in [
-            "ollama",
-            "llamacpp",
-            "gemini",
-            "openai",
-            "anthropic",
-            "deepseek",
-            "groq",
-            "kimi",
-        ]:
-            if status.get(f"{p}_live", False):
+        candidates: list[str]
+        if task_type and task_type in self.config.task_preferences:
+            candidates = self.config.task_preferences[task_type]
+        else:
+            candidates = self.provider_priority
+
+        available: list[str] = []
+        for p in candidates:
+            # Fast fail: skip providers with OPEN circuit breaker immediately
+            if not self.circuit_breaker.can_attempt(p):
+                logger.debug("Skipping provider '%s': circuit breaker is OPEN", p)
+                continue
+
+            if status.get(f"{p}_live", False) or status.get(f"{p}_key_present", False):
                 available.append(p)
-        # Also include providers that have a key but we can't health‑check (they'll be tried on demand)
-        for p in ["gemini", "openai", "anthropic", "deepseek", "groq", "kimi"]:
-            if p not in available and status.get(f"{p}_key_present", False):
-                available.append(p)
+
+        # If task preferences yielded no available providers, fall back to general priority
+        if not available and task_type:
+            for p in self.provider_priority:
+                if self.circuit_breaker.can_attempt(p) and (
+                    status.get(f"{p}_live", False) or status.get(f"{p}_key_present", False)
+                ):
+                    available.append(p)
+
         return available
 
     def create_lm(
@@ -166,72 +162,142 @@ class ModelRouter:
         return lm, label
 
     def initialize_and_configure(
-        self, force_provider: str | None = None, cache: bool = True, num_ctx: int = 4096
+        self,
+        force_provider: str | None = None,
+        task_type: str | None = None,
+        cache: bool = True,
+        num_ctx: int = 4096,
     ) -> tuple[dspy.LM, str]:
         """
-        Select the best provider (or the forced one) and configure dspy.settings.
-        Returns the LM and a human‑readable label.
+        Configure dspy.settings with the best provider according to priority/task chains
+        and circuit breaker status. Traverses fallback chain automatically if a candidate fails.
         """
         if force_provider:
-            # Check if the forced provider is available
-            status = self.get_status()
-            if not status.get(f"{force_provider}_live", False) and force_provider not in [
-                "ollama",
-                "llamacpp",
-            ]:
-                # For cloud providers, live means key present
-                if not status.get(f"{force_provider}_key_present", False):
-                    logger.warning(
-                        f"Forced provider '{force_provider}' is not available (missing key or offline)."
-                    )
-                    # Fall through to priority selection
-                else:
-                    # Even if we can't ping, try it
-                    pass
-            # Attempt to create it
-            try:
-                lm, label = self.create_lm(force_provider, cache=cache, num_ctx=num_ctx)
-                dspy.settings.configure(lm=lm, cache=cache)
-                self._configured_lm = lm
-                self._configured_label = label
-                logger.info(f"Configured LM: {label}")
-                return lm, label
-            except Exception as e:  # noqa: BLE001
-                logger.error(f"Failed to initialize forced provider '{force_provider}': {e}")
-                # Fall through to priority selection
-
-        # Priority‑based selection
-        available = self.get_available_providers()
-        logger.info(f"Available providers: {available}")
-        for p in self.provider_priority:
-            if p in available:
+            # If forced provider's circuit is OPEN, warn and fall through to chain
+            if not self.circuit_breaker.can_attempt(force_provider):
+                logger.warning(
+                    "Forced provider '%s' circuit is OPEN. Initiating fallback chain traversal.",
+                    force_provider,
+                )
+            else:
                 try:
-                    lm, label = self.create_lm(p, cache=cache, num_ctx=num_ctx)
+                    logger.info("Attempting forced provider '%s'...", force_provider)
+                    lm, label = self.create_lm(force_provider, cache=cache, num_ctx=num_ctx)
                     dspy.settings.configure(lm=lm, cache=cache)
                     self._configured_lm = lm
                     self._configured_label = label
-                    logger.info(f"Configured LM: {label} (selected by priority)")
+                    self._active_provider = force_provider
+                    self.circuit_breaker.record_success(force_provider)
+                    logger.info("Configured forced LM: %s", label)
                     return lm, label
-                except Exception as e:  # noqa: BLE001
-                    logger.error(f"Failed to initialize {p}: {e}")
-                    continue
+                except Exception as e:
+                    logger.error(
+                        "Failed to initialize forced provider '%s': %s",
+                        force_provider,
+                        e,
+                    )
+                    self.circuit_breaker.record_failure(force_provider, e)
+                    # Fall through to fallback chain
 
-        # Ultimate fallback: try local llama.cpp directly
-        logger.warning("No provider from priority list succeeded; falling back to local llama.cpp.")
-        try:
-            lm, label = self.create_lm("llamacpp", cache=cache, num_ctx=num_ctx)
-            dspy.settings.configure(lm=lm, cache=cache)
-            self._configured_lm = lm
-            self._configured_label = label
-            return lm, label
-        except Exception as e:
-            logger.critical(f"Even fallback failed: {e}")
-            raise RuntimeError(
-                "No LLM provider available. Check your configuration and network."
-            ) from e
+        # Fallback chain selection
+        available = self.get_available_providers(task_type=task_type)
+        logger.info(
+            "Evaluating fallback chain for task '%s': %s",
+            task_type or "default",
+            available,
+        )
+
+        for p in available:
+            logger.info("Evaluating provider in fallback chain: '%s'...", p)
+            try:
+                lm, label = self.create_lm(p, cache=cache, num_ctx=num_ctx)
+                dspy.settings.configure(lm=lm, cache=cache)
+                self._configured_lm = lm
+                self._configured_label = label
+                self._active_provider = p
+                self.circuit_breaker.record_success(p)
+                logger.info("Configured LM: %s (selected from fallback chain)", label)
+                return lm, label
+            except Exception as e:
+                logger.warning(
+                    "Provider '%s' initialization failed: %s. Tripping breaker and advancing fallback chain...",
+                    p,
+                    e,
+                )
+                self.circuit_breaker.record_failure(p, e)
+                continue
+
+        # Ultimate fallback: try local llama.cpp directly if not already tried
+        if self.circuit_breaker.can_attempt("llamacpp"):
+            logger.warning(
+                "No provider from fallback chain succeeded. Trying local llama.cpp safe fallback..."
+            )
+            try:
+                lm, label = self.create_lm("llamacpp", cache=cache, num_ctx=num_ctx)
+                dspy.settings.configure(lm=lm, cache=cache)
+                self._configured_lm = lm
+                self._configured_label = label
+                self._active_provider = "llamacpp"
+                self.circuit_breaker.record_success("llamacpp")
+                return lm, label
+            except Exception as e:
+                self.circuit_breaker.record_failure("llamacpp", e)
+                logger.critical("Local fallback llama.cpp failed: %s", e)
+
+        raise RuntimeError(
+            "No LLM provider available in fallback chain. All circuits OPEN or offline."
+        )
+
+    def execute_with_fallback(
+        self,
+        call_fn: Callable[[dspy.LM], Any],
+        task_type: str | None = None,
+        max_retries: int = 3,
+    ) -> Any:
+        """
+        Execute an LM invocation with automated fallback failover across the chain.
+        If the active provider throws at runtime, its circuit breaker records the failure,
+        the next available provider is engaged, and the call is retried.
+        """
+        attempt = 0
+        last_exception: Exception | None = None
+
+        while attempt < max_retries:
+            attempt += 1
+            if not self._configured_lm or (
+                self._active_provider
+                and not self.circuit_breaker.can_attempt(self._active_provider)
+            ):
+                self.initialize_and_configure(task_type=task_type)
+
+            active_p = self._active_provider or "unknown"
+            try:
+                result = call_fn(self._configured_lm)
+                self.circuit_breaker.record_success(active_p)
+                return result
+            except Exception as e:
+                last_exception = e
+                logger.warning(
+                    "Execution error on provider '%s' (attempt %d/%d): %s. Recording failure & falling back...",
+                    active_p,
+                    attempt,
+                    max_retries,
+                    e,
+                )
+                self.circuit_breaker.record_failure(active_p, e)
+                # Invalidate configured LM to force failover to next provider
+                self._configured_lm = None
+                self._active_provider = None
+
+        raise RuntimeError(
+            f"Execution failed after {max_retries} fallback attempts: {last_exception}"
+        ) from last_exception
 
     def get_current_lm(self) -> dspy.LM | None:
         return self._configured_lm
 
     def get_current_label(self) -> str | None:
         return self._configured_label
+
+    def get_active_provider(self) -> str | None:
+        return self._active_provider

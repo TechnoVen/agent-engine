@@ -1,0 +1,51 @@
+# core/router/config.yaml
+# Agent Engine Model Router Configuration & Fallback Chains
+
+# Default provider priority order when no task preference is specified
+default_priority:
+  - ollama
+  - llamacpp
+  - gemini
+  - openai
+  - deepseek
+  - groq
+  - kimi
+
+# Per-task model preferences
+task_preferences:
+  code_generation:
+    - ollama
+    - llamacpp
+    - gemini
+    - openai
+  quick_classification:
+    - llamacpp
+    - ollama
+    - groq
+    - gemini
+  deep_reasoning:
+    - gemini
+    - openai
+    - deepseek
+    - groq
+  general_chat:
+    - ollama
+    - llamacpp
+    - gemini
+    - openai
+
+# Circuit breaker parameters
+circuit_breaker:
+  failure_threshold: 3
+  recovery_timeout: 30.0
+  half_open_success_threshold: 1
+
+# Health prober parameters
+health_check:
+  timeout_seconds: 2.0
+  cache_ttl_seconds: 5.0
+
+# Request cost ceilings
+cost_ceiling:
+  max_request_cost_dollars: 0.10
+  enforce_ceiling: false
