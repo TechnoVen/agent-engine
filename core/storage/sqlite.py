@@ -99,7 +99,8 @@ class SQLiteBackend(StorageBackend):
                         completion_tokens INTEGER NOT NULL,
                         cost_usd REAL NOT NULL,
                         task_id TEXT,
-                        success INTEGER NOT NULL DEFAULT 1
+                        success INTEGER NOT NULL DEFAULT 1,
+                        project TEXT NOT NULL DEFAULT 'default'
                     );
                     CREATE INDEX IF NOT EXISTS idx_cost_agent ON cost_records(agent_name);
                     CREATE INDEX IF NOT EXISTS idx_cost_model ON cost_records(model_name);
@@ -132,6 +133,20 @@ class SQLiteBackend(StorageBackend):
                     CREATE INDEX IF NOT EXISTS idx_audit_logs_decision ON audit_logs(decision);
                     CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp);
                 """)
+                conn.commit()
+
+                # Migration check: ensure 'project' column exists in existing database
+                cursor.execute("PRAGMA table_info(cost_records)")
+                existing_cols = [row[1] for row in cursor.fetchall()]
+                if "project" not in existing_cols:
+                    cursor.execute(
+                        "ALTER TABLE cost_records ADD COLUMN project TEXT NOT NULL DEFAULT 'default'"
+                    )
+                    conn.commit()
+
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_cost_project ON cost_records(project)"
+                )
                 conn.commit()
             finally:
                 if not self._is_memory:
@@ -544,6 +559,7 @@ class SQLiteBackend(StorageBackend):
         cost_usd: float,
         task_id: Optional[str] = None,
         success: bool = True,
+        project: str = "default",
     ) -> int:
         now_iso = datetime.now(timezone.utc).isoformat()
         with self._lock:
@@ -552,8 +568,8 @@ class SQLiteBackend(StorageBackend):
                 cursor = conn.cursor()
                 cursor.execute(
                     """
-                    INSERT INTO cost_records (timestamp, agent_name, model_name, prompt_tokens, completion_tokens, cost_usd, task_id, success)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO cost_records (timestamp, agent_name, model_name, prompt_tokens, completion_tokens, cost_usd, task_id, success, project)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         now_iso,
@@ -564,6 +580,7 @@ class SQLiteBackend(StorageBackend):
                         cost_usd,
                         task_id,
                         1 if success else 0,
+                        project,
                     ),
                 )
                 conn.commit()
@@ -573,7 +590,10 @@ class SQLiteBackend(StorageBackend):
                     conn.close()
 
     def get_cost_summary(
-        self, agent_name: Optional[str] = None, model_name: Optional[str] = None
+        self,
+        agent_name: Optional[str] = None,
+        model_name: Optional[str] = None,
+        project: Optional[str] = None,
     ) -> Dict[str, Any]:
         with self._lock:
             conn = self._get_connection()
@@ -596,6 +616,9 @@ class SQLiteBackend(StorageBackend):
                 if model_name:
                     query += " AND model_name = ?"
                     params.append(model_name)
+                if project:
+                    query += " AND project = ?"
+                    params.append(project)
 
                 cursor.execute(query, params)
                 row = cursor.fetchone()
@@ -613,6 +636,65 @@ class SQLiteBackend(StorageBackend):
                     "total_tokens": int(row["total_prompt_tokens"])
                     + int(row["total_completion_tokens"]),
                 }
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_cost_breakdown(
+        self,
+        group_by: str = "day",
+        agent_name: Optional[str] = None,
+        model_name: Optional[str] = None,
+        project: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        col_map = {
+            "agent": "agent_name",
+            "model": "model_name",
+            "project": "project",
+            "day": "substr(timestamp, 1, 10)",
+        }
+        target_col = col_map.get(group_by.lower(), "substr(timestamp, 1, 10)")
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                query = f"""
+                    SELECT
+                        {target_col} as `group`,
+                        COUNT(*) as calls,
+                        COALESCE(SUM(prompt_tokens), 0) as prompt_tokens,
+                        COALESCE(SUM(completion_tokens), 0) as completion_tokens,
+                        COALESCE(SUM(cost_usd), 0.0) as cost_usd
+                    FROM cost_records
+                    WHERE 1=1
+                """
+                params: List[Any] = []
+                if agent_name:
+                    query += " AND agent_name = ?"
+                    params.append(agent_name)
+                if model_name:
+                    query += " AND model_name = ?"
+                    params.append(model_name)
+                if project:
+                    query += " AND project = ?"
+                    params.append(project)
+
+                query += f" GROUP BY {target_col} ORDER BY cost_usd DESC"
+                cursor.execute(query, params)
+                results = []
+                for row in cursor.fetchall():
+                    results.append(
+                        {
+                            "group": str(row["group"] or "unknown"),
+                            "calls": int(row["calls"]),
+                            "prompt_tokens": int(row["prompt_tokens"]),
+                            "completion_tokens": int(row["completion_tokens"]),
+                            "total_tokens": int(row["prompt_tokens"])
+                            + int(row["completion_tokens"]),
+                            "cost_usd": round(float(row["cost_usd"]), 6),
+                        }
+                    )
+                return results
             finally:
                 if not self._is_memory:
                     conn.close()

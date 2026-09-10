@@ -31,9 +31,11 @@ except AttributeError:
     # If the attribute doesn't exist, just continue
     pass
 
+from datetime import datetime, timezone
 from core.engine import LowCodeAgent, NodeConfig
 from core.memory import AgentMemory
 from core.router import ModelRouter
+from core.telemetry import DEFAULT_PRICING, BudgetConfig, get_cost_tracker
 from server.watcher import (
     DB_PATH,
     apply_staged_patch,
@@ -466,12 +468,13 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-tab1, tab2, tab3, tab4 = st.tabs(
+tab1, tab2, tab3, tab4, tab5 = st.tabs(
     [
         "🛡️  Sentry & Code Patches",
         "🧠  Dynamic Agent Studio",
         "📚  RAG Vector Memory",
         "⚡  LLM Speedometer & Benchmark",
+        "💰  Cost Tracker & Budgets",
     ]
 )
 
@@ -1371,6 +1374,193 @@ with tab4:
         )
     else:
         render_speedometer_and_sandbox()
+
+
+# ==============================================================================
+# TAB 5: COST TRACKER & BUDGETS
+# ==============================================================================
+def render_cost_tracker():
+    """Renders Tab 5: Cost Tracker & Budgets spend ledger, charts, and alert manager."""
+    cost_tracker = get_cost_tracker()
+
+    st.subheader("💰 Spend Ledger & Budget Guardrails")
+    st.write(
+        "Monitor token consumption and spend across models, agents, and projects. "
+        "Enforces real-time budget thresholds with early-warning indicators."
+    )
+
+    # Filter Controls
+    col_proj, col_grp, col_refresh = st.columns([2, 2, 1])
+    with col_proj:
+        active_project = st.text_input(
+            "Project / Workspace", value="default", key="cost_filter_proj"
+        )
+    with col_grp:
+        group_by = st.selectbox(
+            "Group Breakdown By",
+            options=["day", "agent", "model", "project"],
+            index=0,
+            key="cost_filter_group",
+        )
+    with col_refresh:
+        st.write("")
+        st.write("")
+        if st.button("🔄 Refresh Data", key="cost_refresh_btn"):
+            st.rerun()
+
+    # Budget & Alerts Check
+    budget = cost_tracker.get_budget(project=active_project)
+    alerts = cost_tracker.check_budget_alerts(project=active_project)
+
+    if alerts:
+        for alert in alerts:
+            if alert.level == "critical":
+                st.error(f"🚨 **CRITICAL ALERT [{alert.period.upper()}]**: {alert.message}")
+            else:
+                st.warning(f"⚠️ **BUDGET WARNING [{alert.period.upper()}]**: {alert.message}")
+    else:
+        st.success(
+            f"✅ Spend for project **'{active_project}'** is healthy and within budget limits."
+        )
+
+    # Aggregate metrics
+    summary = cost_tracker.get_summary(project=active_project)
+    total_cost = summary.get("total_cost_usd", 0.0)
+    prompt_tokens = summary.get("total_prompt_tokens", 0)
+    comp_tokens = summary.get("total_completion_tokens", 0)
+    total_tokens = summary.get("total_tokens", 0)
+    total_calls = summary.get("total_calls", 0)
+
+    # Compute month and day spend
+    daily_rows = cost_tracker.get_breakdown(group_by="day", project=active_project)
+    now_utc = datetime.now(timezone.utc)
+    curr_month = now_utc.strftime("%Y-%m")
+    curr_day = now_utc.strftime("%Y-%m-%d")
+
+    month_spend = sum(
+        float(r.get("cost_usd", 0.0))
+        for r in daily_rows
+        if str(r.get("group", "")).startswith(curr_month)
+    )
+    day_spend = sum(
+        float(r.get("cost_usd", 0.0)) for r in daily_rows if str(r.get("group", "")) == curr_day
+    )
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Spend", f"${total_cost:.4f}", f"{total_calls} calls")
+    m2.metric("Total Tokens", f"{total_tokens:,}", f"{prompt_tokens:,} in / {comp_tokens:,} out")
+    month_pct = (
+        (month_spend / budget.monthly_budget_usd * 100.0) if budget.monthly_budget_usd > 0 else 0.0
+    )
+    m3.metric(
+        "Monthly Spend",
+        f"${month_spend:.2f} / ${budget.monthly_budget_usd:.2f}",
+        f"{month_pct:.1f}%",
+    )
+    day_pct = (day_spend / budget.daily_budget_usd * 100.0) if budget.daily_budget_usd > 0 else 0.0
+    m4.metric(
+        "Daily Spend",
+        f"${day_spend:.2f} / ${budget.daily_budget_usd:.2f}",
+        f"{day_pct:.1f}%",
+    )
+
+    st.markdown("---")
+
+    # Visual Breakdown
+    st.subheader(f"📊 Spend Breakdown by {group_by.title()}")
+    breakdown_data = cost_tracker.get_breakdown(group_by=group_by, project=active_project)
+    if breakdown_data:
+        df = pd.DataFrame(breakdown_data)
+        chart_col, table_col = st.columns([3, 2])
+        with chart_col:
+            if "cost_usd" in df.columns and "group" in df.columns:
+                chart_df = df.set_index("group")[["cost_usd"]]
+                st.bar_chart(chart_df)
+        with table_col:
+            st.dataframe(df, hide_index=True)
+    else:
+        st.info(
+            f"No spend records found for project '{active_project}'. "
+            "Record your first request below to populate metrics."
+        )
+
+    # Budget Configuration
+    with st.expander("⚙️ Configure Project Budget & Thresholds"):
+        with st.form("budget_config_form"):
+            c_m, c_d = st.columns(2)
+            with c_m:
+                new_monthly = st.number_input(
+                    "Monthly Budget ($ USD)",
+                    min_value=1.0,
+                    max_value=10000.0,
+                    value=float(budget.monthly_budget_usd),
+                    step=5.0,
+                )
+                new_warn = st.number_input(
+                    "Warning Threshold (%)",
+                    min_value=10.0,
+                    max_value=99.0,
+                    value=float(budget.warning_threshold_pct),
+                    step=5.0,
+                )
+            with c_d:
+                new_daily = st.number_input(
+                    "Daily Budget ($ USD)",
+                    min_value=0.5,
+                    max_value=1000.0,
+                    value=float(budget.daily_budget_usd),
+                    step=1.0,
+                )
+                new_crit = st.number_input(
+                    "Critical Threshold (%)",
+                    min_value=100.0,
+                    max_value=200.0,
+                    value=float(budget.critical_threshold_pct),
+                    step=5.0,
+                )
+
+            save_budget = st.form_submit_button("💾 Save Budget Settings")
+            if save_budget:
+                cost_tracker.set_budget(
+                    BudgetConfig(
+                        monthly_budget_usd=new_monthly,
+                        daily_budget_usd=new_daily,
+                        warning_threshold_pct=new_warn,
+                        critical_threshold_pct=new_crit,
+                        project=active_project,
+                    )
+                )
+                st.success(f"Updated budget for project '{active_project}'!")
+                st.rerun()
+
+    # Simulate / Record Spend
+    with st.expander("➕ Simulate / Record Spend Entry"):
+        with st.form("record_spend_form"):
+            r1, r2 = st.columns(2)
+            with r1:
+                rec_agent = st.text_input("Agent Name", value="code_sentry")
+                rec_model = st.selectbox("Model", options=list(DEFAULT_PRICING.keys()), index=0)
+            with r2:
+                rec_prompt = st.number_input("Prompt Tokens", min_value=0, value=1200, step=100)
+                rec_comp = st.number_input("Completion Tokens", min_value=0, value=350, step=50)
+
+            rec_submit = st.form_submit_button("📝 Record Spend Transaction")
+            if rec_submit:
+                rec_id = cost_tracker.record_spend(
+                    agent_name=rec_agent,
+                    model_name=rec_model,
+                    prompt_tokens=int(rec_prompt),
+                    completion_tokens=int(rec_comp),
+                    project=active_project,
+                )
+                st.success(
+                    f"Recorded transaction ID #{rec_id} for {rec_model} in project '{active_project}'!"
+                )
+                st.rerun()
+
+
+with tab5:
+    render_cost_tracker()
 
 # ---------- FOOTER ----------
 st.markdown(

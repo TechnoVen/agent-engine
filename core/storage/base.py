@@ -107,6 +107,7 @@ class CostRecord:
     cost_usd: float
     task_id: Optional[str] = None
     success: bool = True
+    project: str = "default"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -119,6 +120,7 @@ class CostRecord:
             "cost_usd": self.cost_usd,
             "task_id": self.task_id,
             "success": self.success,
+            "project": self.project,
         }
 
 
@@ -316,15 +318,30 @@ class StorageBackend(ABC):
         cost_usd: float,
         task_id: Optional[str] = None,
         success: bool = True,
+        project: str = "default",
     ) -> int:
         """Record an LLM / step execution cost entry."""
         pass
 
     @abstractmethod
     def get_cost_summary(
-        self, agent_name: Optional[str] = None, model_name: Optional[str] = None
+        self,
+        agent_name: Optional[str] = None,
+        model_name: Optional[str] = None,
+        project: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Get aggregated cost, token counts, and request metrics."""
+        pass
+
+    @abstractmethod
+    def get_cost_breakdown(
+        self,
+        group_by: str = "day",
+        agent_name: Optional[str] = None,
+        model_name: Optional[str] = None,
+        project: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get aggregated cost breakdown grouped by agent, model, project, or day."""
         pass
 
     # --- 6. BENCHMARKS & EVALUATIONS ---
@@ -372,3 +389,7 @@ class StorageBackend(ABC):
     ) -> List[Dict[str, Any]]:
         """Retrieve recent safety audit logs."""
         pass
+
+
+# Backward-compatible and semantic alias
+StorageRepository = StorageBackend

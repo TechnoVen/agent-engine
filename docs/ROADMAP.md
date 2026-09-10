@@ -90,7 +90,12 @@
   - **Dependencies:** 0.3
   - **Conflicts Resolved:** C6 (auto-apply vs staged patches).
   - **Status:** ✅ DONE
-- [ ] **Task 1.5 — Cost Tracker** (Per-request, per-agent, per-model spend ledger)
+- [x] **Task 1.5 — Cost Tracker** (Per-request, per-agent, per-model spend ledger)
+  - **User Story:** As P2, I want to see how much my agents cost me per month.
+  - **Deliverables:** `core/telemetry/cost.py` (`CostTracker`, `ModelPricing`, `BudgetConfig`, `BudgetAlert`), storage repo breakdown queries (`get_cost_breakdown`), FastAPI endpoints `GET /v1/telemetry/cost`, `POST /v1/telemetry/cost/record`, `GET/POST /v1/telemetry/budget`, Streamlit Tab 5 ("💰 Cost Tracker & Budgets"), and OpenAPI spec.
+  - **Acceptance Criteria:** Dashboard shows cost breakdown; budget alerts fire (warning at 80%, critical at 100%+); all unit/integration tests pass.
+  - **Dependencies:** 0.3
+  - **Status:** ✅ DONE
 - [ ] **Task 1.6 — Session Store Unification** (Cross-agent unified session model)
 - [ ] **Task 1.7 — Semantic Cache** (`core/cache/semantic_cache.py` - Chroma-backed 0.95 similarity cache, 0 tokens)
 - [ ] **Task 1.8 — Context Builder** (`core/context/builder.py` - ContextSpec budget enforcement, <8k target)

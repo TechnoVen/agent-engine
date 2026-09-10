@@ -124,7 +124,8 @@ class PostgresBackend(StorageBackend):
                     completion_tokens INTEGER NOT NULL,
                     cost_usd REAL NOT NULL,
                     task_id TEXT,
-                    success INTEGER NOT NULL DEFAULT 1
+                    success INTEGER NOT NULL DEFAULT 1,
+                    project TEXT NOT NULL DEFAULT 'default'
                 );
             """)
             )
@@ -136,6 +137,11 @@ class PostgresBackend(StorageBackend):
             conn.execute(
                 text("""
                 CREATE INDEX IF NOT EXISTS idx_pg_cost_model ON cost_records(model_name);
+            """)
+            )
+            conn.execute(
+                text("""
+                CREATE INDEX IF NOT EXISTS idx_pg_cost_project ON cost_records(project);
             """)
             )
 
@@ -546,13 +552,14 @@ class PostgresBackend(StorageBackend):
         cost_usd: float,
         task_id: Optional[str] = None,
         success: bool = True,
+        project: str = "default",
     ) -> int:
         now_iso = datetime.now(timezone.utc).isoformat()
         with self.engine.begin() as conn:
             cursor = conn.execute(
                 text("""
-                    INSERT INTO cost_records (timestamp, agent_name, model_name, prompt_tokens, completion_tokens, cost_usd, task_id, success)
-                    VALUES (:timestamp, :agent_name, :model_name, :prompt_tokens, :completion_tokens, :cost_usd, :task_id, :success)
+                    INSERT INTO cost_records (timestamp, agent_name, model_name, prompt_tokens, completion_tokens, cost_usd, task_id, success, project)
+                    VALUES (:timestamp, :agent_name, :model_name, :prompt_tokens, :completion_tokens, :cost_usd, :task_id, :success, :project)
                     RETURNING id
                 """),
                 {
@@ -564,6 +571,7 @@ class PostgresBackend(StorageBackend):
                     "cost_usd": cost_usd,
                     "task_id": task_id,
                     "success": 1 if success else 0,
+                    "project": project,
                 },
             )
             row = cursor.fetchone()
@@ -573,7 +581,10 @@ class PostgresBackend(StorageBackend):
             return int(row.max_id) if row and row.max_id else 1
 
     def get_cost_summary(
-        self, agent_name: Optional[str] = None, model_name: Optional[str] = None
+        self,
+        agent_name: Optional[str] = None,
+        model_name: Optional[str] = None,
+        project: Optional[str] = None,
     ) -> Dict[str, Any]:
         with self.engine.connect() as conn:
             query = """
@@ -593,6 +604,9 @@ class PostgresBackend(StorageBackend):
             if model_name:
                 query += " AND model_name = :model_name"
                 params["model_name"] = model_name
+            if project:
+                query += " AND project = :project"
+                params["project"] = project
 
             row = conn.execute(text(query), params).fetchone()
             if not row:
@@ -619,6 +633,59 @@ class PostgresBackend(StorageBackend):
                 "total_tokens": int(row._mapping["total_prompt_tokens"])
                 + int(row._mapping["total_completion_tokens"]),
             }
+
+    def get_cost_breakdown(
+        self,
+        group_by: str = "day",
+        agent_name: Optional[str] = None,
+        model_name: Optional[str] = None,
+        project: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        col_map = {
+            "agent": "agent_name",
+            "model": "model_name",
+            "project": "project",
+            "day": "SUBSTR(timestamp, 1, 10)",
+        }
+        target_col = col_map.get(group_by.lower(), "SUBSTR(timestamp, 1, 10)")
+        with self.engine.connect() as conn:
+            query = f"""
+                SELECT
+                    {target_col} AS "group",
+                    COUNT(*) AS calls,
+                    COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                    COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                    COALESCE(SUM(cost_usd), 0.0) AS cost_usd
+                FROM cost_records
+                WHERE 1=1
+            """
+            params: Dict[str, Any] = {}
+            if agent_name:
+                query += " AND agent_name = :agent_name"
+                params["agent_name"] = agent_name
+            if model_name:
+                query += " AND model_name = :model_name"
+                params["model_name"] = model_name
+            if project:
+                query += " AND project = :project"
+                params["project"] = project
+
+            query += f' GROUP BY {target_col} ORDER BY "cost_usd" DESC'
+            result = conn.execute(text(query), params)
+            results = []
+            for row in result:
+                results.append(
+                    {
+                        "group": str(row._mapping["group"] or "unknown"),
+                        "calls": int(row._mapping["calls"]),
+                        "prompt_tokens": int(row._mapping["prompt_tokens"]),
+                        "completion_tokens": int(row._mapping["completion_tokens"]),
+                        "total_tokens": int(row._mapping["prompt_tokens"])
+                        + int(row._mapping["completion_tokens"]),
+                        "cost_usd": round(float(row._mapping["cost_usd"]), 6),
+                    }
+                )
+            return results
 
     # --- 6. BENCHMARKS & EVALUATIONS ---
 

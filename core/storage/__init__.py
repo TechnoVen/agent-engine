@@ -81,6 +81,12 @@ __all__ = [
     "BenchmarkRecord",
     "AuditLogRecord",
     "get_storage_backend",
+    "get_storage",
     "reset_storage_backend",
     "DEFAULT_SQLITE_PATH",
+    "StorageRepository",
 ]
+
+# Ergonomic aliases
+get_storage = get_storage_backend
+StorageRepository = StorageBackend

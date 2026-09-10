@@ -346,6 +346,18 @@ paths:
             type: string
             enum: [agent, model, project, day]
             default: day
+        - name: project
+          in: query
+          schema:
+            type: string
+        - name: agent_name
+          in: query
+          schema:
+            type: string
+        - name: model_name
+          in: query
+          schema:
+            type: string
       responses:
         '200':
           description: Cost aggregation
@@ -353,6 +365,63 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CostMetricsResponse'
+
+  /telemetry/cost/record:
+    post:
+      summary: Record token spend ledger entry
+      operationId: recordCostMetric
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CostRecordRequest'
+      responses:
+        '200':
+          description: Recorded spend entry ID
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  success:
+                    type: boolean
+
+  /telemetry/budget:
+    get:
+      summary: Get project budget and active alerts
+      operationId: getBudgetConfig
+      parameters:
+        - name: project
+          in: query
+          schema:
+            type: string
+            default: default
+      responses:
+        '200':
+          description: Project budget and alerts
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetConfigResponse'
+    post:
+      summary: Configure project budget limits and thresholds
+      operationId: setBudgetConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BudgetConfigRequest'
+      responses:
+        '200':
+          description: Updated project budget configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BudgetConfigResponse'
 
   /auth/session:
     get:
@@ -779,10 +848,105 @@ components:
       properties:
         total_cost_usd:
           type: number
+        total_prompt_tokens:
+          type: integer
+        total_completion_tokens:
+          type: integer
+        total_tokens:
+          type: integer
         breakdown:
           type: array
           items:
             type: object
+        alerts:
+          type: array
+          items:
+            $ref: '#/components/schemas/BudgetAlertItem'
+
+    CostRecordRequest:
+      type: object
+      required: [agent_name, model_name, prompt_tokens, completion_tokens]
+      properties:
+        agent_name:
+          type: string
+        model_name:
+          type: string
+        prompt_tokens:
+          type: integer
+        completion_tokens:
+          type: integer
+        cost_usd:
+          type: number
+        task_id:
+          type: string
+        success:
+          type: boolean
+          default: true
+        project:
+          type: string
+          default: default
+
+    BudgetConfigRequest:
+      type: object
+      required: [monthly_budget_usd, daily_budget_usd]
+      properties:
+        monthly_budget_usd:
+          type: number
+        daily_budget_usd:
+          type: number
+        warning_threshold_pct:
+          type: number
+          default: 80.0
+        critical_threshold_pct:
+          type: number
+          default: 100.0
+        project:
+          type: string
+          default: default
+
+    BudgetConfigResponse:
+      type: object
+      required: [monthly_budget_usd, daily_budget_usd, project]
+      properties:
+        monthly_budget_usd:
+          type: number
+        daily_budget_usd:
+          type: number
+        warning_threshold_pct:
+          type: number
+        critical_threshold_pct:
+          type: number
+        project:
+          type: string
+        alerts:
+          type: array
+          items:
+            $ref: '#/components/schemas/BudgetAlertItem'
+
+    BudgetAlertItem:
+      type: object
+      required: [alert_id, level, message, current_spend, budget_limit, percentage, period, timestamp, project]
+      properties:
+        alert_id:
+          type: string
+        level:
+          type: string
+          enum: [warning, critical]
+        message:
+          type: string
+        current_spend:
+          type: number
+        budget_limit:
+          type: number
+        percentage:
+          type: number
+        period:
+          type: string
+          enum: [monthly, daily]
+        timestamp:
+          type: string
+        project:
+          type: string
 
     AuthSession:
       type: object

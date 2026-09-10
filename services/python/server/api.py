@@ -24,7 +24,7 @@ from core.memory import AgentMemory, ObservationalMemory
 from core.pipelines import get_pipeline_registry
 from core.router import ModelRouter
 from core.safety import get_policy_engine
-from core.storage import get_storage_backend
+from core.telemetry import BudgetConfig, get_cost_tracker
 from core.templates import TemplateManager
 from server.watcher import apply_staged_patch, get_staged_patches, reject_staged_patch
 
@@ -53,6 +53,7 @@ v1_router = APIRouter(prefix="/v1")
 router_instance = ModelRouter()
 memory_instance = AgentMemory()
 observational_memory_instance = ObservationalMemory()
+cost_tracker_instance = get_cost_tracker()
 
 # In-memory queues for global SSE event subscribers
 _event_subscribers: List[asyncio.Queue] = []
@@ -210,7 +211,39 @@ class TelemetryResponse(BaseModel):
 
 class CostMetricsResponse(BaseModel):
     total_cost_usd: float
+    total_prompt_tokens: int = 0
+    total_completion_tokens: int = 0
+    total_tokens: int = 0
     breakdown: List[Dict[str, Any]]
+    alerts: List[Dict[str, Any]] = []
+
+
+class CostRecordRequest(BaseModel):
+    agent_name: str
+    model_name: str
+    prompt_tokens: int
+    completion_tokens: int
+    cost_usd: Optional[float] = None
+    task_id: Optional[str] = None
+    success: bool = True
+    project: str = "default"
+
+
+class BudgetConfigRequest(BaseModel):
+    monthly_budget_usd: float
+    daily_budget_usd: float
+    warning_threshold_pct: float = 80.0
+    critical_threshold_pct: float = 100.0
+    project: str = "default"
+
+
+class BudgetConfigResponse(BaseModel):
+    monthly_budget_usd: float
+    daily_budget_usd: float
+    warning_threshold_pct: float
+    critical_threshold_pct: float
+    project: str
+    alerts: List[Dict[str, Any]] = []
 
 
 class AuthSession(BaseModel):
@@ -643,19 +676,100 @@ async def get_telemetry():
 
 
 @v1_router.get("/telemetry/cost", response_model=CostMetricsResponse)
-async def get_cost_metrics(group_by: str = Query("day", pattern="^(agent|model|project|day)$")):
-    """Get aggregated token usage and spend metrics."""
-    summary = get_storage_backend().get_cost_summary()
-    return CostMetricsResponse(
-        total_cost_usd=summary.get("total_cost_usd", 0.0),
-        breakdown=[
+async def get_cost_metrics(
+    group_by: str = Query("day", pattern="^(agent|model|project|day)$"),
+    project: Optional[str] = Query(None),
+    agent_name: Optional[str] = Query(None),
+    model_name: Optional[str] = Query(None),
+):
+    """Get aggregated token usage, spend breakdown, and active budget alerts."""
+    summary = cost_tracker_instance.get_summary(
+        agent_name=agent_name, model_name=model_name, project=project
+    )
+    breakdown = cost_tracker_instance.get_breakdown(
+        group_by=group_by, agent_name=agent_name, model_name=model_name, project=project
+    )
+    if not breakdown:
+        breakdown = [
             {
                 "group": group_by,
+                "calls": summary.get("total_calls", 0),
                 "prompt_tokens": summary.get("total_prompt_tokens", 0),
                 "completion_tokens": summary.get("total_completion_tokens", 0),
+                "total_tokens": summary.get("total_tokens", 0),
                 "cost_usd": summary.get("total_cost_usd", 0.0),
             }
-        ],
+        ]
+
+    alerts_list = [
+        alert.__dict__
+        for alert in cost_tracker_instance.check_budget_alerts(project=project or "default")
+    ]
+
+    return CostMetricsResponse(
+        total_cost_usd=summary.get("total_cost_usd", 0.0),
+        total_prompt_tokens=summary.get("total_prompt_tokens", 0),
+        total_completion_tokens=summary.get("total_completion_tokens", 0),
+        total_tokens=summary.get("total_tokens", 0),
+        breakdown=breakdown,
+        alerts=alerts_list,
+    )
+
+
+@v1_router.post("/telemetry/cost/record")
+async def record_cost_metric(req: CostRecordRequest):
+    """Record token spend for an agent, model, and project."""
+    record_id = cost_tracker_instance.record_spend(
+        agent_name=req.agent_name,
+        model_name=req.model_name,
+        prompt_tokens=req.prompt_tokens,
+        completion_tokens=req.completion_tokens,
+        cost_usd=req.cost_usd,
+        task_id=req.task_id,
+        success=req.success,
+        project=req.project,
+    )
+    return {"id": record_id, "success": True}
+
+
+@v1_router.get("/telemetry/budget", response_model=BudgetConfigResponse)
+async def get_budget_config(project: str = Query("default")):
+    """Get project budget configuration and current alert status."""
+    budget = cost_tracker_instance.get_budget(project=project)
+    alerts = [
+        alert.__dict__ for alert in cost_tracker_instance.check_budget_alerts(project=project)
+    ]
+    return BudgetConfigResponse(
+        monthly_budget_usd=budget.monthly_budget_usd,
+        daily_budget_usd=budget.daily_budget_usd,
+        warning_threshold_pct=budget.warning_threshold_pct,
+        critical_threshold_pct=budget.critical_threshold_pct,
+        project=budget.project,
+        alerts=alerts,
+    )
+
+
+@v1_router.post("/telemetry/budget", response_model=BudgetConfigResponse)
+async def set_budget_config(req: BudgetConfigRequest):
+    """Set project budget configuration."""
+    budget = BudgetConfig(
+        monthly_budget_usd=req.monthly_budget_usd,
+        daily_budget_usd=req.daily_budget_usd,
+        warning_threshold_pct=req.warning_threshold_pct,
+        critical_threshold_pct=req.critical_threshold_pct,
+        project=req.project,
+    )
+    cost_tracker_instance.set_budget(budget)
+    alerts = [
+        alert.__dict__ for alert in cost_tracker_instance.check_budget_alerts(project=req.project)
+    ]
+    return BudgetConfigResponse(
+        monthly_budget_usd=budget.monthly_budget_usd,
+        daily_budget_usd=budget.daily_budget_usd,
+        warning_threshold_pct=budget.warning_threshold_pct,
+        critical_threshold_pct=budget.critical_threshold_pct,
+        project=budget.project,
+        alerts=alerts,
     )
 
 
