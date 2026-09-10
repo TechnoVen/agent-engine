@@ -9,7 +9,7 @@
 
 | Milestone | Phases | Scope | Status |
 |---|---|---|---|
-| **M0 — Foundations** | Phase 0 | Monorepo layout, API contract, storage repo, feature flags, CI/CD | 🟡 IN PROGRESS |
+| **M0 — Foundations** | Phase 0 | Monorepo layout, API contract, storage repo, feature flags, CI/CD | 🟢 COMPLETED |
 | **M1 — Hardened Core** | Phase 1 | Router, pipelines, memory, policy, cost tracker, session store | ⚪ PENDING |
 | **M2 — Desktop Alpha** | Phases 2–3 | Tauri shell + Kimi-style chat interface | ⚪ PENDING |
 | **M3 — Dashboard Beta** | Phase 4 | Control dashboard, approvals queue, live telemetry | ⚪ PENDING |
@@ -54,12 +54,12 @@
   - **Conflicts Resolved:** C7
   - **Status:** ✅ DONE
 
-- [ ] **Task 0.5 — CI/CD Baseline**
+- [x] **Task 0.5 — CI/CD Baseline**
   - **User Story:** As P5, I want every PR verified automatically.
   - **Deliverables:** `.github/workflows/ci.yml`, `.github/workflows/release.yml`.
   - **Acceptance Criteria:** PRs run lint, tests, schema diff; releases produce signed artifacts.
   - **Dependencies:** 0.1
-  - **Status:** ⚪ READY TO START
+  - **Status:** ✅ DONE
 
 ---
 
