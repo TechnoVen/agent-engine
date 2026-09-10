@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 
 from core.config import get_feature_flags, require_flag, set_flag_override
 from core.memory import AgentMemory
+from core.pipelines import get_pipeline_registry
 from core.router import ModelRouter
 from core.storage import get_storage_backend
 from core.templates import TemplateManager
@@ -198,6 +199,27 @@ class FlagOverrideRequest(BaseModel):
     value: Any
 
 
+class PipelineInfo(BaseModel):
+    name: str
+    description: str
+    inputs: List[str]
+    outputs: List[str]
+    tools: List[str] = Field(default_factory=list)
+    guardrails: List[str] = Field(default_factory=list)
+    category: str = "general"
+    version: str = "1.0.0"
+    author: str = "Agent Engine"
+
+
+class PipelineRunRequest(BaseModel):
+    inputs: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PipelineRunResponse(BaseModel):
+    pipeline: str
+    outputs: Dict[str, Any]
+
+
 # ---------------------------------------------------------------------------
 # API Endpoints (/v1/...)
 # ---------------------------------------------------------------------------
@@ -358,6 +380,47 @@ async def run_workflow(req: RunWorkflowRequest):
     """Trigger a workflow execution."""
     execution_id = f"wf_exec_{uuid.uuid4().hex[:8]}"
     return WorkflowExecutionResponse(execution_id=execution_id, status="queued")
+
+
+@v1_router.get("/pipelines", response_model=List[PipelineInfo])
+async def list_pipelines():
+    """List registered modular DSPy agent pipelines."""
+    registry = get_pipeline_registry()
+    return [PipelineInfo(**meta.to_dict()) for meta in registry.list_pipelines()]
+
+
+@v1_router.get("/pipelines/{name}", response_model=PipelineInfo)
+async def get_pipeline_details(name: str):
+    """Get metadata for a specific registered DSPy agent pipeline."""
+    registry = get_pipeline_registry()
+    meta = registry.get_metadata(name)
+    if not meta:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Pipeline '{name}' not found in registry.",
+        )
+    return PipelineInfo(**meta.to_dict())
+
+
+@v1_router.post("/pipelines/{name}/run", response_model=PipelineRunResponse)
+async def run_pipeline(name: str, req: PipelineRunRequest):
+    """Execute a registered DSPy agent pipeline."""
+    registry = get_pipeline_registry()
+    meta = registry.get_metadata(name)
+    if not meta:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Pipeline '{name}' not found in registry.",
+        )
+    try:
+        router_instance.initialize_and_configure()
+        outputs = registry.run(name, **req.inputs)
+        return PipelineRunResponse(pipeline=name, outputs=outputs)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Execution of pipeline '{name}' failed: {e}",
+        )
 
 
 @v1_router.get("/memory", response_model=MemoryQueryResponse)

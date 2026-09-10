@@ -71,7 +71,12 @@
   - **Acceptance Criteria:** Outage triggers fast fallback (<2s); circuit breaker fast-fails; logs show traversal chain.
   - **Dependencies:** 0.3
   - **Status:** ✅ DONE
-- [ ] **Task 1.2 — DSPy Pipeline Registry** (Modular agent pipeline registration)
+- [x] **Task 1.2 — DSPy Pipeline Registry** (Modular agent pipeline registration)
+  - **User Story:** As P5, I want to register new agent pipelines without touching core code.
+  - **Deliverables:** `core/pipelines/registry.py` with `@register_pipeline`, `core/pipelines/standard.py` (6 standard pipelines), API endpoints `GET /v1/pipelines`, `GET /v1/pipelines/{name}`, `POST /v1/pipelines/{name}/run`.
+  - **Acceptance Criteria:** New pipelines register via decorator; discoverable via API `/v1/pipelines`.
+  - **Dependencies:** 1.1
+  - **Status:** ✅ DONE
 - [ ] **Task 1.3 — Memory Upgrade (Observational Memory)** (Cross-session importance scoring)
 - [ ] **Task 1.4 — Guardrail Policy Engine** (Central YAML rules, risk scoring, tool interception)
 - [ ] **Task 1.5 — Cost Tracker** (Per-request, per-agent, per-model spend ledger)
