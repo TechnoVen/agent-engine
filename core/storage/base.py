@@ -146,6 +146,36 @@ class BenchmarkRecord:
         }
 
 
+@dataclass
+class AuditLogRecord:
+    id: Optional[int]
+    timestamp: str
+    tool_name: str
+    tool_args: Dict[str, Any]
+    decision: str  # allow, block, stage, warn
+    risk_level: str  # low, medium, high, critical
+    risk_score: float
+    policy_id: Optional[str] = None
+    reason: Optional[str] = None
+    suggestion: Optional[str] = None
+    session_id: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "timestamp": self.timestamp,
+            "tool_name": self.tool_name,
+            "tool_args": self.tool_args,
+            "decision": self.decision,
+            "risk_level": self.risk_level,
+            "risk_score": self.risk_score,
+            "policy_id": self.policy_id,
+            "reason": self.reason,
+            "suggestion": self.suggestion,
+            "session_id": self.session_id,
+        }
+
+
 class StorageBackend(ABC):
     """Abstract base repository for all Agent Engine persistent state."""
 
@@ -314,4 +344,31 @@ class StorageBackend(ABC):
     @abstractmethod
     def get_benchmarks(self, task_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """Retrieve benchmarks, optionally filtered by task type."""
+        pass
+
+    # --- 7. SAFETY AUDIT LOGS ---
+    @abstractmethod
+    def record_audit_log(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        decision: str,
+        risk_level: str,
+        risk_score: float,
+        policy_id: Optional[str] = None,
+        reason: Optional[str] = None,
+        suggestion: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> int:
+        """Record a safety audit log entry for a tool invocation."""
+        pass
+
+    @abstractmethod
+    def list_audit_logs(
+        self,
+        limit: int = 50,
+        decision: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve recent safety audit logs."""
         pass

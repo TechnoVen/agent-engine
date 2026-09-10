@@ -115,6 +115,22 @@ class SQLiteBackend(StorageBackend):
                         metadata TEXT NOT NULL DEFAULT '{}'
                     );
                     CREATE INDEX IF NOT EXISTS idx_benchmarks_task ON benchmarks(task_type);
+
+                    CREATE TABLE IF NOT EXISTS audit_logs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp TEXT NOT NULL,
+                        tool_name TEXT NOT NULL,
+                        tool_args TEXT NOT NULL DEFAULT '{}',
+                        decision TEXT NOT NULL,
+                        risk_level TEXT NOT NULL,
+                        risk_score REAL NOT NULL,
+                        policy_id TEXT,
+                        reason TEXT,
+                        suggestion TEXT,
+                        session_id TEXT
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_audit_logs_decision ON audit_logs(decision);
+                    CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp);
                 """)
                 conn.commit()
             finally:
@@ -655,6 +671,87 @@ class SQLiteBackend(StorageBackend):
                 for row in cursor.fetchall():
                     data = dict(row)
                     data["metadata"] = json.loads(data.get("metadata") or "{}")
+                    results.append(data)
+                return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    # --- 7. SAFETY AUDIT LOGS ---
+
+    def record_audit_log(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        decision: str,
+        risk_level: str,
+        risk_score: float,
+        policy_id: Optional[str] = None,
+        reason: Optional[str] = None,
+        suggestion: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> int:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO audit_logs (
+                        timestamp, tool_name, tool_args, decision, risk_level,
+                        risk_score, policy_id, reason, suggestion, session_id
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        now_iso,
+                        tool_name,
+                        json.dumps(tool_args),
+                        decision,
+                        risk_level,
+                        float(risk_score),
+                        policy_id,
+                        reason,
+                        suggestion,
+                        session_id,
+                    ),
+                )
+                conn.commit()
+                return int(cursor.lastrowid)
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_audit_logs(
+        self,
+        limit: int = 50,
+        decision: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                query = "SELECT * FROM audit_logs"
+                conditions = []
+                params: List[Any] = []
+                if decision:
+                    conditions.append("decision = ?")
+                    params.append(decision)
+                if session_id:
+                    conditions.append("session_id = ?")
+                    params.append(session_id)
+                if conditions:
+                    query += " WHERE " + " AND ".join(conditions)
+                query += " ORDER BY id DESC LIMIT ?"
+                params.append(limit)
+
+                cursor.execute(query, tuple(params))
+                results = []
+                for row in cursor.fetchall():
+                    data = dict(row)
+                    data["tool_args"] = json.loads(data.get("tool_args") or "{}")
                     results.append(data)
                 return results
             finally:

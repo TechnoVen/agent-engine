@@ -424,6 +424,66 @@ paths:
               schema:
                 $ref: '#/components/schemas/ActionResult'
 
+  /safety/evaluate:
+    post:
+      summary: Evaluate prospective tool call against active safety policies
+      operationId: evaluateSafety
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SafetyEvaluationRequest'
+      responses:
+        '200':
+          description: Safety evaluation decision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SafetyEvaluationResponse'
+
+  /safety/policies:
+    get:
+      summary: List all active safety policies and guardrail rules
+      operationId: listSafetyPolicies
+      responses:
+        '200':
+          description: Active guardrail policies
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SafetyPolicyRuleInfo'
+
+  /safety/audit:
+    get:
+      summary: List recent safety audit logs
+      operationId: listSafetyAuditLogs
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: decision
+          in: query
+          schema:
+            type: string
+        - name: session_id
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Safety audit log history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AuditLogInfo'
+
 components:
   schemas:
     FeatureFlagsResponse:
@@ -808,4 +868,93 @@ components:
         outputs:
           type: object
           additionalProperties: true
+
+    SafetyEvaluationRequest:
+      type: object
+      required: [tool_name]
+      properties:
+        tool_name:
+          type: string
+        tool_args:
+          type: object
+        session_id:
+          type: string
+        allow_high_risk:
+          type: boolean
+          default: false
+        auto_apply:
+          type: boolean
+          default: false
+
+    SafetyPolicyRuleInfo:
+      type: object
+      required: [id, name, description, match_type, pattern, action, risk_level]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        match_type:
+          type: string
+        pattern:
+          type: string
+        action:
+          type: string
+        risk_level:
+          type: string
+        reason:
+          type: string
+        suggestion:
+          type: string
+
+    SafetyEvaluationResponse:
+      type: object
+      required: [decision, risk_score, risk_level]
+      properties:
+        decision:
+          type: string
+        risk_score:
+          type: number
+        risk_level:
+          type: string
+        violating_rules:
+          type: array
+          items:
+            $ref: '#/components/schemas/SafetyPolicyRuleInfo'
+        suggestion:
+          type: string
+        reason:
+          type: string
+        audit_id:
+          type: integer
+
+    AuditLogInfo:
+      type: object
+      required: [id, timestamp, tool_name, tool_args, decision, risk_level, risk_score]
+      properties:
+        id:
+          type: integer
+        timestamp:
+          type: string
+        tool_name:
+          type: string
+        tool_args:
+          type: object
+        decision:
+          type: string
+        risk_level:
+          type: string
+        risk_score:
+          type: number
+        policy_id:
+          type: string
+        reason:
+          type: string
+        suggestion:
+          type: string
+        session_id:
+          type: string
+
 

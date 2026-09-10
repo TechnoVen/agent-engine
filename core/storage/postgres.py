@@ -160,6 +160,35 @@ class PostgresBackend(StorageBackend):
             """)
             )
 
+            # Safety Audit Logs
+            conn.execute(
+                text(f"""
+                CREATE TABLE IF NOT EXISTS audit_logs (
+                    id {serial_pk},
+                    timestamp TEXT NOT NULL,
+                    tool_name TEXT NOT NULL,
+                    tool_args TEXT NOT NULL DEFAULT '{{}}',
+                    decision TEXT NOT NULL,
+                    risk_level TEXT NOT NULL,
+                    risk_score REAL NOT NULL,
+                    policy_id TEXT,
+                    reason TEXT,
+                    suggestion TEXT,
+                    session_id TEXT
+                );
+            """)
+            )
+            conn.execute(
+                text("""
+                CREATE INDEX IF NOT EXISTS idx_pg_audit_logs_decision ON audit_logs(decision);
+            """)
+            )
+            conn.execute(
+                text("""
+                CREATE INDEX IF NOT EXISTS idx_pg_audit_logs_timestamp ON audit_logs(timestamp);
+            """)
+            )
+
     def close(self) -> None:
         """Dispose the engine connection pool."""
         self.engine.dispose()
@@ -640,5 +669,79 @@ class PostgresBackend(StorageBackend):
             for row in result:
                 data = dict(row._mapping)
                 data["metadata"] = json.loads(data.get("metadata") or "{}")
+                results.append(data)
+            return results
+
+    # --- 7. SAFETY AUDIT LOGS ---
+
+    def record_audit_log(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        decision: str,
+        risk_level: str,
+        risk_score: float,
+        policy_id: Optional[str] = None,
+        reason: Optional[str] = None,
+        suggestion: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> int:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self.engine.begin() as conn:
+            stmt = text(
+                """
+                INSERT INTO audit_logs (
+                    timestamp, tool_name, tool_args, decision, risk_level,
+                    risk_score, policy_id, reason, suggestion, session_id
+                )
+                VALUES (
+                    :timestamp, :tool_name, :tool_args, :decision, :risk_level,
+                    :risk_score, :policy_id, :reason, :suggestion, :session_id
+                )
+                """
+            )
+            conn.execute(
+                stmt,
+                {
+                    "timestamp": now_iso,
+                    "tool_name": tool_name,
+                    "tool_args": json.dumps(tool_args),
+                    "decision": decision,
+                    "risk_level": risk_level,
+                    "risk_score": float(risk_score),
+                    "policy_id": policy_id,
+                    "reason": reason,
+                    "suggestion": suggestion,
+                    "session_id": session_id,
+                },
+            )
+            row = conn.execute(text("SELECT MAX(id) as max_id FROM audit_logs")).fetchone()
+            return int(row.max_id) if row and row.max_id else 1
+
+    def list_audit_logs(
+        self,
+        limit: int = 50,
+        decision: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        with self.engine.connect() as conn:
+            query = "SELECT * FROM audit_logs"
+            conditions = []
+            params: Dict[str, Any] = {"limit": limit}
+            if decision:
+                conditions.append("decision = :decision")
+                params["decision"] = decision
+            if session_id:
+                conditions.append("session_id = :session_id")
+                params["session_id"] = session_id
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+            query += " ORDER BY id DESC LIMIT :limit"
+
+            result = conn.execute(text(query), params)
+            results = []
+            for row in result:
+                data = dict(row._mapping)
+                data["tool_args"] = json.loads(data.get("tool_args") or "{}")
                 results.append(data)
             return results

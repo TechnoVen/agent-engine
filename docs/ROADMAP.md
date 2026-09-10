@@ -83,7 +83,13 @@
   - **Acceptance Criteria:** Memory retrieves relevant facts from sessions 7+ days old; scores decay gracefully according to Stanford Generative Agents formula.
   - **Dependencies:** 0.3
   - **Status:** ✅ DONE
-- [ ] **Task 1.4 — Guardrail Policy Engine** (Central YAML rules, risk scoring, tool interception)
+- [x] **Task 1.4 — Guardrail Policy Engine** (Central YAML rules, risk scoring, tool interception)
+  - **User Story:** As P4, I want one place to define what agents may and may not do.
+  - **Deliverables:** `core/safety/policy.py` (rule matcher: glob, regex, semantic), `core/safety/risk.py` (dynamic risk scorer), `core/safety/audit.py` (persistent storage audit logs), `policies/default.yaml`, API endpoints `POST /v1/safety/evaluate`, `GET /v1/safety/policies`, `GET /v1/safety/audit`.
+  - **Acceptance Criteria:** Policy blocks `kubectl delete namespace production`; suggests `kubectl rollout restart`.
+  - **Dependencies:** 0.3
+  - **Conflicts Resolved:** C6 (auto-apply vs staged patches).
+  - **Status:** ✅ DONE
 - [ ] **Task 1.5 — Cost Tracker** (Per-request, per-agent, per-model spend ledger)
 - [ ] **Task 1.6 — Session Store Unification** (Cross-agent unified session model)
 - [ ] **Task 1.7 — Semantic Cache** (`core/cache/semantic_cache.py` - Chroma-backed 0.95 similarity cache, 0 tokens)

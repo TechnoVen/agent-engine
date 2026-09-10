@@ -8,6 +8,7 @@ import os
 from typing import Optional
 
 from core.storage.base import (
+    AuditLogRecord,
     BenchmarkRecord,
     CostRecord,
     PatchRecord,
@@ -78,6 +79,7 @@ __all__ = [
     "PolicyRecord",
     "CostRecord",
     "BenchmarkRecord",
+    "AuditLogRecord",
     "get_storage_backend",
     "reset_storage_backend",
     "DEFAULT_SQLITE_PATH",

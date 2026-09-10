@@ -23,6 +23,7 @@ from core.config import get_feature_flags, require_flag, set_flag_override
 from core.memory import AgentMemory, ObservationalMemory
 from core.pipelines import get_pipeline_registry
 from core.router import ModelRouter
+from core.safety import get_policy_engine
 from core.storage import get_storage_backend
 from core.templates import TemplateManager
 from server.watcher import apply_staged_patch, get_staged_patches, reject_staged_patch
@@ -254,6 +255,50 @@ class PipelineRunRequest(BaseModel):
 class PipelineRunResponse(BaseModel):
     pipeline: str
     outputs: Dict[str, Any]
+
+
+class SafetyEvaluationRequest(BaseModel):
+    tool_name: str
+    tool_args: Dict[str, Any] = Field(default_factory=dict)
+    session_id: Optional[str] = None
+    allow_high_risk: bool = False
+    auto_apply: bool = False
+
+
+class SafetyPolicyRuleInfo(BaseModel):
+    id: str
+    name: str
+    description: str
+    match_type: str
+    pattern: str
+    action: str
+    risk_level: str
+    reason: Optional[str] = None
+    suggestion: Optional[str] = None
+
+
+class SafetyEvaluationResponse(BaseModel):
+    decision: str
+    risk_score: float
+    risk_level: str
+    violating_rules: List[SafetyPolicyRuleInfo] = Field(default_factory=list)
+    suggestion: Optional[str] = None
+    reason: Optional[str] = None
+    audit_id: Optional[int] = None
+
+
+class AuditLogInfo(BaseModel):
+    id: int
+    timestamp: str
+    tool_name: str
+    tool_args: Dict[str, Any]
+    decision: str
+    risk_level: str
+    risk_score: float
+    policy_id: Optional[str] = None
+    reason: Optional[str] = None
+    suggestion: Optional[str] = None
+    session_id: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -666,6 +711,49 @@ async def override_flag(flag_name: str, req: FlagOverrideRequest):
     """Set a runtime override for a feature flag."""
     set_flag_override(flag_name, req.value)
     return ActionResult(success=True, message=f"Flag '{flag_name}' override set to {req.value}")
+
+
+@v1_router.post("/safety/evaluate", response_model=SafetyEvaluationResponse)
+async def evaluate_safety(req: SafetyEvaluationRequest):
+    """Evaluate a prospective tool call against active safety policies and risk scoring."""
+    engine = get_policy_engine()
+    decision = engine.evaluate(
+        tool_name=req.tool_name,
+        tool_args=req.tool_args,
+        context={
+            "session_id": req.session_id,
+            "allow_high_risk": req.allow_high_risk,
+            "auto_apply": req.auto_apply,
+        },
+    )
+    return SafetyEvaluationResponse(
+        decision=decision.decision,
+        risk_score=decision.risk_score,
+        risk_level=decision.risk_level,
+        violating_rules=[SafetyPolicyRuleInfo(**r.to_dict()) for r in decision.violating_rules],
+        suggestion=decision.suggestion,
+        reason=decision.reason,
+        audit_id=decision.audit_id,
+    )
+
+
+@v1_router.get("/safety/policies", response_model=List[SafetyPolicyRuleInfo])
+async def list_safety_policies():
+    """List all active guardrail rules loaded in the safety policy engine."""
+    engine = get_policy_engine()
+    return [SafetyPolicyRuleInfo(**r.to_dict()) for r in engine.list_rules()]
+
+
+@v1_router.get("/safety/audit", response_model=List[AuditLogInfo])
+async def get_safety_audit_logs(
+    limit: int = Query(50, ge=1, le=500, description="Max logs to return"),
+    decision: Optional[str] = Query(None, description="Filter by decision (allow, block, stage)"),
+    session_id: Optional[str] = Query(None, description="Filter by session ID"),
+):
+    """Retrieve persistent safety audit log entries."""
+    engine = get_policy_engine()
+    logs = engine.audit_logger.list_logs(limit=limit, decision=decision, session_id=session_id)
+    return [AuditLogInfo(**log) for log in logs]
 
 
 # Mount router to FastAPI app
