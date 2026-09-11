@@ -126,6 +126,9 @@ export interface MessageMetadata {
   latencyMs?: number;
   estCost?: string;
   cached?: boolean;
+  skillId?: string;
+  skillName?: string;
+  enabledPlugins?: string[];
 }
 
 export interface ChatMessage {
@@ -136,5 +139,33 @@ export interface ChatMessage {
   isStreaming?: boolean;
   metadata?: MessageMetadata;
   attachments?: AttachmentFile[];
+  skill?: SelectedSkill;
+}
+
+export interface SkillItem {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  command: string;
+  inputs: string[];
+  outputs: string[];
+  icon?: string;
+  sampleInputs?: Record<string, string>;
+}
+
+export interface PluginItem {
+  id: string;
+  name: string;
+  description: string;
+  iconName: string;
+  enabled: boolean;
+  tier: 'free' | 'pro' | 'enterprise';
+  badge?: string;
+}
+
+export interface SelectedSkill {
+  skill: SkillItem;
+  parameters: Record<string, string>;
 }
 

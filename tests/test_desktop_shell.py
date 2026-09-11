@@ -247,3 +247,67 @@ def test_task_3_1_types_and_global_shortcuts():
     assert "ctrlKey" in app_content
     assert "'k'" in app_content
     assert "setActiveMode('home')" in app_content
+
+
+def test_task_3_2_slash_command_popup():
+    popup_file = RENDERER_ROOT / "components" / "SlashCommandPopup.tsx"
+    assert popup_file.exists(), "SlashCommandPopup.tsx must exist"
+    content = popup_file.read_text()
+
+    assert "export const SlashCommandPopup" in content
+    assert "BUILT_IN_COMMANDS" in content
+    assert "/skill" in content
+    assert "/agent" in content
+    assert "/workflow" in content
+    assert "/clear" in content
+    assert "/web-search" in content
+    assert "/memory" in content
+    assert "/sandbox" in content
+
+    # Keyboard navigation and accessibility shortcuts
+    assert "ArrowDown" in content or "navigate" in content
+    assert "ArrowUp" in content or "navigate" in content
+    assert "Enter" in content
+    assert "Esc" in content
+
+
+def test_task_3_2_chat_input_slash_and_parameter_chips():
+    chat_input_file = RENDERER_ROOT / "components" / "ChatInput.tsx"
+    assert chat_input_file.exists()
+    content = chat_input_file.read_text()
+
+    # Slash command trigger and popup integration
+    assert "SlashCommandPopup" in content
+    assert "slashQuery" in content
+    assert "handleSelectSlashItem" in content
+
+    # Structured parameter chips
+    assert "selectedSkill" in content
+    assert "editingParamKey" in content
+    assert "updateSkillParam" in content
+    assert "fillSampleInputs" in content
+
+    # Plugin quick-toggles strip
+    assert "DEFAULT_PLUGINS" in content
+    assert "web-search" in content
+    assert "rag-memory" in content
+    assert "guardrails" in content
+    assert "sandbox" in content
+    assert "togglePlugin" in content
+    assert "pluginsDropdownOpen" in content
+
+
+def test_task_3_2_client_and_types_skill_integration():
+    types_file = RENDERER_ROOT / "types" / "index.ts"
+    types_content = types_file.read_text()
+    assert "SkillItem" in types_content
+    assert "PluginItem" in types_content
+    assert "SelectedSkill" in types_content
+
+    client_file = RENDERER_ROOT / "api" / "client.ts"
+    client_content = client_file.read_text()
+    assert "getSkills" in client_content
+    assert "executeSkill" in client_content
+    assert "DEFAULT_SKILLS_CATALOG" in client_content
+    assert "code_review_checklist" in client_content
+    assert "generate_sql_from_nl" in client_content

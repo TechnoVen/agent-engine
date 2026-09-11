@@ -13,7 +13,7 @@ import {
   ArrowRight,
   FolderKanban,
 } from 'lucide-react';
-import { Mode, ModelTier, ChatMessage, AttachmentFile } from '../types';
+import { Mode, ModelTier, ChatMessage, AttachmentFile, SelectedSkill } from '../types';
 import { ChatInput } from '../components/ChatInput';
 import { Message } from '../components/Message';
 
@@ -115,7 +115,12 @@ export const Home: React.FC<HomeProps> = ({
 
   // 60fps streaming token dispatcher
   const startStreamingResponse = useCallback(
-    (promptText: string, model: ModelTier) => {
+    (
+      promptText: string,
+      model: ModelTier,
+      skill?: SelectedSkill,
+      enabledPlugins?: string[]
+    ) => {
       setIsStreaming(true);
       streamAbortController.current = { aborted: false };
 
@@ -136,17 +141,53 @@ export const Home: React.FC<HomeProps> = ({
             latencyMs: 0,
             tokenCount: 0,
             tokensPerSec: 0,
-            estCost: model === 'instant' ? '$0.0001' : model === 'swarm' ? '$0.0008' : '$0.0032',
+            estCost:
+              model === 'instant' ? '$0.0001' : model === 'swarm' ? '$0.0008' : '$0.0032',
+            skillId: skill?.skill.id,
+            skillName: skill?.skill.name,
+            enabledPlugins,
           },
         },
       ]);
 
-      // Sample generation tokens crafted for local-first agent engine
-      const responseStreamText = `I have analyzed your request: "${promptText}".
+      // Craft response stream depending on whether a skill or standard prompt is invoked
+      let responseStreamText = '';
+
+      if (skill) {
+        const paramSummary = Object.entries(skill.parameters)
+          .filter(([_, v]) => String(v).trim().length > 0)
+          .map(([k, v]) => `  - **${k}**: \`${v}\``)
+          .join('\n');
+
+        responseStreamText = `### Executing Skill: ${skill.skill.name}
+**Category:** ${skill.skill.category} • **Command:** \`${skill.skill.command}\`
+
+#### Input Parameters:
+${paramSummary || '  *(Using default template schema)*'}
+
+${promptText ? `**Instruction:** "${promptText}"\n\n` : ''}---
+
+#### Synthesized Execution Result (90/9/1 Pipeline):
+\`\`\`python
+# Deterministic AST Verification Passed
+result = {
+    "skill_id": "${skill.skill.id}",
+    "status": "success",
+    "cached": True,
+    "outputs": ${JSON.stringify(skill.skill.outputs)},
+    "grounding_plugins": ${JSON.stringify(enabledPlugins || [])}
+}
+\`\`\`
+
+- **Validation Checklist:** Verified zero naked returns and confirmed schema integrity.
+- **Cost Routing:** Executed under local **CODE Tier** (0 frontier tokens expended).`;
+      } else {
+        responseStreamText = `I have analyzed your request: "${promptText}".
 
 ### Execution Plan (90/9/1 Cost Optimized)
 1. **Deterministic Rule Check (CODE Tier):**
    - Verified zero syntax conflicts and validated input structure.
+   - Grounding Plugins: **${enabledPlugins?.join(', ') || 'Standard Local'}**
    - Evaluated semantic cache; 0 frontier tokens expended.
 
 2. **Core Pipeline Execution:**
@@ -167,6 +208,7 @@ def execute_agent_task(prompt: str, tier: str) -> dict:
 \`\`\`
 
 All constraints satisfied. Ready for your follow-up command!`;
+      }
 
       // 60fps token streaming loop via requestAnimationFrame
       const tokens = responseStreamText.split(/(\s+|\n+)/);
@@ -233,23 +275,41 @@ All constraints satisfied. Ready for your follow-up command!`;
 
   const handleSend = (
     text: string,
-    options?: { model: ModelTier; projectId?: string; attachments?: AttachmentFile[] }
+    options?: {
+      model: ModelTier;
+      projectId?: string;
+      attachments?: AttachmentFile[];
+      skill?: SelectedSkill;
+      enabledPlugins?: string[];
+    }
   ) => {
-    if (!text.trim() && (!options?.attachments || options.attachments.length === 0)) return;
+    if (
+      !text.trim() &&
+      (!options?.attachments || options.attachments.length === 0) &&
+      !options?.skill
+    )
+      return;
+
+    const userDisplayText = options?.skill
+      ? `Invoked **${options.skill.skill.name}** (\`${options.skill.skill.command}\`)${
+          text.trim() ? `\n\n${text}` : ''
+        }`
+      : text;
 
     const userMsg: ChatMessage = {
       id: `usr-${Date.now()}`,
       role: 'user',
-      content: text,
+      content: userDisplayText,
       timestamp: 'Just now',
       attachments: options?.attachments,
+      skill: options?.skill,
     };
 
     setMessages((prev) => [...prev, userMsg]);
     setInitialInputText('');
 
     const targetModel = options?.model || activeModel;
-    startStreamingResponse(text, targetModel);
+    startStreamingResponse(text, targetModel, options?.skill, options?.enabledPlugins);
   };
 
   const handleStop = () => {
@@ -334,6 +394,7 @@ All constraints satisfied. Ready for your follow-up command!`;
                 onModeChange={onSelectMode}
                 onModelChange={onSelectModel}
                 onProjectChange={handleProjectSelect}
+                onClearChat={handleResetChat}
                 inputRef={activeInputRef}
                 initialValue={initialInputText}
               />
@@ -453,6 +514,7 @@ All constraints satisfied. Ready for your follow-up command!`;
               onModeChange={onSelectMode}
               onModelChange={onSelectModel}
               onProjectChange={handleProjectSelect}
+              onClearChat={handleResetChat}
               inputRef={activeInputRef}
             />
           </div>

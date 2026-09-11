@@ -164,10 +164,11 @@
   - **Deliverables:** `apps/desktop/src/renderer/shell/Layout.tsx`, `Sidebar.tsx`, `TopBar.tsx`, `screens/Home.tsx` (Route `/`), universal `ChatInput.tsx` component, 60fps streaming token renderer (`Message.tsx`), mode-switching state, global `Ctrl+K` autofocus handler, and test suite `tests/test_desktop_shell.py`.
   - **Acceptance Criteria:** `Ctrl+K` focuses input from any screen; greeting and featured case cards appear on empty state; streaming tokens render at 60fps; 11/11 desktop shell tests pass; 100% of monorepo tests pass (224/224).
   - **Status:** ✅ DONE
-- [ ] **Task 3.2 — Skill Selector & Slash Commands**
+- [x] **Task 3.2 — Skill Selector & Slash Commands**
   - **User Story:** As a power user, I want to invoke skills and plugins via `/` slash commands directly in the universal input.
-  - **Deliverables:** Slash command popup in `ChatInput.tsx`, skill auto-complete, parameter chips, plugin icons row with quick toggles.
-  - **Acceptance Criteria:** Typing `/` shows fuzzy-searchable skill menu; selecting a skill inserts structured parameters; keyboard navigation (`↑`/`↓`/`Enter`) works seamlessly.
+  - **Deliverables:** `SlashCommandPopup.tsx` in `ChatInput.tsx`, fuzzy-searchable skill menu, structured interactive parameter chips, plugin icons row with quick toggles, sidecar `/v1/skills` client integration (`api/client.ts`), and unit/integration tests in `tests/test_desktop_shell.py`.
+  - **Acceptance Criteria:** Typing `/` shows fuzzy-searchable skill menu; selecting a skill inserts structured parameter chips; keyboard navigation (`↑`/`↓`/`Enter`/`Esc`) works seamlessly; 14/14 desktop shell tests pass; 100% of monorepo tests pass (227/227).
+  - **Status:** ✅ DONE
 - [ ] **Task 3.3 — Inline Approval Cards**
   - **User Story:** As an operator, I want dangerous or high-impact agent tool calls to prompt for explicit inline approval before execution.
   - **Deliverables:** `apps/desktop/src/renderer/components/ApprovalCard.tsx`, tool call interceptor, diff preview, risk score badge, Approve / Reject / Edit action buttons.

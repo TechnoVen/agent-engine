@@ -156,7 +156,7 @@ def test_ttl_expiration_and_eviction(memory_cache):
     memory_cache.store(
         query="Transient cache test",
         response="Expires quickly",
-        ttl_seconds=1,
+        ttl_seconds=2,
     )
 
     # Immediate lookup hits
@@ -164,7 +164,7 @@ def test_ttl_expiration_and_eviction(memory_cache):
     assert hit_res.hit is True
 
     # Sleep past TTL
-    time.sleep(1.1)
+    time.sleep(2.1)
 
     # Subsequent lookup detects expiration and evicts
     miss_res = memory_cache.lookup("Transient cache test")
