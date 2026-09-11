@@ -33,7 +33,14 @@ def get_model_provider(
     if max_tokens is None:
         max_tokens = int(os.getenv("DEFAULT_MAX_TOKENS", "4096"))
 
-    # Securely inject environment credentials straight to the LiteLLM operating sub-layers
+    # Securely resolve credentials from CredentialManager or environment
+    try:
+        from core.security import get_credential_manager
+
+        cred_mgr = get_credential_manager()
+    except Exception:
+        cred_mgr = None
+
     for key in (
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
@@ -43,7 +50,7 @@ def get_model_provider(
         "KIMI_API_KEY",
         "GROQ_API_KEY",
     ):
-        value = os.getenv(key)
+        value = cred_mgr.get_api_key(key) if cred_mgr else os.getenv(key)
         if value:
             os.environ[key] = value
 

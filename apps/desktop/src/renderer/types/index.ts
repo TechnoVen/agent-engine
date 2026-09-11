@@ -59,3 +59,30 @@ export interface ExecutionTierInfo {
   model: string;
   costPer1k?: string;
 }
+
+export interface CredentialItem {
+  service: string;
+  key: string;
+  masked_value: string;
+  backend: string;
+  updated_at?: number;
+}
+
+export interface CredentialDetail extends CredentialItem {
+  value?: string;
+  revealed: boolean;
+}
+
+export interface SetCredentialPayload {
+  service?: string;
+  key: string;
+  value: string;
+}
+
+export interface CredentialTestResult {
+  provider: string;
+  valid: boolean;
+  latency_ms: number;
+  error?: string;
+}
+

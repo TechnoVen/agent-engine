@@ -43,6 +43,14 @@ class HealthProber:
         }
         env_var = key_map.get(provider.lower())
         if env_var:
+            try:
+                from core.security import get_credential_manager
+
+                stored_key = get_credential_manager().get_api_key(provider)
+                if stored_key:
+                    return True
+            except Exception:
+                pass
             return bool(os.getenv(env_var))
         return True
 

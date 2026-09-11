@@ -3,6 +3,7 @@ import datetime
 import json
 import os
 import sys
+import time
 import uuid
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
@@ -34,6 +35,7 @@ from core.router import (
     audit_pipeline,
 )
 from core.safety import get_policy_engine
+from core.security import get_credential_manager, mask_secret
 from core.storage import get_storage_backend
 
 
@@ -621,6 +623,48 @@ class AuditLogInfo(BaseModel):
     reason: Optional[str] = None
     suggestion: Optional[str] = None
     session_id: Optional[str] = None
+
+
+class SetCredentialRequest(BaseModel):
+    service: str = Field(
+        default="agent-engine", description="Credential service namespace (e.g. agent-engine, llm)"
+    )
+    key: str = Field(..., description="Credential or API key identifier")
+    value: str = Field(..., description="Secret plaintext value to store securely")
+
+
+class CredentialInfo(BaseModel):
+    service: str
+    key: str
+    masked_value: str
+    backend: str
+    updated_at: Optional[float] = None
+
+
+class GetCredentialResponse(BaseModel):
+    service: str
+    key: str
+    masked_value: str
+    backend: str
+    value: Optional[str] = None
+    revealed: bool = False
+    updated_at: Optional[float] = None
+
+
+class TestCredentialRequest(BaseModel):
+    provider: str = Field(
+        ..., description="Provider name (e.g. openai, anthropic, gemini, deepseek, groq, kimi)"
+    )
+    api_key: Optional[str] = Field(
+        default=None, description="Optional API key to test directly; if omitted, uses stored key"
+    )
+
+
+class TestCredentialResponse(BaseModel):
+    provider: str
+    valid: bool
+    latency_ms: float
+    error: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1622,6 +1666,107 @@ async def get_router_tiers_endpoint():
     return RouterTiersResponse(
         tiers=tiers_map,
         law_1_guidelines=guidelines,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Credentials Management Endpoints (ADR-008: Secure Credential Storage)
+# ---------------------------------------------------------------------------
+
+
+@v1_router.get("/credentials", response_model=List[CredentialInfo])
+async def list_credentials_endpoint(
+    service: Optional[str] = Query(None, description="Optional service namespace filter"),
+):
+    """List stored credentials across secure backends with values masked."""
+    mgr = get_credential_manager()
+    items = mgr.list_credentials(service=service)
+    return [
+        CredentialInfo(
+            service=item["service"],
+            key=item["key"],
+            masked_value=item["masked_value"],
+            backend=item.get("backend", mgr.active_backend_name),
+            updated_at=item.get("updated_at"),
+        )
+        for item in items
+    ]
+
+
+@v1_router.post(
+    "/credentials",
+    response_model=CredentialInfo,
+    status_code=status.HTTP_201_CREATED,
+)
+async def set_credential_endpoint(req: SetCredentialRequest):
+    """Store a credential in the secure backend (OS Keychain with AES-256-GCM Vault fallback)."""
+    if not req.key.strip():
+        raise HTTPException(status_code=400, detail="Credential key cannot be empty")
+    if not req.value.strip():
+        raise HTTPException(status_code=400, detail="Credential value cannot be empty")
+
+    mgr = get_credential_manager()
+    mgr.set_credential(req.service.strip(), req.key.strip(), req.value)
+
+    return CredentialInfo(
+        service=req.service.strip(),
+        key=req.key.strip(),
+        masked_value=mask_secret(req.value),
+        backend=mgr.active_backend_name,
+        updated_at=time.time(),
+    )
+
+
+@v1_router.get("/credentials/{service}/{key}", response_model=GetCredentialResponse)
+async def get_credential_endpoint(
+    service: str,
+    key: str,
+    reveal: bool = Query(False, description="Whether to reveal the plaintext secret value"),
+):
+    """Retrieve a stored credential. Masked by default unless reveal=true is explicitly set."""
+    mgr = get_credential_manager()
+    val = mgr.get_credential(service, key)
+    if val is None:
+        raise HTTPException(
+            status_code=404, detail=f"Credential '{key}' not found under service '{service}'"
+        )
+
+    return GetCredentialResponse(
+        service=service,
+        key=key,
+        masked_value=mask_secret(val),
+        backend=mgr.active_backend_name,
+        value=val if reveal else None,
+        revealed=reveal,
+        updated_at=time.time(),
+    )
+
+
+@v1_router.delete("/credentials/{service}/{key}", response_model=ActionResult)
+async def delete_credential_endpoint(service: str, key: str):
+    """Delete a stored credential from secure backends."""
+    mgr = get_credential_manager()
+    deleted = mgr.delete_credential(service, key)
+    if not deleted:
+        raise HTTPException(
+            status_code=404, detail=f"Credential '{key}' not found under service '{service}'"
+        )
+    return ActionResult(
+        success=True,
+        message=f"Credential '{key}' successfully deleted from service '{service}'",
+    )
+
+
+@v1_router.post("/credentials/test", response_model=TestCredentialResponse)
+async def test_credential_endpoint(req: TestCredentialRequest):
+    """Test API authentication and connectivity for a model provider."""
+    mgr = get_credential_manager()
+    res = mgr.test_provider_key(req.provider, api_key=req.api_key)
+    return TestCredentialResponse(
+        provider=res["provider"],
+        valid=res["valid"],
+        latency_ms=res["latency_ms"],
+        error=res.get("error"),
     )
 
 

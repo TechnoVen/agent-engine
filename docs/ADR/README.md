@@ -65,4 +65,15 @@ This directory records all architectural conflict resolutions and structural dec
 - **Decision:** All pipelines and skills must obey the 90/9/1 rule (90% deterministic code/caching/small local models, 9% mid-tier, 1% frontier). All step invocations must be profiled via `StepProfile` and dispatched through `ExecutionRouter`. Context must be filtered via `ContextSpec` (< 8k target, 32k hard ceiling). Caching and distillation are mandatory at scale.
 - **Consequences:** Target 90% reduction in AI operating spend, faster response latencies, and predictable unit economics. See [`docs/COST_OPTIMIZATION_GUIDE.md`](../COST_OPTIMIZATION_GUIDE.md).
 
+---
+
+### ADR-008: Zero-Trust Local Encryption Before Cloud Sync & Secure Credential Storage
+- **Context:** Storing API keys and sensitive tokens in plaintext `.env` files or committing secrets creates critical vulnerabilities. Furthermore, headless CI/CD and server environments lack native OS desktop keyrings (DBus, GNOME Keyring, macOS Keychain).
+- **Decision:** Agent Engine enforces a hybrid Zero-Trust Credential Architecture (`core/security/credentials.py`):
+  - **Primary Tier:** Native OS Keychain via Python `keyring` (macOS Keychain Services, Linux SecretService via DBus, Windows Credential Manager).
+  - **Automated Fallback Tier:** In headless, containerized, or locked-keychain environments, automatically falls back to an AES-256-GCM encrypted file vault (`data/credentials.vault`) with PBKDF2-SHA256 (100,000 iterations) key derivation, machine/seed hardware anchoring, strict `0o600` permissions, and bit-flip tamper rejection.
+  - **Zero Secret Leakage:** All credential query endpoints and logs enforce secret masking (`sk-...xxxx`). Plaintext values require explicit `reveal=true` parameter on individual item lookups.
+- **Consequences:** Zero plaintext secret footprint, 100% test compatibility across desktop and headless CI/CD environments, and backward compatibility with local environment variables.
+
+
 

@@ -969,6 +969,115 @@ paths:
               schema:
                 $ref: '#/components/schemas/RouterTiersResponse'
 
+  /credentials:
+    get:
+      summary: List stored credentials with values masked
+      operationId: listCredentials
+      parameters:
+        - name: service
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Optional service namespace filter
+      responses:
+        '200':
+          description: List of stored credentials (masked)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CredentialInfo'
+    post:
+      summary: Store a credential in secure storage
+      operationId: setCredential
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetCredentialRequest'
+      responses:
+        '201':
+          description: Credential saved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CredentialInfo'
+
+  /credentials/{service}/{key}:
+    get:
+      summary: Retrieve a stored credential (masked by default)
+      operationId: getCredential
+      parameters:
+        - name: service
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: reveal
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Credential metadata and masked or revealed secret
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GetCredentialResponse'
+        '404':
+          description: Credential not found
+    delete:
+      summary: Delete a stored credential
+      operationId: deleteCredential
+      parameters:
+        - name: service
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Credential deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResult'
+        '404':
+          description: Credential not found
+
+  /credentials/test:
+    post:
+      summary: Test API authentication and connectivity for a model provider
+      operationId: testCredential
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestCredentialRequest'
+      responses:
+        '200':
+          description: Connectivity probe result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestCredentialResponse'
+
 components:
 
 
@@ -2134,6 +2243,74 @@ components:
           type: object
         law_1_guidelines:
           type: object
+
+    SetCredentialRequest:
+      type: object
+      required: [key, value]
+      properties:
+        service:
+          type: string
+          default: agent-engine
+        key:
+          type: string
+        value:
+          type: string
+
+    CredentialInfo:
+      type: object
+      required: [service, key, masked_value, backend]
+      properties:
+        service:
+          type: string
+        key:
+          type: string
+        masked_value:
+          type: string
+        backend:
+          type: string
+        updated_at:
+          type: number
+
+    GetCredentialResponse:
+      type: object
+      required: [service, key, masked_value, backend, revealed]
+      properties:
+        service:
+          type: string
+        key:
+          type: string
+        masked_value:
+          type: string
+        backend:
+          type: string
+        value:
+          type: string
+        revealed:
+          type: boolean
+        updated_at:
+          type: number
+
+    TestCredentialRequest:
+      type: object
+      required: [provider]
+      properties:
+        provider:
+          type: string
+        api_key:
+          type: string
+
+    TestCredentialResponse:
+      type: object
+      required: [provider, valid, latency_ms]
+      properties:
+        provider:
+          type: string
+        valid:
+          type: boolean
+        latency_ms:
+          type: number
+        error:
+          type: string
 
 
 
