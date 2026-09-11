@@ -553,6 +553,24 @@ paths:
                 items:
                   $ref: '#/components/schemas/AuditLogInfo'
 
+  /safety/approval:
+    post:
+      summary: Submit human operator approval or rejection decision for a high-risk tool call
+      operationId: submitSafetyApproval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApprovalDecisionRequest'
+      responses:
+        '200':
+          description: Persistent audit log entry for the decision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLogInfo'
+
   /sessions:
     post:
       summary: Create a unified cross-agent session
@@ -1697,6 +1715,32 @@ components:
         suggestion:
           type: string
         session_id:
+          type: string
+
+    ApprovalDecisionRequest:
+      type: object
+      required: [tool_name, tool_args, decision]
+      properties:
+        tool_name:
+          type: string
+        tool_args:
+          type: object
+        decision:
+          type: string
+          enum: [approve, reject, edit]
+        risk_level:
+          type: string
+          default: medium
+        risk_score:
+          type: number
+          default: 0.5
+        reason:
+          type: string
+        modified_args:
+          type: object
+        session_id:
+          type: string
+        operator:
           type: string
 
     ToolCallInfo:

@@ -626,6 +626,18 @@ class AuditLogInfo(BaseModel):
     session_id: Optional[str] = None
 
 
+class ApprovalDecisionRequest(BaseModel):
+    tool_name: str
+    tool_args: Dict[str, Any]
+    decision: str = Field(..., description="approve | reject | edit")
+    risk_level: str = "medium"
+    risk_score: float = 0.5
+    reason: Optional[str] = None
+    modified_args: Optional[Dict[str, Any]] = None
+    session_id: Optional[str] = None
+    operator: Optional[str] = "local-operator"
+
+
 class SetCredentialRequest(BaseModel):
     service: str = Field(
         default="agent-engine", description="Credential service namespace (e.g. agent-engine, llm)"
@@ -1230,6 +1242,47 @@ async def get_safety_audit_logs(
     engine = get_policy_engine()
     logs = engine.audit_logger.list_logs(limit=limit, decision=decision, session_id=session_id)
     return [AuditLogInfo(**log) for log in logs]
+
+
+@v1_router.post("/safety/approval", response_model=AuditLogInfo)
+async def submit_safety_approval(req: ApprovalDecisionRequest):
+    """Submit human operator approval, rejection, or edit decision for a high-risk tool call."""
+    engine = get_policy_engine()
+    final_args = (
+        req.modified_args if req.decision == "edit" and req.modified_args else req.tool_args
+    )
+    decision_str = f"operator_{req.decision}"
+    reason_str = req.reason or f"Operator decision: {req.decision}"
+    if req.operator:
+        reason_str += f" (by {req.operator})"
+
+    record_id = engine.audit_logger.log_evaluation(
+        tool_name=req.tool_name,
+        tool_args=final_args,
+        decision=decision_str,
+        risk_level=req.risk_level,
+        risk_score=req.risk_score,
+        policy_id="operator_gate",
+        reason=reason_str,
+        suggestion="Approved with modified args" if req.decision == "edit" else None,
+        session_id=req.session_id,
+    )
+    from datetime import datetime, timezone
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    return AuditLogInfo(
+        id=record_id if record_id > 0 else int(datetime.now(timezone.utc).timestamp()),
+        timestamp=now_iso,
+        tool_name=req.tool_name,
+        tool_args=final_args,
+        decision=decision_str,
+        risk_level=req.risk_level,
+        risk_score=req.risk_score,
+        policy_id="operator_gate",
+        reason=reason_str,
+        suggestion="Approved with modified args" if req.decision == "edit" else None,
+        session_id=req.session_id,
+    )
 
 
 # ==============================================================================

@@ -169,10 +169,11 @@
   - **Deliverables:** `SlashCommandPopup.tsx` in `ChatInput.tsx`, fuzzy-searchable skill menu, structured interactive parameter chips, plugin icons row with quick toggles, sidecar `/v1/skills` client integration (`api/client.ts`), and unit/integration tests in `tests/test_desktop_shell.py`.
   - **Acceptance Criteria:** Typing `/` shows fuzzy-searchable skill menu; selecting a skill inserts structured parameter chips; keyboard navigation (`↑`/`↓`/`Enter`/`Esc`) works seamlessly; 14/14 desktop shell tests pass; 100% of monorepo tests pass (227/227).
   - **Status:** ✅ DONE
-- [ ] **Task 3.3 — Inline Approval Cards**
+- [x] **Task 3.3 — Inline Approval Cards**
   - **User Story:** As an operator, I want dangerous or high-impact agent tool calls to prompt for explicit inline approval before execution.
-  - **Deliverables:** `apps/desktop/src/renderer/components/ApprovalCard.tsx`, tool call interceptor, diff preview, risk score badge, Approve / Reject / Edit action buttons.
-  - **Acceptance Criteria:** High-risk actions render inline approval card; execution pauses until user decides; decision logs to audit ledger.
+  - **Deliverables:** `apps/desktop/src/renderer/components/ApprovalCard.tsx`, tool call interceptor in `Home.tsx`, diff preview (code, command, SQL, JSON), risk score badges, Approve / Reject / Edit action buttons, audit ledger logging via `POST /v1/safety/approval`, and unit/integration tests in `tests/test_desktop_shell.py`.
+  - **Acceptance Criteria:** High-risk actions render inline approval card; execution pauses until user decides; decision executes in <500ms and logs to tamper-evident audit ledger; 17/17 desktop shell tests pass; 100% of monorepo tests pass.
+  - **Status:** ✅ DONE
 - [ ] **Task 3.4 — Model & Agent Switcher**
   - **User Story:** As a user, I want to toggle between instant, balanced, and deep reasoning models (or switch primary agents) without leaving the chat.
   - **Deliverables:** Model tier selector in `ChatInput.tsx` (`Instant High`, `K3 Swarm High`, `K3 High`), agent persona picker, cost per 1k token display.

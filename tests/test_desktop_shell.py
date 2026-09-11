@@ -311,3 +311,87 @@ def test_task_3_2_client_and_types_skill_integration():
     assert "DEFAULT_SKILLS_CATALOG" in client_content
     assert "code_review_checklist" in client_content
     assert "generate_sql_from_nl" in client_content
+
+
+def test_task_3_3_approval_card_component():
+    """Verify ApprovalCard.tsx component structure, risk badges, diffs, and action buttons."""
+    card_file = RENDERER_ROOT / "components" / "ApprovalCard.tsx"
+    assert card_file.exists(), "ApprovalCard.tsx must exist"
+    content = card_file.read_text()
+
+    # Component exports and props
+    assert "export const ApprovalCard" in content
+    assert "ApprovalCardProps" in content
+    assert "onApprove" in content
+    assert "onReject" in content
+    assert "onEdit" in content
+
+    # Risk level support and styling
+    assert "critical" in content
+    assert "high" in content
+    assert "medium" in content
+    assert "low" in content
+    assert "ShieldAlert" in content
+    assert "AlertTriangle" in content
+
+    # Diff preview support
+    assert "renderDiffViewer" in content
+    assert "diff.type === 'command'" in content
+    assert "diff.type === 'file'" in content
+    assert "diff.type === 'sql'" in content
+
+    # Action buttons and interactive handlers
+    assert "handleApproveClick" in content
+    assert "handleRejectConfirm" in content
+    assert "handleSaveEdit" in content
+    assert "Approve & Execute" in content
+    assert "Edit Payload" in content
+    assert "Reject" in content
+
+    # Audit and resolved states
+    assert "Approved by Operator" in content or "Approved" in content
+    assert "Rejected" in content
+    assert "Approved with Edits" in content
+    assert "auditId" in content
+
+
+def test_task_3_3_approval_types_and_client():
+    """Verify TypeScript types and SidecarClient methods for Task 3.3."""
+    types_file = RENDERER_ROOT / "types" / "index.ts"
+    types_content = types_file.read_text()
+    assert "RiskLevel" in types_content
+    assert "ApprovalStatus" in types_content
+    assert "ToolCallDiff" in types_content
+    assert "ApprovalRequest" in types_content
+    assert "ApprovalDecision" in types_content
+    assert "AuditLogEntry" in types_content
+    assert "approvalRequest?: ApprovalRequest" in types_content
+
+    client_file = RENDERER_ROOT / "api" / "client.ts"
+    client_content = client_file.read_text()
+    assert "evaluateToolSafety" in client_content
+    assert "submitApprovalDecision" in client_content
+    assert "getSafetyAuditLogs" in client_content
+    assert "/v1/safety/approval" in client_content
+
+
+def test_task_3_3_message_and_home_approval_integration():
+    """Verify Message.tsx and Home.tsx integration of ApprovalCard."""
+    message_file = RENDERER_ROOT / "components" / "Message.tsx"
+    message_content = message_file.read_text()
+    assert "ApprovalCard" in message_content
+    assert "message.approvalRequest" in message_content
+    assert "onApprove" in message_content
+    assert "onReject" in message_content
+    assert "onEdit" in message_content
+
+    home_file = RENDERER_ROOT / "screens" / "Home.tsx"
+    home_content = home_file.read_text()
+    assert "detectDangerousToolCall" in home_content
+    assert "handleApproveToolCall" in home_content
+    assert "handleRejectToolCall" in home_content
+    assert "handleEditToolCall" in home_content
+    assert "submitApprovalDecision" in home_content
+    assert "destructive_fs_rm_all" in home_content or "rm -rf" in home_content
+    assert "dangerous_system_change" in home_content or "sudo" in home_content
+    assert "db_drop_prod" in home_content or "drop table" in home_content

@@ -8,6 +8,8 @@ import {
   UpdateCheckResult,
   UpdateStatus,
   SkillItem,
+  AuditLogEntry,
+  RiskLevel,
 } from '../types';
 
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
@@ -224,6 +226,95 @@ class SidecarClient {
       throw new Error(`Failed to execute skill: HTTP ${res.status}`);
     }
     return await res.json();
+  }
+
+  async evaluateToolSafety(
+    toolName: string,
+    toolArgs: Record<string, any>,
+    options?: { sessionId?: string; allowHighRisk?: boolean; autoApply?: boolean }
+  ): Promise<{
+    decision: string;
+    risk_score: number;
+    risk_level: RiskLevel;
+    violating_rules?: any[];
+    suggestion?: string;
+    reason?: string;
+    audit_id?: number;
+  }> {
+    try {
+      const res = await fetch(`${this.base}/v1/safety/evaluate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tool_name: toolName,
+          tool_args: toolArgs,
+          session_id: options?.sessionId,
+          allow_high_risk: options?.allowHighRisk ?? false,
+          auto_apply: options?.autoApply ?? false,
+        }),
+      });
+      if (!res.ok) {
+        return {
+          decision: 'allow',
+          risk_score: 0.1,
+          risk_level: 'low',
+        };
+      }
+      return await res.json();
+    } catch {
+      return {
+        decision: 'allow',
+        risk_score: 0.1,
+        risk_level: 'low',
+      };
+    }
+  }
+
+  async submitApprovalDecision(payload: {
+    toolName: string;
+    toolArgs: Record<string, any>;
+    decision: 'approve' | 'reject' | 'edit';
+    riskLevel?: RiskLevel;
+    riskScore?: number;
+    reason?: string;
+    modifiedArgs?: Record<string, any>;
+    sessionId?: string;
+    operator?: string;
+  }): Promise<AuditLogEntry> {
+    const res = await fetch(`${this.base}/v1/safety/approval`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tool_name: payload.toolName,
+        tool_args: payload.toolArgs,
+        decision: payload.decision,
+        risk_level: payload.riskLevel || 'medium',
+        risk_score: payload.riskScore ?? 0.5,
+        reason: payload.reason,
+        modified_args: payload.modifiedArgs,
+        session_id: payload.sessionId,
+        operator: payload.operator || 'local-operator',
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to submit approval: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async getSafetyAuditLogs(
+    limit: number = 50,
+    decision?: string
+  ): Promise<AuditLogEntry[]> {
+    try {
+      const params = new URLSearchParams({ limit: String(limit) });
+      if (decision) params.set('decision', decision);
+      const res = await fetch(`${this.base}/v1/safety/audit?${params.toString()}`);
+      if (!res.ok) return [];
+      return await res.json();
+    } catch {
+      return [];
+    }
   }
 }
 

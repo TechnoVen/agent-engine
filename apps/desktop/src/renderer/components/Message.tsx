@@ -12,12 +12,21 @@ import {
   Gauge,
 } from 'lucide-react';
 import { ChatMessage } from '../types';
+import { ApprovalCard } from './ApprovalCard';
 
 export interface MessageProps {
   message: ChatMessage;
+  onApprove?: (id: string) => Promise<void> | void;
+  onReject?: (id: string, reason?: string) => Promise<void> | void;
+  onEdit?: (id: string, modifiedArgs: Record<string, any>) => Promise<void> | void;
 }
 
-export const Message: React.FC<MessageProps> = ({ message }) => {
+export const Message: React.FC<MessageProps> = ({
+  message,
+  onApprove,
+  onReject,
+  onEdit,
+}) => {
   const [copied, setCopied] = useState(false);
   const [copiedCodeIdx, setCopiedCodeIdx] = useState<number | null>(null);
 
@@ -226,8 +235,8 @@ export const Message: React.FC<MessageProps> = ({ message }) => {
 
       {/* Message Bubble Container */}
       <div
-        className={`flex flex-col max-w-[85%] ${
-          isUser ? 'items-end' : 'items-start'
+        className={`flex flex-col ${
+          isUser ? 'max-w-[85%] items-end' : 'w-full max-w-[92%] items-start'
         }`}
       >
         {/* Author / Timestamp header */}
@@ -244,7 +253,7 @@ export const Message: React.FC<MessageProps> = ({ message }) => {
           className={`p-3.5 rounded-2xl text-sm leading-relaxed ${
             isUser
               ? 'bg-accent text-white rounded-tr-sm shadow-md'
-              : 'bg-bg-elevated border border-border-subtle text-text-primary rounded-tl-sm shadow-sm hover:border-border-strong transition-colors'
+              : 'w-full bg-bg-elevated border border-border-subtle text-text-primary rounded-tl-sm shadow-sm hover:border-border-strong transition-colors'
           }`}
         >
           {/* User Attachments (if any) */}
@@ -268,7 +277,7 @@ export const Message: React.FC<MessageProps> = ({ message }) => {
               <p className="whitespace-pre-wrap">{message.content}</p>
             ) : (
               <div>
-                {renderFormattedContent(message.content)}
+                {message.content && renderFormattedContent(message.content)}
                 {message.isStreaming && (
                   <span className="inline-block w-1.5 h-4 bg-accent ml-0.5 animate-pulse align-middle" />
                 )}
@@ -276,6 +285,18 @@ export const Message: React.FC<MessageProps> = ({ message }) => {
             )}
           </div>
         </div>
+
+        {/* Inline Approval Card (Screen 12 & High-Risk Tool Actions) */}
+        {!isUser && message.approvalRequest && (
+          <div className="w-full mt-2.5">
+            <ApprovalCard
+              request={message.approvalRequest}
+              onApprove={onApprove || (() => {})}
+              onReject={onReject || (() => {})}
+              onEdit={onEdit || (() => {})}
+            />
+          </div>
+        )}
 
         {/* Assistant Metrics & Controls Strip */}
         {!isUser && !message.isStreaming && (

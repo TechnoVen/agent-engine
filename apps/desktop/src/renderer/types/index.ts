@@ -140,6 +140,7 @@ export interface ChatMessage {
   metadata?: MessageMetadata;
   attachments?: AttachmentFile[];
   skill?: SelectedSkill;
+  approvalRequest?: ApprovalRequest;
 }
 
 export interface SkillItem {
@@ -167,5 +168,62 @@ export interface PluginItem {
 export interface SelectedSkill {
   skill: SkillItem;
   parameters: Record<string, string>;
+}
+
+export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'edited';
+
+export interface DiffLine {
+  type: 'add' | 'remove' | 'context';
+  text: string;
+  lineNumber?: number;
+}
+
+export interface ToolCallDiff {
+  type: 'file' | 'command' | 'sql' | 'api' | 'generic';
+  target: string;
+  original?: string;
+  proposed?: string;
+  diffLines?: DiffLine[];
+  contextInfo?: Record<string, any>;
+}
+
+export interface ApprovalRequest {
+  id: string;
+  toolName: string;
+  toolArgs: Record<string, any>;
+  riskLevel: RiskLevel;
+  riskScore: number;
+  reason: string;
+  suggestion?: string;
+  diff?: ToolCallDiff;
+  estCostDelta?: string;
+  status: ApprovalStatus;
+  createdAt: string;
+  resolvedAt?: string;
+  decisionBy?: string;
+  decisionReason?: string;
+  modifiedArgs?: Record<string, any>;
+  auditId?: number;
+}
+
+export interface ApprovalDecision {
+  approvalId: string;
+  decision: 'approve' | 'reject' | 'edit';
+  reason?: string;
+  modifiedArgs?: Record<string, any>;
+}
+
+export interface AuditLogEntry {
+  id: number;
+  timestamp: string;
+  tool_name: string;
+  tool_args: Record<string, any>;
+  decision: string;
+  risk_level: string;
+  risk_score: number;
+  policy_id?: string;
+  reason?: string;
+  suggestion?: string;
 }
 

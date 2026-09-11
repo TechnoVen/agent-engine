@@ -504,6 +504,15 @@ interface ChatInputProps {
   - Approval action executes within 500ms
   - Audit log immutable
 
+#### Shared Component: `ApprovalCard.tsx` (Task 3.3)
+- **File:** `apps/desktop/src/renderer/components/ApprovalCard.tsx`
+- **Purpose:** Universal inline confirmation card rendered in conversation streams (`Message.tsx`) and Screen 12 queues when dangerous or high-risk tool calls are intercepted.
+- **Key Features:**
+  - **Risk Badges:** Color-coded glowing risk indicators (`critical` in red, `high` in amber, `medium` in yellow, `low` in emerald) with numeric risk scores (e.g. `95%`).
+  - **Diff Preview Engine:** Line-by-line syntax-highlighted diffs for code/file edits (`+` additions in green, `-` deletions in red), terminal command preview boxes with `$ ` prompts, and SQL query inspector.
+  - **Action Trio:** `Approve & Execute` (<500ms resolution SLA), `Reject` (with optional operator reason dialog), and `Edit Payload` (inline JSON argument editor with instant re-validation).
+  - **Audit Ledger Integration:** Persists operator human decisions directly into SQLite/Postgres audit logs via `POST /v1/safety/approval` and displays immutable audit stamps (`#aud-<id>`).
+
 ---
 
 ### Screen 13 — Projects (Workspaces)
