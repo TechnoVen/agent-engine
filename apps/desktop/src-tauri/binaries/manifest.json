@@ -1,0 +1,10 @@
+{
+  "name": "agent-engine-sidecar",
+  "version": "0.1.0",
+  "target_triple": "x86_64-unknown-linux-gnu",
+  "binary": "agent-engine-sidecar-x86_64-unknown-linux-gnu",
+  "sha256": "a937fe3106c14a32957dc9635695979a1cd26cf12ea8a87771f45c93346dd37d",
+  "size_bytes": 814,
+  "build_mode": "launcher",
+  "bundled_at": "2026-09-11T09:15:14.085970+00:00"
+}

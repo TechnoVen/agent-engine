@@ -42,3 +42,17 @@ models/*.gguf
 .env
 *.env
 .env.*
+
+# Node & Desktop
+node_modules/
+**/node_modules/
+apps/desktop/dist/
+target/
+**/src-tauri/target/
+
+# Keys and Signing
+*.pem
+*.key
+**/src-tauri/keys/
+apps/desktop/src-tauri/keys/
+

@@ -67,7 +67,14 @@ class SQLiteBackend(StorageBackend):
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL,
                         metadata TEXT NOT NULL DEFAULT '{}',
-                        messages TEXT NOT NULL DEFAULT '[]'
+                        messages TEXT NOT NULL DEFAULT '[]',
+                        title TEXT NOT NULL DEFAULT 'Untitled Session',
+                        tenant_id TEXT NOT NULL DEFAULT 'default',
+                        channel TEXT NOT NULL DEFAULT 'web',
+                        status TEXT NOT NULL DEFAULT 'active',
+                        parent_session_id TEXT,
+                        fork_point_message_id TEXT,
+                        summary TEXT
                     );
                     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 
@@ -146,6 +153,30 @@ class SQLiteBackend(StorageBackend):
 
                 cursor.execute(
                     "CREATE INDEX IF NOT EXISTS idx_cost_project ON cost_records(project)"
+                )
+                conn.commit()
+
+                # Migration check: ensure unified session columns exist in existing database
+                cursor.execute("PRAGMA table_info(sessions)")
+                existing_sess_cols = [row[1] for row in cursor.fetchall()]
+                session_cols_to_add = [
+                    ("title", "TEXT NOT NULL DEFAULT 'Untitled Session'"),
+                    ("tenant_id", "TEXT NOT NULL DEFAULT 'default'"),
+                    ("channel", "TEXT NOT NULL DEFAULT 'web'"),
+                    ("status", "TEXT NOT NULL DEFAULT 'active'"),
+                    ("parent_session_id", "TEXT"),
+                    ("fork_point_message_id", "TEXT"),
+                    ("summary", "TEXT"),
+                ]
+                for col_name, col_def in session_cols_to_add:
+                    if col_name not in existing_sess_cols:
+                        cursor.execute(f"ALTER TABLE sessions ADD COLUMN {col_name} {col_def}")
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_sessions_tenant ON sessions(tenant_id)"
+                )
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status)")
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id)"
                 )
                 conn.commit()
             finally:
@@ -271,19 +302,51 @@ class SQLiteBackend(StorageBackend):
         session_id: str,
         user_id: str = "default_user",
         metadata: Optional[Dict[str, Any]] = None,
+        title: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        channel: Optional[str] = None,
+        status: Optional[str] = None,
+        parent_session_id: Optional[str] = None,
+        fork_point_message_id: Optional[str] = None,
+        summary: Optional[str] = None,
     ) -> Dict[str, Any]:
         now_iso = datetime.now(timezone.utc).isoformat()
         meta = metadata or {}
+        resolved_title = title or meta.get("title") or "Untitled Session"
+        resolved_tenant = tenant_id or meta.get("tenant_id") or "default"
+        resolved_channel = channel or meta.get("channel") or "web"
+        resolved_status = status or meta.get("status") or "active"
+        resolved_parent = parent_session_id or meta.get("parent_session_id")
+        resolved_fork_point = fork_point_message_id or meta.get("fork_point_message_id")
+        resolved_summary = summary or meta.get("summary")
+
         with self._lock:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
                 cursor.execute(
                     """
-                    INSERT INTO sessions (session_id, user_id, created_at, updated_at, metadata, messages)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    INSERT INTO sessions (
+                        session_id, user_id, created_at, updated_at, metadata, messages,
+                        title, tenant_id, channel, status, parent_session_id, fork_point_message_id, summary
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (session_id, user_id, now_iso, now_iso, json.dumps(meta), json.dumps([])),
+                    (
+                        session_id,
+                        user_id,
+                        now_iso,
+                        now_iso,
+                        json.dumps(meta),
+                        json.dumps([]),
+                        resolved_title,
+                        resolved_tenant,
+                        resolved_channel,
+                        resolved_status,
+                        resolved_parent,
+                        resolved_fork_point,
+                        resolved_summary,
+                    ),
                 )
                 conn.commit()
                 return {
@@ -293,6 +356,13 @@ class SQLiteBackend(StorageBackend):
                     "updated_at": now_iso,
                     "metadata": meta,
                     "messages": [],
+                    "title": resolved_title,
+                    "tenant_id": resolved_tenant,
+                    "channel": resolved_channel,
+                    "status": resolved_status,
+                    "parent_session_id": resolved_parent,
+                    "fork_point_message_id": resolved_fork_point,
+                    "summary": resolved_summary,
                 }
             finally:
                 if not self._is_memory:
@@ -310,30 +380,54 @@ class SQLiteBackend(StorageBackend):
                 data = dict(row)
                 data["metadata"] = json.loads(data.get("metadata") or "{}")
                 data["messages"] = json.loads(data.get("messages") or "[]")
+                data.setdefault("title", data["metadata"].get("title", "Untitled Session"))
+                data.setdefault("tenant_id", data["metadata"].get("tenant_id", "default"))
+                data.setdefault("channel", data["metadata"].get("channel", "web"))
+                data.setdefault("status", data["metadata"].get("status", "active"))
                 return data
             finally:
                 if not self._is_memory:
                     conn.close()
 
-    def list_sessions(self, user_id: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+    def list_sessions(
+        self,
+        user_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        channel: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
         with self._lock:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
+                query = "SELECT * FROM sessions WHERE 1=1"
+                params: List[Any] = []
                 if user_id:
-                    cursor.execute(
-                        "SELECT * FROM sessions WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?",
-                        (user_id, limit),
-                    )
-                else:
-                    cursor.execute(
-                        "SELECT * FROM sessions ORDER BY updated_at DESC LIMIT ?", (limit,)
-                    )
+                    query += " AND user_id = ?"
+                    params.append(user_id)
+                if tenant_id:
+                    query += " AND tenant_id = ?"
+                    params.append(tenant_id)
+                if channel:
+                    query += " AND channel = ?"
+                    params.append(channel)
+                if status:
+                    query += " AND status = ?"
+                    params.append(status)
+                query += " ORDER BY updated_at DESC LIMIT ?"
+                params.append(limit)
+
+                cursor.execute(query, tuple(params))
                 results = []
                 for row in cursor.fetchall():
                     item = dict(row)
                     item["metadata"] = json.loads(item.get("metadata") or "{}")
                     item["messages"] = json.loads(item.get("messages") or "[]")
+                    item.setdefault("title", item["metadata"].get("title", "Untitled Session"))
+                    item.setdefault("tenant_id", item["metadata"].get("tenant_id", "default"))
+                    item.setdefault("channel", item["metadata"].get("channel", "web"))
+                    item.setdefault("status", item["metadata"].get("status", "active"))
                     results.append(item)
                 return results
             finally:
@@ -345,34 +439,60 @@ class SQLiteBackend(StorageBackend):
         session_id: str,
         messages: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        title: Optional[str] = None,
+        status: Optional[str] = None,
+        summary: Optional[str] = None,
     ) -> bool:
         now_iso = datetime.now(timezone.utc).isoformat()
         with self._lock:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT metadata, messages FROM sessions WHERE session_id = ?", (session_id,)
-                )
+                cursor.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,))
                 row = cursor.fetchone()
                 if not row:
                     return False
 
-                current_meta = json.loads(row["metadata"] or "{}")
-                current_msgs = json.loads(row["messages"] or "[]")
+                current_row = dict(row)
+                current_meta = json.loads(current_row.get("metadata") or "{}")
+                current_msgs = json.loads(current_row.get("messages") or "[]")
 
                 if metadata is not None:
                     current_meta.update(metadata)
                 if messages is not None:
                     current_msgs = messages
 
+                new_title = (
+                    title
+                    if title is not None
+                    else current_meta.get("title", current_row.get("title", "Untitled Session"))
+                )
+                new_status = (
+                    status
+                    if status is not None
+                    else current_meta.get("status", current_row.get("status", "active"))
+                )
+                new_summary = (
+                    summary
+                    if summary is not None
+                    else current_meta.get("summary", current_row.get("summary"))
+                )
+
                 cursor.execute(
                     """
                     UPDATE sessions
-                    SET updated_at = ?, metadata = ?, messages = ?
+                    SET updated_at = ?, metadata = ?, messages = ?, title = ?, status = ?, summary = ?
                     WHERE session_id = ?
                     """,
-                    (now_iso, json.dumps(current_meta), json.dumps(current_msgs), session_id),
+                    (
+                        now_iso,
+                        json.dumps(current_meta),
+                        json.dumps(current_msgs),
+                        new_title,
+                        new_status,
+                        new_summary,
+                        session_id,
+                    ),
                 )
                 conn.commit()
                 return cursor.rowcount > 0
@@ -388,6 +508,106 @@ class SQLiteBackend(StorageBackend):
                 cursor.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
                 conn.commit()
                 return cursor.rowcount > 0
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def search_sessions(
+        self, query: str, user_id: Optional[str] = None, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                sql = """
+                    SELECT * FROM sessions
+                    WHERE (title LIKE ? OR metadata LIKE ? OR messages LIKE ?)
+                """
+                params: List[Any] = [f"%{query}%", f"%{query}%", f"%{query}%"]
+                if user_id:
+                    sql += " AND user_id = ?"
+                    params.append(user_id)
+                sql += " ORDER BY updated_at DESC LIMIT ?"
+                params.append(limit)
+
+                cursor.execute(sql, tuple(params))
+                results = []
+                for row in cursor.fetchall():
+                    item = dict(row)
+                    item["metadata"] = json.loads(item.get("metadata") or "{}")
+                    item["messages"] = json.loads(item.get("messages") or "[]")
+                    results.append(item)
+                return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def fork_session(
+        self,
+        session_id: str,
+        new_session_id: str,
+        fork_point_message_id: Optional[str] = None,
+        title: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            parent = self.get_session(session_id)
+            if not parent:
+                return None
+
+            parent_msgs = parent.get("messages") or []
+            forked_msgs: List[Dict[str, Any]] = []
+            fork_msg_id = fork_point_message_id
+
+            if fork_point_message_id:
+                found = False
+                for m in parent_msgs:
+                    forked_msgs.append(m)
+                    if m.get("message_id") == fork_point_message_id:
+                        found = True
+                        break
+                if not found:
+                    forked_msgs = list(parent_msgs)
+            else:
+                forked_msgs = list(parent_msgs)
+                if forked_msgs:
+                    fork_msg_id = forked_msgs[-1].get("message_id")
+
+            now_iso = datetime.now(timezone.utc).isoformat()
+            target_title = title or f"Fork of {parent.get('title', 'Session')}"
+            target_user = user_id or parent.get("user_id", "default_user")
+            meta = dict(parent.get("metadata") or {})
+            meta["forked_from"] = session_id
+
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO sessions (
+                        session_id, user_id, created_at, updated_at, metadata, messages,
+                        title, tenant_id, channel, status, parent_session_id, fork_point_message_id, summary
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        new_session_id,
+                        target_user,
+                        now_iso,
+                        now_iso,
+                        json.dumps(meta),
+                        json.dumps(forked_msgs),
+                        target_title,
+                        parent.get("tenant_id", "default"),
+                        parent.get("channel", "web"),
+                        "active",
+                        session_id,
+                        fork_msg_id,
+                        parent.get("summary"),
+                    ),
+                )
+                conn.commit()
+                return self.get_session(new_session_id)
             finally:
                 if not self._is_memory:
                     conn.close()

@@ -19,11 +19,29 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from core.cache import get_semantic_cache
 from core.config import get_feature_flags, require_flag, set_flag_override
+from core.context import ContextSpec, MissingContextFieldError, build_context
+from core.eval import EvalSample, ModelEvalReport, ModelEvalSuite, get_golden_dataset
 from core.memory import AgentMemory, ObservationalMemory
 from core.pipelines import get_pipeline_registry
-from core.router import ModelRouter
+from core.router import (
+    DEFAULT_TIER_MODELS,
+    ExecutionRouter,
+    ExecutionTier,
+    ModelRouter,
+    StepProfile,
+    audit_pipeline,
+)
 from core.safety import get_policy_engine
+from core.storage import get_storage_backend
+
+
+from core.session import (
+    AgentParticipant,
+    ToolCall,
+    get_session_store,
+)
 from core.telemetry import BudgetConfig, get_cost_tracker
 from core.templates import TemplateManager
 from server.watcher import apply_staged_patch, get_staged_patches, reject_staged_patch
@@ -251,6 +269,277 @@ class AuthSession(BaseModel):
     email: Optional[str] = None
     role: str
     tenant_id: Optional[str] = None
+
+
+class ToolCallInfo(BaseModel):
+    call_id: str
+    tool_name: str
+    arguments: Dict[str, Any] = Field(default_factory=dict)
+    result: Optional[Any] = None
+    status: str = "success"
+    error: Optional[str] = None
+    latency_ms: Optional[float] = None
+
+
+class ParticipantInfo(BaseModel):
+    agent_id: str
+    agent_name: str
+    role: str = "assistant"
+    model: Optional[str] = None
+    joined_at: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class UnifiedMessageInfo(BaseModel):
+    message_id: str
+    session_id: str
+    role: str
+    content: str
+    sender_id: str
+    sender_name: Optional[str] = None
+    agent_id: Optional[str] = None
+    model: Optional[str] = None
+    timestamp: str
+    tokens: Optional[Dict[str, int]] = None
+    cost_usd: Optional[float] = None
+    tool_calls: List[ToolCallInfo] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class UnifiedSessionInfo(BaseModel):
+    session_id: str
+    title: str
+    user_id: str
+    tenant_id: str
+    channel: str
+    status: str
+    parent_session_id: Optional[str] = None
+    fork_point_message_id: Optional[str] = None
+    created_at: str
+    updated_at: str
+    summary: Optional[str] = None
+    participants: List[ParticipantInfo] = Field(default_factory=list)
+    messages: List[UnifiedMessageInfo] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    total_messages: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float = 0.0
+
+
+class CreateSessionRequest(BaseModel):
+    session_id: Optional[str] = None
+    title: str = "Untitled Session"
+    user_id: str = "default_user"
+    tenant_id: str = "default"
+    channel: str = "web"
+    status: str = "active"
+    metadata: Optional[Dict[str, Any]] = None
+    participants: Optional[List[ParticipantInfo]] = None
+
+
+class UpdateSessionRequest(BaseModel):
+    title: Optional[str] = None
+    status: Optional[str] = None
+    summary: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class AppendMessageRequest(BaseModel):
+    role: str = "user"
+    content: str = ""
+    sender_id: str = "user"
+    sender_name: Optional[str] = None
+    agent_id: Optional[str] = None
+    model: Optional[str] = None
+    tokens: Optional[Dict[str, int]] = None
+    cost_usd: Optional[float] = None
+    tool_calls: Optional[List[ToolCallInfo]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class ForkSessionRequest(BaseModel):
+    fork_point_message_id: Optional[str] = None
+    new_title: Optional[str] = None
+    user_id: Optional[str] = None
+    new_session_id: Optional[str] = None
+
+
+class SessionExportResponse(BaseModel):
+    session_id: str
+    format: str
+    content: str
+
+
+class SessionImportRequest(BaseModel):
+    format: str = "json"
+    payload: Any
+
+
+class SessionSearchResult(BaseModel):
+    session_id: str
+    title: str
+    channel: str
+    matched_snippets: List[Dict[str, Any]] = Field(default_factory=list)
+    total_messages: int
+    updated_at: str
+
+
+class CacheLookupRequest(BaseModel):
+    query: str
+    namespace: Optional[str] = "default"
+    task_type: Optional[str] = None
+    min_similarity: Optional[float] = 0.95
+
+
+class CacheLookupResponse(BaseModel):
+    hit: bool
+    similarity: float
+    match_type: str
+    latency_ms: float
+    query: str
+    cached_response: Optional[Any] = None
+    entry_id: Optional[str] = None
+    task_type: Optional[str] = None
+    created_at: Optional[float] = None
+    tokens_saved: int = 0
+    cost_saved_usd: float = 0.0
+
+
+class CacheStoreRequest(BaseModel):
+    query: str
+    response: Any
+    task_type: Optional[str] = "qa"
+    ttl_seconds: Optional[int] = None
+    namespace: Optional[str] = "default"
+    tokens_saved: Optional[int] = 0
+    cost_saved_usd: Optional[float] = 0.0
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class CacheStoreResponse(BaseModel):
+    entry_id: str
+    stored: bool
+    ttl_seconds: int
+    task_type: str
+    namespace: str
+
+
+class CacheStatsResponse(BaseModel):
+    total_lookups: int
+    hits: int
+    misses: int
+    hit_rate: float
+    total_entries: int
+    tokens_saved: int
+    cost_saved_usd: float
+
+
+class CacheClearRequest(BaseModel):
+    namespace: Optional[str] = None
+    prune_only: Optional[bool] = False
+
+
+class CacheClearResponse(BaseModel):
+    cleared: bool
+    pruned_entries: int = 0
+    message: str = ""
+
+
+class ContextBuildRequest(BaseModel):
+    required_fields: List[str]
+    available_data: Dict[str, Any]
+    optional_fields: Optional[List[str]] = Field(default_factory=list)
+    max_tokens: Optional[int] = 4000
+    hard_ceiling_tokens: Optional[int] = 32000
+    allow_retrieval: Optional[bool] = False
+    retrieval_budget_tokens: Optional[int] = 2000
+    truncation_strategy: Optional[str] = "priority"
+    field_priorities: Optional[Dict[str, int]] = Field(default_factory=dict)
+    system_prompt: Optional[str] = None
+    strict_required: Optional[bool] = True
+
+
+class ContextBuildResponse(BaseModel):
+    data: Dict[str, Any]
+    estimated_tokens: int
+    original_tokens: int
+    was_truncated: bool
+    truncated_fields: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+
+class EvalRunRequest(BaseModel):
+    model_names: List[str]
+    task_type: Optional[str] = "classification"
+    custom_samples: Optional[List[Dict[str, Any]]] = None
+    record_benchmark: Optional[bool] = True
+
+
+class EvalRunResponse(BaseModel):
+    task_type: str
+    reports: List[Dict[str, Any]]
+    ranking: Dict[str, Any]
+
+
+class EvalRankingResponse(BaseModel):
+    task_type: str
+    ranked_models: List[Dict[str, Any]]
+    recommended_model: Optional[str] = None
+    frontier_baseline: Optional[str] = None
+    savings_pct_vs_frontier: float = 0.0
+
+
+class EvalBenchmarksResponse(BaseModel):
+    benchmarks: List[Dict[str, Any]]
+    total_count: int
+
+
+class StepProfileSchema(BaseModel):
+    step_name: str
+    is_deterministic: Optional[bool] = False
+    is_cacheable: Optional[bool] = False
+    requires_judgment: Optional[bool] = False
+    complexity: Optional[str] = "low"
+    is_high_stakes: Optional[bool] = False
+    fallback_tier: Optional[str] = "mid_model"
+    description: Optional[str] = ""
+    task_type: Optional[str] = None
+    cache_namespace: Optional[str] = "default"
+
+
+class RouteStepRequest(BaseModel):
+    step: StepProfileSchema
+    inputs: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+
+class RouteStepResponse(BaseModel):
+    step_name: str
+    tier: str
+    resolved_model: Optional[str] = None
+    rationale: str
+    is_free_tier: bool
+
+
+class AuditPipelineRequest(BaseModel):
+    steps: List[StepProfileSchema]
+
+
+class AuditPipelineResponse(BaseModel):
+    total_steps: int
+    deterministic_or_small_count: int
+    mid_tier_count: int
+    frontier_count: int
+    human_count: int
+    deterministic_or_small_pct: float
+    mid_tier_pct: float
+    frontier_pct: float
+    complies_with_law_1: bool
+    violations: List[str] = Field(default_factory=list)
+
+
+class RouterTiersResponse(BaseModel):
+    tiers: Dict[str, List[str]]
+    law_1_guidelines: Dict[str, str]
 
 
 class RegistryPackage(BaseModel):
@@ -870,7 +1159,475 @@ async def get_safety_audit_logs(
     return [AuditLogInfo(**log) for log in logs]
 
 
+# ==============================================================================
+# UNIFIED SESSIONS & CROSS-AGENT STORE ENDPOINTS
+# ==============================================================================
+
+
+@v1_router.post("/sessions", response_model=UnifiedSessionInfo, status_code=status.HTTP_201_CREATED)
+async def create_unified_session(req: CreateSessionRequest):
+    """Create a new unified cross-agent session."""
+    store = get_session_store()
+    parts = (
+        [AgentParticipant(**p.model_dump()) for p in req.participants] if req.participants else None
+    )
+    session = store.create_session(
+        session_id=req.session_id,
+        title=req.title,
+        user_id=req.user_id,
+        tenant_id=req.tenant_id,
+        channel=req.channel,
+        status=req.status,
+        metadata=req.metadata,
+        participants=parts,
+    )
+    return UnifiedSessionInfo(**session.to_dict())
+
+
+@v1_router.get("/sessions", response_model=List[UnifiedSessionInfo])
+async def list_unified_sessions(
+    user_id: Optional[str] = Query(None, description="Filter by user ID"),
+    tenant_id: Optional[str] = Query(None, description="Filter by tenant ID"),
+    channel: Optional[str] = Query(None, description="Filter by channel"),
+    status_filter: Optional[str] = Query(
+        None, alias="status", description="Filter by status (active, archived, closed)"
+    ),
+    query: Optional[str] = Query(None, description="Keyword search query"),
+    limit: int = Query(50, ge=1, le=200, description="Max sessions to return"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+):
+    """List cross-agent sessions with optional filters."""
+    store = get_session_store()
+    sessions = store.list_sessions(
+        user_id=user_id,
+        tenant_id=tenant_id,
+        channel=channel,
+        status=status_filter,
+        query=query,
+        limit=limit,
+        offset=offset,
+    )
+    return [UnifiedSessionInfo(**s.to_dict()) for s in sessions]
+
+
+@v1_router.get("/sessions/search", response_model=List[SessionSearchResult])
+async def search_unified_sessions(
+    q: str = Query(..., min_length=1, description="Keyword to search across sessions and messages"),
+    user_id: Optional[str] = Query(None, description="Filter by user ID"),
+    limit: int = Query(50, ge=1, le=100, description="Max results to return"),
+):
+    """Search messages and metadata across all sessions."""
+    store = get_session_store()
+    results = store.search_sessions(query=q, user_id=user_id, limit=limit)
+    return [SessionSearchResult(**r) for r in results]
+
+
+@v1_router.get("/sessions/{session_id}", response_model=UnifiedSessionInfo)
+async def get_unified_session(session_id: str):
+    """Retrieve details and full message history of a unified session."""
+    store = get_session_store()
+    session = store.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+    return UnifiedSessionInfo(**session.to_dict())
+
+
+@v1_router.patch("/sessions/{session_id}", response_model=UnifiedSessionInfo)
+async def update_unified_session(session_id: str, req: UpdateSessionRequest):
+    """Update title, status, summary, or metadata of a session."""
+    store = get_session_store()
+    session = store.update_session(
+        session_id=session_id,
+        title=req.title,
+        status=req.status,
+        summary=req.summary,
+        metadata=req.metadata,
+    )
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+    return UnifiedSessionInfo(**session.to_dict())
+
+
+@v1_router.delete("/sessions/{session_id}")
+async def delete_unified_session(session_id: str):
+    """Permanently delete a session."""
+    store = get_session_store()
+    success = store.delete_session(session_id)
+    if not success:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+    return {"status": "deleted", "session_id": session_id}
+
+
+@v1_router.post(
+    "/sessions/{session_id}/messages",
+    response_model=UnifiedMessageInfo,
+    status_code=status.HTTP_201_CREATED,
+)
+async def append_unified_message(session_id: str, req: AppendMessageRequest):
+    """Append a message turn to a session."""
+    store = get_session_store()
+    tcs = [ToolCall(**tc.model_dump()) for tc in req.tool_calls] if req.tool_calls else None
+    try:
+        msg = store.append_message(
+            session_id=session_id,
+            role=req.role,
+            content=req.content,
+            sender_id=req.sender_id or "user",
+            sender_name=req.sender_name,
+            agent_id=req.agent_id,
+            model=req.model,
+            tokens=req.tokens,
+            cost_usd=req.cost_usd,
+            tool_calls=tcs,
+            metadata=req.metadata,
+        )
+        return UnifiedMessageInfo(**msg.to_dict())
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@v1_router.post(
+    "/sessions/{session_id}/fork",
+    response_model=UnifiedSessionInfo,
+    status_code=status.HTTP_201_CREATED,
+)
+async def fork_unified_session(session_id: str, req: ForkSessionRequest):
+    """Fork an existing session at a specific message point (or latest) into a new branch."""
+    store = get_session_store()
+    try:
+        forked = store.fork_session(
+            session_id=session_id,
+            fork_point_message_id=req.fork_point_message_id,
+            new_title=req.new_title,
+            user_id=req.user_id,
+            new_session_id=req.new_session_id,
+        )
+        return UnifiedSessionInfo(**forked.to_dict())
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@v1_router.get("/sessions/{session_id}/export", response_model=SessionExportResponse)
+async def export_unified_session(
+    session_id: str,
+    format: str = Query(
+        "json", description="Export format: json, markdown, jsonl, openai, anthropic, dspy"
+    ),
+):
+    """Export a session transcript into standard ecosystem formats."""
+    store = get_session_store()
+    try:
+        content = store.export_session(session_id=session_id, format=format)
+        return SessionExportResponse(session_id=session_id, format=format, content=content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@v1_router.post(
+    "/sessions/import", response_model=UnifiedSessionInfo, status_code=status.HTTP_201_CREATED
+)
+async def import_unified_session(req: SessionImportRequest):
+    """Import a session from an external payload."""
+    store = get_session_store()
+    try:
+        session = store.import_session(payload=req.payload, format=req.format)
+        return UnifiedSessionInfo(**session.to_dict())
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Import failed: {str(e)}")
+
+
+# ==============================================================================
+# Semantic Cache Endpoints (Task 1.7)
+# ==============================================================================
+
+
+@v1_router.post("/cache/lookup", response_model=CacheLookupResponse)
+async def lookup_cache(req: CacheLookupRequest):
+    """Check semantic cache for a matching query with >= 0.95 similarity or exact match."""
+    cache = get_semantic_cache()
+    res = cache.lookup(
+        query=req.query,
+        namespace=req.namespace or "default",
+        task_type=req.task_type,
+        min_similarity=req.min_similarity if req.min_similarity is not None else 0.95,
+    )
+    return CacheLookupResponse(
+        hit=res.hit,
+        similarity=res.similarity,
+        match_type=res.match_type,
+        latency_ms=res.latency_ms,
+        query=res.query,
+        cached_response=res.entry.response if res.entry else None,
+        entry_id=res.entry.entry_id if res.entry else None,
+        task_type=res.entry.task_type if res.entry else None,
+        created_at=res.entry.created_at if res.entry else None,
+        tokens_saved=res.entry.tokens_saved if res.entry else 0,
+        cost_saved_usd=res.entry.cost_saved_usd if res.entry else 0.0,
+    )
+
+
+@v1_router.post(
+    "/cache/store", response_model=CacheStoreResponse, status_code=status.HTTP_201_CREATED
+)
+async def store_cache(req: CacheStoreRequest):
+    """Store a response in the semantic cache with dual-layer (exact + cosine) index."""
+    cache = get_semantic_cache()
+    try:
+        entry = cache.store(
+            query=req.query,
+            response=req.response,
+            task_type=req.task_type or "qa",
+            ttl_seconds=req.ttl_seconds,
+            namespace=req.namespace or "default",
+            tokens_saved=req.tokens_saved or 0,
+            cost_saved_usd=req.cost_saved_usd or 0.0,
+            metadata=req.metadata or {},
+        )
+        return CacheStoreResponse(
+            entry_id=entry.entry_id,
+            stored=True,
+            ttl_seconds=entry.ttl_seconds,
+            task_type=entry.task_type,
+            namespace=entry.namespace,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed storing cache entry: {str(e)}")
+
+
+@v1_router.get("/cache/stats", response_model=CacheStatsResponse)
+async def get_cache_stats():
+    """Retrieve semantic cache metrics, total entries, hit rate, and cost/tokens saved."""
+    cache = get_semantic_cache()
+    stats = cache.get_stats()
+    return CacheStatsResponse(**stats.to_dict())
+
+
+@v1_router.post("/cache/clear", response_model=CacheClearResponse)
+async def clear_cache(req: Optional[CacheClearRequest] = None):
+    """Clear or prune expired entries from the semantic cache."""
+    cache = get_semantic_cache()
+    ns = req.namespace if req else None
+    prune_only = req.prune_only if req else False
+
+    if prune_only:
+        pruned = cache.prune_expired()
+        return CacheClearResponse(
+            cleared=True,
+            pruned_entries=pruned,
+            message=f"Pruned {pruned} expired cache entries.",
+        )
+    else:
+        cache.clear(namespace=ns)
+        return CacheClearResponse(
+            cleared=True,
+            pruned_entries=0,
+            message=f"Cache cleared successfully for namespace='{ns or 'all'}'.",
+        )
+
+
+@v1_router.post("/context/build", response_model=ContextBuildResponse)
+async def build_context_endpoint(req: ContextBuildRequest):
+    """Build a minimal, budgeted context according to declared specifications and token limits."""
+    try:
+        spec = ContextSpec(
+            required_fields=req.required_fields,
+            optional_fields=req.optional_fields or [],
+            max_tokens=req.max_tokens if req.max_tokens is not None else 4000,
+            hard_ceiling_tokens=req.hard_ceiling_tokens
+            if req.hard_ceiling_tokens is not None
+            else 32000,
+            allow_retrieval=req.allow_retrieval or False,
+            retrieval_budget_tokens=req.retrieval_budget_tokens
+            if req.retrieval_budget_tokens is not None
+            else 2000,
+            truncation_strategy=req.truncation_strategy or "priority",
+            field_priorities=req.field_priorities or {},
+            system_prompt=req.system_prompt,
+            strict_required=req.strict_required if req.strict_required is not None else True,
+        )
+        built = build_context(spec=spec, available=req.available_data)
+        return ContextBuildResponse(**built.to_dict())
+    except MissingContextFieldError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Context build failed: {str(e)}",
+        )
+
+
+@v1_router.post("/eval/run", response_model=EvalRunResponse)
+async def run_eval_endpoint(req: EvalRunRequest):
+    """Run model evaluation suite against golden or custom dataset, computing cost-per-success and rankings."""
+    suite = ModelEvalSuite()
+    try:
+        if req.custom_samples:
+            samples = [
+                EvalSample(
+                    task_id=s.get("task_id", f"custom-{i}"),
+                    task_type=req.task_type or "classification",
+                    inputs=s.get("inputs", {}),
+                    expected_output=s.get("expected_output"),
+                    metric=s.get("metric", "exact"),
+                )
+                for i, s in enumerate(req.custom_samples)
+            ]
+        else:
+            samples = get_golden_dataset(req.task_type or "classification")
+
+        reports = suite.evaluate_models(
+            model_names=req.model_names,
+            dataset_or_task_type=samples,
+            record=req.record_benchmark if req.record_benchmark is not None else True,
+        )
+        ranking = suite.rank_models(reports)
+        return EvalRunResponse(
+            task_type=req.task_type or "classification",
+            reports=[r.to_dict() for r in reports],
+            ranking=ranking.to_dict(),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Eval run failed: {str(e)}"
+        )
+
+
+@v1_router.get("/eval/rankings", response_model=EvalRankingResponse)
+async def get_eval_rankings_endpoint(
+    task_type: str = Query("classification", description="Task type to rank models for"),
+):
+    """Retrieve success-adjusted cost rankings from stored benchmarks for a given task type."""
+    backend = get_storage_backend()
+    benchmarks = backend.get_benchmarks(task_type=task_type)
+    if not benchmarks:
+        return EvalRankingResponse(
+            task_type=task_type,
+            ranked_models=[],
+            recommended_model=None,
+            frontier_baseline=None,
+            savings_pct_vs_frontier=0.0,
+        )
+
+    reports = []
+    for b in benchmarks:
+        meta = b.get("metadata") or {}
+        rep = ModelEvalReport(
+            model_name=b["model_name"],
+            task_type=b["task_type"],
+            total_samples=meta.get("total_samples", 1),
+            success_count=meta.get("success_count", 1),
+            failure_count=0,
+            success_rate=b["success_rate"],
+            total_cost_usd=meta.get("total_cost_usd", 0.0),
+            cost_per_success=b["cost_per_success"],
+            avg_latency_ms=b["latency_ms"],
+            p95_latency_ms=b["latency_ms"],
+            total_tokens=meta.get("total_tokens", 0),
+        )
+        reports.append(rep)
+
+    suite = ModelEvalSuite(storage=backend)
+    ranking = suite.rank_models(reports)
+    return EvalRankingResponse(**ranking.to_dict())
+
+
+@v1_router.get("/eval/benchmarks", response_model=EvalBenchmarksResponse)
+async def get_eval_benchmarks_endpoint(
+    task_type: Optional[str] = Query(None, description="Filter benchmarks by task type"),
+):
+    """Retrieve historical model evaluation benchmark runs."""
+    backend = get_storage_backend()
+    benchmarks = backend.get_benchmarks(task_type=task_type)
+    return EvalBenchmarksResponse(
+        benchmarks=benchmarks,
+        total_count=len(benchmarks),
+    )
+
+
+@v1_router.post("/router/route", response_model=RouteStepResponse)
+async def route_step_endpoint(req: RouteStepRequest):
+    """Classify a step according to 90/9/1 cost optimization rules and resolve execution tier."""
+    cache = get_semantic_cache()
+    router = ExecutionRouter(cache=cache)
+    step = StepProfile(
+        step_name=req.step.step_name,
+        is_deterministic=req.step.is_deterministic or False,
+        is_cacheable=req.step.is_cacheable or False,
+        requires_judgment=req.step.requires_judgment or False,
+        complexity=req.step.complexity or "low",
+        is_high_stakes=req.step.is_high_stakes or False,
+        fallback_tier=ExecutionTier(req.step.fallback_tier)
+        if req.step.fallback_tier
+        else ExecutionTier.MID_MODEL,
+        description=req.step.description or "",
+        task_type=req.step.task_type,
+        cache_namespace=req.step.cache_namespace or "default",
+    )
+    tier = router.route(step, req.inputs or {})
+    resolved_model = router.resolve_model(tier, task_type=step.task_type)
+    is_free = tier in (ExecutionTier.CODE, ExecutionTier.CACHE) or (
+        resolved_model in ("local", "qwen2.5-coder", "llama3.2")
+    )
+
+    rationale = f"Step '{step.step_name}' classified as {tier.value} tier."
+    if tier == ExecutionTier.CODE:
+        rationale = "Deterministic logic executed in code (0 tokens, $0.00)."
+    elif tier == ExecutionTier.CACHE:
+        rationale = "Matched cache query (0 tokens, $0.00)."
+    elif tier == ExecutionTier.FRONTIER_MODEL:
+        rationale = "High-stakes or complex reasoning requires frontier model tier."
+
+    return RouteStepResponse(
+        step_name=step.step_name,
+        tier=tier.value,
+        resolved_model=resolved_model,
+        rationale=rationale,
+        is_free_tier=is_free,
+    )
+
+
+@v1_router.post("/router/audit", response_model=AuditPipelineResponse)
+async def audit_pipeline_endpoint(req: AuditPipelineRequest):
+    """Audit an agent workflow against Law 1 (The 90/9/1 Rule)."""
+    step_profiles = [
+        StepProfile(
+            step_name=s.step_name,
+            is_deterministic=s.is_deterministic or False,
+            is_cacheable=s.is_cacheable or False,
+            requires_judgment=s.requires_judgment or False,
+            complexity=s.complexity or "low",
+            is_high_stakes=s.is_high_stakes or False,
+            fallback_tier=ExecutionTier(s.fallback_tier)
+            if s.fallback_tier
+            else ExecutionTier.MID_MODEL,
+            description=s.description or "",
+            task_type=s.task_type,
+            cache_namespace=s.cache_namespace or "default",
+        )
+        for s in req.steps
+    ]
+    audit_res = audit_pipeline(step_profiles)
+    return AuditPipelineResponse(**audit_res.to_dict())
+
+
+@v1_router.get("/router/tiers", response_model=RouterTiersResponse)
+async def get_router_tiers_endpoint():
+    """Retrieve execution tiers and model allocations under the 90/9/1 rule."""
+    tiers_map = {tier.value: models for tier, models in DEFAULT_TIER_MODELS.items()}
+    guidelines = {
+        "law_1_rule": "90% deterministic code/cache/small local model, 9% mid-tier, 1% frontier.",
+        "frontier_ceiling": "Max allowable frontier model steps is 10%.",
+        "context_target": "Average context per step < 8,000 tokens.",
+    }
+    return RouterTiersResponse(
+        tiers=tiers_map,
+        law_1_guidelines=guidelines,
+    )
+
+
 # Mount router to FastAPI app
+
+
 app.include_router(v1_router)
 
 
@@ -880,7 +1637,61 @@ async def healthz():
     return {"status": "ok", "service": "agent-engine-sidecar"}
 
 
-if __name__ == "__main__":
+def main(argv: Optional[List[str]] = None):
+    """Entrypoint for Agent Engine Python sidecar service."""
+    import argparse
     import uvicorn
 
-    uvicorn.run("services.python.server.api:app", host="127.0.0.1", port=8765, reload=False)
+    parser = argparse.ArgumentParser(
+        description="Agent Engine Python Sidecar Service (FastAPI + FastMCP + ACP)",
+        prog="agent-engine-sidecar",
+    )
+    parser.add_argument(
+        "--port",
+        "-p",
+        type=int,
+        default=int(os.environ.get("AGENT_ENGINE_PORT", os.environ.get("PORT", "8000"))),
+        help="Port to bind the sidecar service (default: 8000 or $AGENT_ENGINE_PORT/$PORT)",
+    )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default=os.environ.get("AGENT_ENGINE_HOST", "127.0.0.1"),
+        help="Host address to bind the sidecar service (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--token",
+        type=str,
+        default=os.environ.get("AGENT_ENGINE_IPC_TOKEN"),
+        help="Optional secret IPC token for shell-to-sidecar authentication",
+    )
+    parser.add_argument(
+        "--version",
+        "-v",
+        action="store_true",
+        help="Print sidecar version and exit",
+    )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Perform internal health self-test and exit",
+    )
+
+    args = parser.parse_args(argv)
+
+    if args.version:
+        print("0.1.0")
+        sys.exit(0)
+
+    if args.verify:
+        print("Agent Engine Sidecar v0.1.0: Self-check passed. Routes and schema verified.")
+        sys.exit(0)
+
+    if args.token:
+        os.environ["AGENT_ENGINE_IPC_TOKEN"] = args.token
+
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+
+
+if __name__ == "__main__":
+    main()

@@ -19,7 +19,16 @@ from core.router.config import (
     RouterConfigFile,
     load_router_config,
 )
-from core.router.execution_router import ExecutionRouter, ExecutionTier, StepProfile
+from core.router.execution_router import (
+    DEFAULT_TIER_MODELS,
+    ExecutionRouter,
+    ExecutionTier,
+    RatioAudit,
+    StepExecutionResult,
+    StepProfile,
+    audit_pipeline,
+    profiled_step,
+)
 from core.router.health import HealthProber, ProbeResult
 from core.router.model_router import ModelRouter
 
@@ -37,4 +46,9 @@ __all__ = [
     "ExecutionRouter",
     "ExecutionTier",
     "StepProfile",
+    "StepExecutionResult",
+    "RatioAudit",
+    "audit_pipeline",
+    "profiled_step",
+    "DEFAULT_TIER_MODELS",
 ]

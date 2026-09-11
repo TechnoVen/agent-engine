@@ -69,7 +69,14 @@ class PostgresBackend(StorageBackend):
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     metadata TEXT NOT NULL DEFAULT '{}',
-                    messages TEXT NOT NULL DEFAULT '[]'
+                    messages TEXT NOT NULL DEFAULT '[]',
+                    title TEXT NOT NULL DEFAULT 'Untitled Session',
+                    tenant_id TEXT NOT NULL DEFAULT 'default',
+                    channel TEXT NOT NULL DEFAULT 'web',
+                    status TEXT NOT NULL DEFAULT 'active',
+                    parent_session_id TEXT,
+                    fork_point_message_id TEXT,
+                    summary TEXT
                 );
             """)
             )
@@ -195,6 +202,34 @@ class PostgresBackend(StorageBackend):
             """)
             )
 
+            # Ensure unified session columns exist if upgrading an older database
+            for col_name, col_type in [
+                ("title", "TEXT NOT NULL DEFAULT 'Untitled Session'"),
+                ("tenant_id", "TEXT NOT NULL DEFAULT 'default'"),
+                ("channel", "TEXT NOT NULL DEFAULT 'web'"),
+                ("status", "TEXT NOT NULL DEFAULT 'active'"),
+                ("parent_session_id", "TEXT"),
+                ("fork_point_message_id", "TEXT"),
+                ("summary", "TEXT"),
+            ]:
+                try:
+                    conn.execute(
+                        text(
+                            f"ALTER TABLE sessions ADD COLUMN IF NOT EXISTS {col_name} {col_type};"
+                        )
+                    )
+                except Exception:
+                    pass
+            for idx_name, col in [
+                ("idx_pg_sessions_tenant", "tenant_id"),
+                ("idx_pg_sessions_status", "status"),
+                ("idx_pg_sessions_parent", "parent_session_id"),
+            ]:
+                try:
+                    conn.execute(text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON sessions({col});"))
+                except Exception:
+                    pass
+
     def close(self) -> None:
         """Dispose the engine connection pool."""
         self.engine.dispose()
@@ -289,14 +324,35 @@ class PostgresBackend(StorageBackend):
         session_id: str,
         user_id: str = "default_user",
         metadata: Optional[Dict[str, Any]] = None,
+        title: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        channel: Optional[str] = None,
+        status: Optional[str] = None,
+        parent_session_id: Optional[str] = None,
+        fork_point_message_id: Optional[str] = None,
+        summary: Optional[str] = None,
     ) -> Dict[str, Any]:
         now_iso = datetime.now(timezone.utc).isoformat()
         meta = metadata or {}
+        resolved_title = title or meta.get("title") or "Untitled Session"
+        resolved_tenant = tenant_id or meta.get("tenant_id") or "default"
+        resolved_channel = channel or meta.get("channel") or "web"
+        resolved_status = status or meta.get("status") or "active"
+        resolved_parent = parent_session_id or meta.get("parent_session_id")
+        resolved_fork_point = fork_point_message_id or meta.get("fork_point_message_id")
+        resolved_summary = summary or meta.get("summary")
+
         with self.engine.begin() as conn:
             conn.execute(
                 text("""
-                    INSERT INTO sessions (session_id, user_id, created_at, updated_at, metadata, messages)
-                    VALUES (:session_id, :user_id, :created_at, :updated_at, :metadata, :messages)
+                    INSERT INTO sessions (
+                        session_id, user_id, created_at, updated_at, metadata, messages,
+                        title, tenant_id, channel, status, parent_session_id, fork_point_message_id, summary
+                    )
+                    VALUES (
+                        :session_id, :user_id, :created_at, :updated_at, :metadata, :messages,
+                        :title, :tenant_id, :channel, :status, :parent_session_id, :fork_point_message_id, :summary
+                    )
                 """),
                 {
                     "session_id": session_id,
@@ -305,6 +361,13 @@ class PostgresBackend(StorageBackend):
                     "updated_at": now_iso,
                     "metadata": json.dumps(meta),
                     "messages": json.dumps([]),
+                    "title": resolved_title,
+                    "tenant_id": resolved_tenant,
+                    "channel": resolved_channel,
+                    "status": resolved_status,
+                    "parent_session_id": resolved_parent,
+                    "fork_point_message_id": resolved_fork_point,
+                    "summary": resolved_summary,
                 },
             )
         return {
@@ -314,6 +377,13 @@ class PostgresBackend(StorageBackend):
             "updated_at": now_iso,
             "metadata": meta,
             "messages": [],
+            "title": resolved_title,
+            "tenant_id": resolved_tenant,
+            "channel": resolved_channel,
+            "status": resolved_status,
+            "parent_session_id": resolved_parent,
+            "fork_point_message_id": resolved_fork_point,
+            "summary": resolved_summary,
         }
 
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
@@ -327,27 +397,47 @@ class PostgresBackend(StorageBackend):
             data = dict(row._mapping)
             data["metadata"] = json.loads(data.get("metadata") or "{}")
             data["messages"] = json.loads(data.get("messages") or "[]")
+            data.setdefault("title", data["metadata"].get("title", "Untitled Session"))
+            data.setdefault("tenant_id", data["metadata"].get("tenant_id", "default"))
+            data.setdefault("channel", data["metadata"].get("channel", "web"))
+            data.setdefault("status", data["metadata"].get("status", "active"))
             return data
 
-    def list_sessions(self, user_id: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+    def list_sessions(
+        self,
+        user_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        channel: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
         with self.engine.connect() as conn:
+            query = "SELECT * FROM sessions WHERE 1=1"
+            params: Dict[str, Any] = {"limit": limit}
             if user_id:
-                result = conn.execute(
-                    text(
-                        "SELECT * FROM sessions WHERE user_id = :user_id ORDER BY updated_at DESC LIMIT :limit"
-                    ),
-                    {"user_id": user_id, "limit": limit},
-                )
-            else:
-                result = conn.execute(
-                    text("SELECT * FROM sessions ORDER BY updated_at DESC LIMIT :limit"),
-                    {"limit": limit},
-                )
+                query += " AND user_id = :user_id"
+                params["user_id"] = user_id
+            if tenant_id:
+                query += " AND tenant_id = :tenant_id"
+                params["tenant_id"] = tenant_id
+            if channel:
+                query += " AND channel = :channel"
+                params["channel"] = channel
+            if status:
+                query += " AND status = :status"
+                params["status"] = status
+            query += " ORDER BY updated_at DESC LIMIT :limit"
+
+            result = conn.execute(text(query), params)
             results = []
             for row in result:
                 item = dict(row._mapping)
                 item["metadata"] = json.loads(item.get("metadata") or "{}")
                 item["messages"] = json.loads(item.get("messages") or "[]")
+                item.setdefault("title", item["metadata"].get("title", "Untitled Session"))
+                item.setdefault("tenant_id", item["metadata"].get("tenant_id", "default"))
+                item.setdefault("channel", item["metadata"].get("channel", "web"))
+                item.setdefault("status", item["metadata"].get("status", "active"))
                 results.append(item)
             return results
 
@@ -356,35 +446,59 @@ class PostgresBackend(StorageBackend):
         session_id: str,
         messages: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        title: Optional[str] = None,
+        status: Optional[str] = None,
+        summary: Optional[str] = None,
     ) -> bool:
         now_iso = datetime.now(timezone.utc).isoformat()
         with self.engine.begin() as conn:
             result = conn.execute(
-                text("SELECT metadata, messages FROM sessions WHERE session_id = :id"),
+                text("SELECT * FROM sessions WHERE session_id = :id"),
                 {"id": session_id},
             )
             row = result.fetchone()
             if not row:
                 return False
 
-            current_meta = json.loads(row._mapping["metadata"] or "{}")
-            current_msgs = json.loads(row._mapping["messages"] or "[]")
+            current_row = dict(row._mapping)
+            current_meta = json.loads(current_row.get("metadata") or "{}")
+            current_msgs = json.loads(current_row.get("messages") or "[]")
 
             if metadata is not None:
                 current_meta.update(metadata)
             if messages is not None:
                 current_msgs = messages
 
+            new_title = (
+                title
+                if title is not None
+                else current_meta.get("title", current_row.get("title", "Untitled Session"))
+            )
+            new_status = (
+                status
+                if status is not None
+                else current_meta.get("status", current_row.get("status", "active"))
+            )
+            new_summary = (
+                summary
+                if summary is not None
+                else current_meta.get("summary", current_row.get("summary"))
+            )
+
             update_res = conn.execute(
                 text("""
                     UPDATE sessions
-                    SET updated_at = :updated_at, metadata = :metadata, messages = :messages
+                    SET updated_at = :updated_at, metadata = :metadata, messages = :messages,
+                        title = :title, status = :status, summary = :summary
                     WHERE session_id = :id
                 """),
                 {
                     "updated_at": now_iso,
                     "metadata": json.dumps(current_meta),
                     "messages": json.dumps(current_msgs),
+                    "title": new_title,
+                    "status": new_status,
+                    "summary": new_summary,
                     "id": session_id,
                 },
             )
@@ -396,6 +510,95 @@ class PostgresBackend(StorageBackend):
                 text("DELETE FROM sessions WHERE session_id = :id"), {"id": session_id}
             )
             return result.rowcount > 0
+
+    def search_sessions(
+        self, query: str, user_id: Optional[str] = None, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        with self.engine.connect() as conn:
+            sql = """
+                SELECT * FROM sessions
+                WHERE (title LIKE :query OR metadata LIKE :query OR messages LIKE :query)
+            """
+            params: Dict[str, Any] = {"query": f"%{query}%", "limit": limit}
+            if user_id:
+                sql += " AND user_id = :user_id"
+                params["user_id"] = user_id
+            sql += " ORDER BY updated_at DESC LIMIT :limit"
+
+            result = conn.execute(text(sql), params)
+            results = []
+            for row in result:
+                item = dict(row._mapping)
+                item["metadata"] = json.loads(item.get("metadata") or "{}")
+                item["messages"] = json.loads(item.get("messages") or "[]")
+                results.append(item)
+            return results
+
+    def fork_session(
+        self,
+        session_id: str,
+        new_session_id: str,
+        fork_point_message_id: Optional[str] = None,
+        title: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        parent = self.get_session(session_id)
+        if not parent:
+            return None
+
+        parent_msgs = parent.get("messages") or []
+        forked_msgs: List[Dict[str, Any]] = []
+        fork_msg_id = fork_point_message_id
+
+        if fork_point_message_id:
+            found = False
+            for m in parent_msgs:
+                forked_msgs.append(m)
+                if m.get("message_id") == fork_point_message_id:
+                    found = True
+                    break
+            if not found:
+                forked_msgs = list(parent_msgs)
+        else:
+            forked_msgs = list(parent_msgs)
+            if forked_msgs:
+                fork_msg_id = forked_msgs[-1].get("message_id")
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        target_title = title or f"Fork of {parent.get('title', 'Session')}"
+        target_user = user_id or parent.get("user_id", "default_user")
+        meta = dict(parent.get("metadata") or {})
+        meta["forked_from"] = session_id
+
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO sessions (
+                        session_id, user_id, created_at, updated_at, metadata, messages,
+                        title, tenant_id, channel, status, parent_session_id, fork_point_message_id, summary
+                    )
+                    VALUES (
+                        :session_id, :user_id, :created_at, :updated_at, :metadata, :messages,
+                        :title, :tenant_id, :channel, :status, :parent_session_id, :fork_point_message_id, :summary
+                    )
+                """),
+                {
+                    "session_id": new_session_id,
+                    "user_id": target_user,
+                    "created_at": now_iso,
+                    "updated_at": now_iso,
+                    "metadata": json.dumps(meta),
+                    "messages": json.dumps(forked_msgs),
+                    "title": target_title,
+                    "tenant_id": parent.get("tenant_id", "default"),
+                    "channel": parent.get("channel", "web"),
+                    "status": "active",
+                    "parent_session_id": session_id,
+                    "fork_point_message_id": fork_msg_id,
+                    "summary": parent.get("summary"),
+                },
+            )
+        return self.get_session(new_session_id)
 
     # --- 3. USERS & TENANTS ---
 

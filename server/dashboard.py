@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 from core.engine import LowCodeAgent, NodeConfig
 from core.memory import AgentMemory
 from core.router import ModelRouter
+from core.session import AgentParticipant, get_session_store
 from core.telemetry import DEFAULT_PRICING, BudgetConfig, get_cost_tracker
 from server.watcher import (
     DB_PATH,
@@ -468,13 +469,14 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
     [
         "🛡️  Sentry & Code Patches",
         "🧠  Dynamic Agent Studio",
         "📚  RAG Vector Memory",
         "⚡  LLM Speedometer & Benchmark",
         "💰  Cost Tracker & Budgets",
+        "💬  Unified Session Store",
     ]
 )
 
@@ -1561,6 +1563,343 @@ def render_cost_tracker():
 
 with tab5:
     render_cost_tracker()
+
+
+# ==============================================================================
+# TAB 6: UNIFIED CROSS-AGENT SESSION STORE
+# ==============================================================================
+def render_unified_sessions():
+    st.subheader("💬 Unified Cross-Agent Session Store")
+    st.write(
+        "Inspect, search, branch, and collaborate across agent sessions in real-time. "
+        "Supports omnichannel history (Web, Desktop, Slack, WhatsApp, ACP) with token/cost tracking."
+    )
+
+    store = get_session_store()
+
+    # 1. Top Metrics Bar
+    all_sessions = store.list_sessions(limit=200)
+    total_sessions_cnt = len(all_sessions)
+    active_sessions_cnt = sum(1 for s in all_sessions if s.status.lower() == "active")
+    total_messages_cnt = sum(s.total_messages for s in all_sessions)
+    total_spend = sum(s.total_cost_usd for s in all_sessions)
+
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.metric("Total Sessions", total_sessions_cnt)
+    with m2:
+        st.metric("Active Sessions", active_sessions_cnt)
+    with m3:
+        st.metric("Total Messages", total_messages_cnt)
+    with m4:
+        st.metric("Total Incurred Cost", f"${total_spend:.4f}")
+
+    st.markdown("---")
+
+    # 2. Create New Session Expander
+    with st.expander("➕ Create New Session", expanded=False):
+        with st.form("new_session_form"):
+            c1, c2, c3 = st.columns([2, 1, 1])
+            with c1:
+                new_title = st.text_input("Session Title", value="Feature Planning Session")
+            with c2:
+                new_channel = st.selectbox(
+                    "Channel",
+                    ["web", "desktop", "slack", "teams", "whatsapp", "telegram", "cli", "api"],
+                    index=0,
+                )
+            with c3:
+                new_user = st.text_input("User ID", value="default_user")
+
+            p_col1, p_col2 = st.columns(2)
+            with p_col1:
+                agent_name = st.text_input("Initial Agent Name", value="CodeReviewerAgent")
+            with p_col2:
+                agent_model = st.text_input("Agent Model", value="claude-3-5-sonnet")
+
+            submitted = st.form_submit_button("🚀 Initialize Session")
+            if submitted:
+                created = store.create_session(
+                    title=new_title,
+                    user_id=new_user,
+                    channel=new_channel,
+                    participants=[
+                        AgentParticipant(
+                            agent_id=agent_name.lower().replace(" ", "_"),
+                            agent_name=agent_name,
+                            role="primary",
+                            model=agent_model,
+                        )
+                    ]
+                    if agent_name
+                    else [],
+                )
+                st.session_state["selected_session_id"] = created.session_id
+                st.success(f"Session '{created.title}' created (`{created.session_id}`)!")
+                st.rerun()
+
+    # 3. Filter and Search Controls
+    f_col1, f_col2, f_col3 = st.columns([2, 1, 1])
+    with f_col1:
+        search_query = st.text_input(
+            "🔍 Search Sessions & Message Content", placeholder="Type keywords..."
+        )
+    with f_col2:
+        filter_channel = st.selectbox(
+            "Channel Filter",
+            ["All", "web", "desktop", "slack", "teams", "whatsapp", "telegram", "cli", "api"],
+        )
+    with f_col3:
+        filter_status = st.selectbox("Status Filter", ["All", "active", "archived", "closed"])
+
+    # Filter sessions
+    filtered_sessions = store.list_sessions(
+        channel=None if filter_channel == "All" else filter_channel,
+        status=None if filter_status == "All" else filter_status,
+        query=search_query if search_query.strip() else None,
+        limit=100,
+    )
+
+    if not filtered_sessions:
+        st.info(
+            "No sessions found matching current filter criteria. Create one using the expander above!"
+        )
+        return
+
+    # Two-column layout: Left = Sessions list, Right = Session Details & Chat history
+    col_list, col_detail = st.columns([1, 2])
+
+    with col_list:
+        st.markdown("#### 📁 Sessions")
+        session_options = {
+            f"{s.title} ({s.channel}) - {s.status.upper()}": s.session_id for s in filtered_sessions
+        }
+
+        # Ensure default selected
+        curr_selected = st.session_state.get("selected_session_id")
+        option_keys = list(session_options.keys())
+        default_idx = 0
+        if curr_selected:
+            for idx, key in enumerate(option_keys):
+                if session_options[key] == curr_selected:
+                    default_idx = idx
+                    break
+
+        selected_label = st.radio(
+            "Select Session",
+            options=option_keys,
+            index=default_idx,
+            label_visibility="collapsed",
+        )
+        selected_sid = session_options[selected_label]
+        st.session_state["selected_session_id"] = selected_sid
+
+    with col_detail:
+        current_session = store.get_session(selected_sid)
+        if not current_session:
+            st.warning("Selected session could not be loaded.")
+            return
+
+        # Session Header & Badges
+        st.markdown(f"### {current_session.title}")
+        st.caption(
+            f"**ID:** `{current_session.session_id}` | "
+            f"**Channel:** `{current_session.channel}` | "
+            f"**Status:** `{current_session.status}` | "
+            f"**User:** `{current_session.user_id}`"
+        )
+
+        if current_session.parent_session_id:
+            st.info(
+                f"🔀 **Forked Session**: Branch of `{current_session.parent_session_id}` "
+                f"(forked at message `{current_session.fork_point_message_id}`)"
+            )
+
+        if current_session.summary:
+            st.info(f"**Session Summary:** {current_session.summary}")
+
+        # Participants Pills
+        if current_session.participants:
+            part_str = " • ".join(
+                [
+                    f"🤖 **{p.agent_name}** ({p.role}, `{p.model or 'default'}`)"
+                    for p in current_session.participants
+                ]
+            )
+            st.markdown(f"**Participants:** {part_str}")
+
+        # Metrics for this session
+        sm1, sm2, sm3 = st.columns(3)
+        with sm1:
+            st.metric("Messages", current_session.total_messages)
+        with sm2:
+            st.metric("Tokens", f"{current_session.total_tokens:,}")
+        with sm3:
+            st.metric("Incurred Cost", f"${current_session.total_cost_usd:.6f}")
+
+        st.markdown("---")
+
+        # Chat Message History
+        st.markdown("#### 💬 Conversation History")
+        if not current_session.messages:
+            st.write("*(No messages in this session yet)*")
+        else:
+            for msg in current_session.messages:
+                role = msg.role.lower()
+                sender = msg.sender_name or msg.sender_id
+                time_str = msg.timestamp[11:19] if len(msg.timestamp) >= 19 else msg.timestamp
+
+                if role in ("user", "human"):
+                    with st.chat_message("user"):
+                        st.markdown(f"**{sender}** `({time_str})`")
+                        st.markdown(msg.content)
+                elif role in ("assistant", "agent"):
+                    with st.chat_message("assistant"):
+                        header = f"**{sender}**"
+                        if msg.model:
+                            header += f" • *model: `{msg.model}`*"
+                        header += f" `({time_str})`"
+                        st.markdown(header)
+                        st.markdown(msg.content)
+                        if msg.tool_calls:
+                            for tc in msg.tool_calls:
+                                with st.expander(
+                                    f"🔨 Tool: {tc.tool_name} ({tc.status})", expanded=False
+                                ):
+                                    st.json(tc.arguments)
+                                    if tc.result is not None:
+                                        st.write("**Result:**")
+                                        st.code(str(tc.result))
+                                    if tc.error:
+                                        st.error(f"Error: {tc.error}")
+                        if msg.tokens or msg.cost_usd is not None:
+                            meta_parts = []
+                            if msg.tokens:
+                                meta_parts.append(f"{msg.tokens.get('total', 0)} tokens")
+                            if msg.cost_usd is not None:
+                                meta_parts.append(f"${msg.cost_usd:.6f}")
+                            st.caption(" • ".join(meta_parts))
+                elif role == "tool":
+                    with st.chat_message("assistant"):
+                        st.markdown(f"🔧 **Tool Output: {sender}** `({time_str})`")
+                        st.code(msg.content)
+                else:
+                    with st.chat_message("system"):
+                        st.markdown(f"⚙️ **System Notice** `({time_str})`")
+                        st.markdown(msg.content)
+
+        st.markdown("---")
+
+        # Action: Message Composer
+        with st.expander("✉️ Post Message Turn", expanded=False):
+            with st.form(f"post_msg_form_{current_session.session_id}"):
+                c_role, c_sender, c_agent = st.columns([1, 1, 1])
+                with c_role:
+                    post_role = st.selectbox(
+                        "Role", ["user", "assistant", "agent", "system", "tool"]
+                    )
+                with c_sender:
+                    post_sender = st.text_input(
+                        "Sender Name", value="User" if post_role == "user" else "CodeAgent"
+                    )
+                with c_agent:
+                    post_model = st.text_input(
+                        "Model Tag", value="claude-3-5-sonnet" if post_role != "user" else ""
+                    )
+
+                post_content = st.text_area(
+                    "Message Content", placeholder="Enter conversation text..."
+                )
+                post_submit = st.form_submit_button("📨 Append Message")
+
+                if post_submit and post_content.strip():
+                    store.append_message(
+                        session_id=current_session.session_id,
+                        role=post_role,
+                        content=post_content.strip(),
+                        sender_id=post_sender.lower().replace(" ", "_"),
+                        sender_name=post_sender,
+                        agent_id=post_sender.lower().replace(" ", "_")
+                        if post_role in ("assistant", "agent")
+                        else None,
+                        model=post_model if post_model else None,
+                        tokens={"prompt": 50, "completion": 50, "total": 100}
+                        if post_role in ("assistant", "agent")
+                        else None,
+                        cost_usd=0.00015 if post_role in ("assistant", "agent") else None,
+                    )
+                    st.success("Message appended!")
+                    st.rerun()
+
+        # Action: Fork Session
+        with st.expander("🔀 Fork / Branch Session", expanded=False):
+            with st.form(f"fork_form_{current_session.session_id}"):
+                fork_title = st.text_input(
+                    "Branch Session Title", value=f"Fork of {current_session.title}"
+                )
+                msg_ids = ["Latest Message"] + [
+                    f"{m.message_id} ({m.role}: {m.content[:30]}...)"
+                    for m in current_session.messages
+                ]
+                selected_msg_opt = st.selectbox("Fork Point", options=msg_ids, index=0)
+
+                fork_submit = st.form_submit_button("🌱 Create Branch")
+                if fork_submit:
+                    fork_msg_id = None
+                    if selected_msg_opt != "Latest Message":
+                        fork_msg_id = selected_msg_opt.split(" ")[0]
+
+                    forked = store.fork_session(
+                        session_id=current_session.session_id,
+                        fork_point_message_id=fork_msg_id,
+                        new_title=fork_title,
+                    )
+                    st.session_state["selected_session_id"] = forked.session_id
+                    st.success(f"Branched into '{forked.title}' (`{forked.session_id}`)!")
+                    st.rerun()
+
+        # Action: Export Session
+        with st.expander("📤 Export Transcript", expanded=False):
+            exp_fmt = st.selectbox(
+                "Export Format", ["markdown", "json", "jsonl", "openai", "anthropic", "dspy"]
+            )
+            exported_text = store.export_session(current_session.session_id, format=exp_fmt)
+            st.download_button(
+                label=f"⬇️ Download {exp_fmt.upper()}",
+                data=exported_text,
+                file_name=f"{current_session.session_id}.{'md' if exp_fmt == 'markdown' else 'json'}",
+                mime="text/plain" if exp_fmt == "markdown" else "application/json",
+            )
+            st.code(
+                exported_text[:800]
+                + ("\n...(truncated preview)" if len(exported_text) > 800 else ""),
+                language=exp_fmt if exp_fmt in ("json", "markdown") else "text",
+            )
+
+        # Action: Archive / Delete
+        with st.expander("⚙️ Session Administration", expanded=False):
+            adm1, adm2 = st.columns(2)
+            with adm1:
+                if current_session.status != "archived":
+                    if st.button("📦 Archive Session"):
+                        store.update_session(current_session.session_id, status="archived")
+                        st.success("Session archived!")
+                        st.rerun()
+                else:
+                    if st.button("🔄 Unarchive Session"):
+                        store.update_session(current_session.session_id, status="active")
+                        st.success("Session activated!")
+                        st.rerun()
+            with adm2:
+                if st.button("🗑️ Delete Session", type="secondary"):
+                    store.delete_session(current_session.session_id)
+                    st.session_state["selected_session_id"] = None
+                    st.warning("Session deleted!")
+                    st.rerun()
+
+
+with tab6:
+    render_unified_sessions()
 
 # ---------- FOOTER ----------
 st.markdown(

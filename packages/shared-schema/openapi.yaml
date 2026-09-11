@@ -553,7 +553,426 @@ paths:
                 items:
                   $ref: '#/components/schemas/AuditLogInfo'
 
+  /sessions:
+    post:
+      summary: Create a unified cross-agent session
+      operationId: createUnifiedSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSessionRequest'
+      responses:
+        '201':
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnifiedSessionInfo'
+    get:
+      summary: List cross-agent sessions
+      operationId: listUnifiedSessions
+      parameters:
+        - name: user_id
+          in: query
+          schema:
+            type: string
+        - name: tenant_id
+          in: query
+          schema:
+            type: string
+        - name: channel
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: query
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UnifiedSessionInfo'
+
+  /sessions/search:
+    get:
+      summary: Search sessions and message content
+      operationId: searchUnifiedSessions
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: user_id
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SessionSearchResult'
+
+  /sessions/{session_id}:
+    get:
+      summary: Retrieve unified session by ID
+      operationId: getUnifiedSession
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Unified session with messages
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnifiedSessionInfo'
+        '404':
+          description: Session not found
+    patch:
+      summary: Update unified session
+      operationId: updateUnifiedSession
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSessionRequest'
+      responses:
+        '200':
+          description: Updated session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnifiedSessionInfo'
+    delete:
+      summary: Delete a session
+      operationId: deleteUnifiedSession
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Session deleted
+
+  /sessions/{session_id}/messages:
+    post:
+      summary: Append message to session
+      operationId: appendUnifiedMessage
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppendMessageRequest'
+      responses:
+        '201':
+          description: Appended message
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnifiedMessageInfo'
+
+  /sessions/{session_id}/fork:
+    post:
+      summary: Fork session at specific message or latest
+      operationId: forkUnifiedSession
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForkSessionRequest'
+      responses:
+        '201':
+          description: Forked session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnifiedSessionInfo'
+
+  /sessions/{session_id}/export:
+    get:
+      summary: Export session transcript
+      operationId: exportUnifiedSession
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: format
+          in: query
+          schema:
+            type: string
+            default: json
+      responses:
+        '200':
+          description: Exported content
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionExportResponse'
+
+  /sessions/import:
+    post:
+      summary: Import session from payload
+      operationId: importUnifiedSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionImportRequest'
+      responses:
+        '201':
+          description: Imported session
+          content:
+  /cache/lookup:
+    post:
+      summary: Lookup matching response from semantic cache
+      operationId: lookupCache
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CacheLookupRequest'
+      responses:
+        '200':
+          description: Cache lookup result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CacheLookupResponse'
+
+  /cache/store:
+    post:
+      summary: Store query and response in semantic cache
+      operationId: storeCache
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CacheStoreRequest'
+      responses:
+        '201':
+          description: Cache store confirmation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CacheStoreResponse'
+
+  /cache/stats:
+    get:
+      summary: Retrieve semantic cache metrics and hit rates
+      operationId: getCacheStats
+      responses:
+        '200':
+          description: Cache telemetry statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CacheStatsResponse'
+
+  /cache/clear:
+    post:
+      summary: Clear or prune expired cache entries
+      operationId: clearCache
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CacheClearRequest'
+      responses:
+        '200':
+          description: Cache clear confirmation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CacheClearResponse'
+
+  /context/build:
+    post:
+      summary: Build minimal budgeted context enforcing limits and whitelisting
+      operationId: buildContext
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContextBuildRequest'
+      responses:
+        '200':
+          description: Built and budget-enforced context payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContextBuildResponse'
+
+  /eval/run:
+    post:
+      summary: Run model evaluation suite and compute success-adjusted cost rankings
+      operationId: runModelEval
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EvalRunRequest'
+      responses:
+        '200':
+          description: Model evaluation report and comparative rankings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalRunResponse'
+
+  /eval/rankings:
+    get:
+      summary: Retrieve success-adjusted cost rankings for a task type
+      operationId: getEvalRankings
+      parameters:
+        - name: task_type
+          in: query
+          required: false
+          schema:
+            type: string
+            default: classification
+      responses:
+        '200':
+          description: Ranked models by cost-per-success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalRankingResponse'
+
+  /eval/benchmarks:
+    get:
+      summary: Retrieve historical benchmark runs from storage
+      operationId: getEvalBenchmarks
+      parameters:
+        - name: task_type
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Historical evaluation benchmarks
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EvalBenchmarksResponse'
+
+  /router/route:
+    post:
+      summary: Classify agent step into optimal execution tier under 90/9/1 rule
+      operationId: routeStep
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RouteStepRequest'
+      responses:
+        '200':
+          description: Resolved execution tier and target model
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouteStepResponse'
+
+  /router/audit:
+    post:
+      summary: Audit workflow step sequence against Law 1 90/9/1 rule
+      operationId: auditPipeline
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuditPipelineRequest'
+      responses:
+        '200':
+          description: Law 1 ratio compliance audit report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditPipelineResponse'
+
+  /router/tiers:
+    get:
+      summary: Retrieve execution tier models and 90/9/1 guidelines
+      operationId: getRouterTiers
+      responses:
+        '200':
+          description: Tier model mapping and guidelines
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouterTiersResponse'
+
 components:
+
+
+
   schemas:
     FeatureFlagsResponse:
       type: object
@@ -1120,5 +1539,604 @@ components:
           type: string
         session_id:
           type: string
+
+    ToolCallInfo:
+      type: object
+      required: [call_id, tool_name]
+      properties:
+        call_id:
+          type: string
+        tool_name:
+          type: string
+        arguments:
+          type: object
+        result:
+          nullable: true
+        status:
+          type: string
+          default: success
+        error:
+          type: string
+          nullable: true
+        latency_ms:
+          type: number
+          nullable: true
+
+    ParticipantInfo:
+      type: object
+      required: [agent_id, agent_name]
+      properties:
+        agent_id:
+          type: string
+        agent_name:
+          type: string
+        role:
+          type: string
+          default: assistant
+        model:
+          type: string
+          nullable: true
+        joined_at:
+          type: string
+        metadata:
+          type: object
+
+    UnifiedMessageInfo:
+      type: object
+      required: [message_id, session_id, role, content, sender_id, timestamp]
+      properties:
+        message_id:
+          type: string
+        session_id:
+          type: string
+        role:
+          type: string
+        content:
+          type: string
+        sender_id:
+          type: string
+        sender_name:
+          type: string
+          nullable: true
+        agent_id:
+          type: string
+          nullable: true
+        model:
+          type: string
+          nullable: true
+        timestamp:
+          type: string
+        tokens:
+          type: object
+          nullable: true
+        cost_usd:
+          type: number
+          nullable: true
+        tool_calls:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolCallInfo'
+        metadata:
+          type: object
+
+    UnifiedSessionInfo:
+      type: object
+      required: [session_id, title, user_id, tenant_id, channel, status, created_at, updated_at]
+      properties:
+        session_id:
+          type: string
+        title:
+          type: string
+        user_id:
+          type: string
+        tenant_id:
+          type: string
+        channel:
+          type: string
+        status:
+          type: string
+        parent_session_id:
+          type: string
+          nullable: true
+        fork_point_message_id:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        summary:
+          type: string
+          nullable: true
+        participants:
+          type: array
+          items:
+            $ref: '#/components/schemas/ParticipantInfo'
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/UnifiedMessageInfo'
+        metadata:
+          type: object
+        total_messages:
+          type: integer
+        total_tokens:
+          type: integer
+        total_cost_usd:
+          type: number
+
+    CreateSessionRequest:
+      type: object
+      properties:
+        session_id:
+          type: string
+        title:
+          type: string
+          default: Untitled Session
+        user_id:
+          type: string
+          default: default_user
+        tenant_id:
+          type: string
+          default: default
+        channel:
+          type: string
+          default: web
+        status:
+          type: string
+          default: active
+        metadata:
+          type: object
+        participants:
+          type: array
+          items:
+            $ref: '#/components/schemas/ParticipantInfo'
+
+    UpdateSessionRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        status:
+          type: string
+        summary:
+          type: string
+        metadata:
+          type: object
+
+    AppendMessageRequest:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          default: user
+        content:
+          type: string
+        sender_id:
+          type: string
+          default: user
+        sender_name:
+          type: string
+        agent_id:
+          type: string
+        model:
+          type: string
+        tokens:
+          type: object
+        cost_usd:
+          type: number
+        tool_calls:
+          type: array
+          items:
+            $ref: '#/components/schemas/ToolCallInfo'
+        metadata:
+          type: object
+
+    ForkSessionRequest:
+      type: object
+      properties:
+        fork_point_message_id:
+          type: string
+        new_title:
+          type: string
+        user_id:
+          type: string
+        new_session_id:
+          type: string
+
+    SessionExportResponse:
+      type: object
+      required: [session_id, format, content]
+      properties:
+        session_id:
+          type: string
+        format:
+          type: string
+        content:
+          type: string
+
+    SessionImportRequest:
+      type: object
+      required: [payload]
+      properties:
+        format:
+          type: string
+          default: json
+        payload:
+          nullable: false
+
+    SessionSearchResult:
+      type: object
+      required: [session_id, title, channel, matched_snippets, total_messages, updated_at]
+      properties:
+        session_id:
+          type: string
+        title:
+          type: string
+        channel:
+          type: string
+        matched_snippets:
+          type: array
+          items:
+            type: object
+        total_messages:
+          type: integer
+        updated_at:
+          type: string
+
+    CacheLookupRequest:
+      type: object
+      required: [query]
+      properties:
+        query:
+          type: string
+        namespace:
+          type: string
+          default: default
+        task_type:
+          type: string
+        min_similarity:
+          type: number
+          default: 0.95
+
+    CacheLookupResponse:
+      type: object
+      required: [hit, similarity, match_type, latency_ms, query, tokens_saved, cost_saved_usd]
+      properties:
+        hit:
+          type: boolean
+        similarity:
+          type: number
+        match_type:
+          type: string
+        latency_ms:
+          type: number
+        query:
+          type: string
+        cached_response:
+          nullable: true
+        entry_id:
+          type: string
+          nullable: true
+        task_type:
+          type: string
+          nullable: true
+        created_at:
+          type: number
+          nullable: true
+        tokens_saved:
+          type: integer
+        cost_saved_usd:
+          type: number
+
+    CacheStoreRequest:
+      type: object
+      required: [query, response]
+      properties:
+        query:
+          type: string
+        response:
+          nullable: false
+        task_type:
+          type: string
+          default: qa
+        ttl_seconds:
+          type: integer
+        namespace:
+          type: string
+          default: default
+        tokens_saved:
+          type: integer
+          default: 0
+        cost_saved_usd:
+          type: number
+          default: 0.0
+        metadata:
+          type: object
+
+    CacheStoreResponse:
+      type: object
+      required: [entry_id, stored, ttl_seconds, task_type, namespace]
+      properties:
+        entry_id:
+          type: string
+        stored:
+          type: boolean
+        ttl_seconds:
+          type: integer
+        task_type:
+          type: string
+        namespace:
+          type: string
+
+    CacheStatsResponse:
+      type: object
+      required: [total_lookups, hits, misses, hit_rate, total_entries, tokens_saved, cost_saved_usd]
+      properties:
+        total_lookups:
+          type: integer
+        hits:
+          type: integer
+        misses:
+          type: integer
+        hit_rate:
+          type: number
+        total_entries:
+          type: integer
+        tokens_saved:
+          type: integer
+        cost_saved_usd:
+          type: number
+
+    CacheClearRequest:
+      type: object
+      properties:
+        namespace:
+          type: string
+          nullable: true
+        prune_only:
+          type: boolean
+          default: false
+
+    CacheClearResponse:
+      type: object
+      required: [cleared, pruned_entries, message]
+      properties:
+        cleared:
+          type: boolean
+        pruned_entries:
+          type: integer
+        message:
+          type: string
+
+    ContextBuildRequest:
+      type: object
+      required: [required_fields, available_data]
+      properties:
+        required_fields:
+          type: array
+          items:
+            type: string
+        available_data:
+          type: object
+        optional_fields:
+          type: array
+          items:
+            type: string
+          default: []
+        max_tokens:
+          type: integer
+          default: 4000
+        hard_ceiling_tokens:
+          type: integer
+          default: 32000
+        allow_retrieval:
+          type: boolean
+          default: false
+        retrieval_budget_tokens:
+          type: integer
+          default: 2000
+        truncation_strategy:
+          type: string
+          default: priority
+        field_priorities:
+          type: object
+        system_prompt:
+          type: string
+          nullable: true
+        strict_required:
+          type: boolean
+          default: true
+
+    ContextBuildResponse:
+      type: object
+      required: [data, estimated_tokens, original_tokens, was_truncated, truncated_fields, warnings]
+      properties:
+        data:
+          type: object
+        estimated_tokens:
+          type: integer
+        original_tokens:
+          type: integer
+        was_truncated:
+          type: boolean
+        truncated_fields:
+          type: array
+          items:
+            type: string
+        warnings:
+          type: array
+          items:
+            type: string
+
+    EvalRunRequest:
+      type: object
+      required: [model_names]
+      properties:
+        model_names:
+          type: array
+          items:
+            type: string
+        task_type:
+          type: string
+          default: classification
+        custom_samples:
+          type: array
+          items:
+            type: object
+        record_benchmark:
+          type: boolean
+          default: true
+
+    EvalRunResponse:
+      type: object
+      required: [task_type, reports, ranking]
+      properties:
+        task_type:
+          type: string
+        reports:
+          type: array
+          items:
+            type: object
+        ranking:
+          type: object
+
+    EvalRankingResponse:
+      type: object
+      required: [task_type, ranked_models, savings_pct_vs_frontier]
+      properties:
+        task_type:
+          type: string
+        ranked_models:
+          type: array
+          items:
+            type: object
+        recommended_model:
+          type: string
+          nullable: true
+        frontier_baseline:
+          type: string
+          nullable: true
+        savings_pct_vs_frontier:
+          type: number
+
+    EvalBenchmarksResponse:
+      type: object
+      required: [benchmarks, total_count]
+      properties:
+        benchmarks:
+          type: array
+          items:
+            type: object
+        total_count:
+          type: integer
+
+    StepProfileSchema:
+      type: object
+      required: [step_name]
+      properties:
+        step_name:
+          type: string
+        is_deterministic:
+          type: boolean
+          default: false
+        is_cacheable:
+          type: boolean
+          default: false
+        requires_judgment:
+          type: boolean
+          default: false
+        complexity:
+          type: string
+          default: low
+        is_high_stakes:
+          type: boolean
+          default: false
+        fallback_tier:
+          type: string
+          default: mid_model
+        description:
+          type: string
+        task_type:
+          type: string
+          nullable: true
+        cache_namespace:
+          type: string
+          default: default
+
+    RouteStepRequest:
+      type: object
+      required: [step]
+      properties:
+        step:
+          $ref: '#/components/schemas/StepProfileSchema'
+        inputs:
+          type: object
+
+    RouteStepResponse:
+      type: object
+      required: [step_name, tier, rationale, is_free_tier]
+      properties:
+        step_name:
+          type: string
+        tier:
+          type: string
+        resolved_model:
+          type: string
+          nullable: true
+        rationale:
+          type: string
+        is_free_tier:
+          type: boolean
+
+    AuditPipelineRequest:
+      type: object
+      required: [steps]
+      properties:
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/StepProfileSchema'
+
+    AuditPipelineResponse:
+      type: object
+      required: [total_steps, deterministic_or_small_count, mid_tier_count, frontier_count, human_count, deterministic_or_small_pct, mid_tier_pct, frontier_pct, complies_with_law_1, violations]
+      properties:
+        total_steps:
+          type: integer
+        deterministic_or_small_count:
+          type: integer
+        mid_tier_count:
+          type: integer
+        frontier_count:
+          type: integer
+        human_count:
+          type: integer
+        deterministic_or_small_pct:
+          type: number
+        mid_tier_pct:
+          type: number
+        frontier_pct:
+          type: number
+        complies_with_law_1:
+          type: boolean
+        violations:
+          type: array
+          items:
+            type: string
+
+    RouterTiersResponse:
+      type: object
+      required: [tiers, law_1_guidelines]
+      properties:
+        tiers:
+          type: object
+        law_1_guidelines:
+          type: object
+
+
+
+
 
 

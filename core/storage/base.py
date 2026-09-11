@@ -44,6 +44,13 @@ class SessionRecord:
     updated_at: str
     metadata: Dict[str, Any] = field(default_factory=dict)
     messages: List[Dict[str, Any]] = field(default_factory=list)
+    title: str = "Untitled Session"
+    tenant_id: str = "default"
+    channel: str = "web"
+    status: str = "active"
+    parent_session_id: Optional[str] = None
+    fork_point_message_id: Optional[str] = None
+    summary: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -53,6 +60,13 @@ class SessionRecord:
             "updated_at": self.updated_at,
             "metadata": self.metadata,
             "messages": self.messages,
+            "title": self.title,
+            "tenant_id": self.tenant_id,
+            "channel": self.channel,
+            "status": self.status,
+            "parent_session_id": self.parent_session_id,
+            "fork_point_message_id": self.fork_point_message_id,
+            "summary": self.summary,
         }
 
 
@@ -233,6 +247,13 @@ class StorageBackend(ABC):
         session_id: str,
         user_id: str = "default_user",
         metadata: Optional[Dict[str, Any]] = None,
+        title: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        channel: Optional[str] = None,
+        status: Optional[str] = None,
+        parent_session_id: Optional[str] = None,
+        fork_point_message_id: Optional[str] = None,
+        summary: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create a new conversational / agent session."""
         pass
@@ -243,8 +264,15 @@ class StorageBackend(ABC):
         pass
 
     @abstractmethod
-    def list_sessions(self, user_id: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
-        """List sessions optionally filtered by user ID."""
+    def list_sessions(
+        self,
+        user_id: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        channel: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """List sessions optionally filtered by user ID, tenant, channel, or status."""
         pass
 
     @abstractmethod
@@ -253,14 +281,34 @@ class StorageBackend(ABC):
         session_id: str,
         messages: Optional[List[Dict[str, Any]]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        title: Optional[str] = None,
+        status: Optional[str] = None,
+        summary: Optional[str] = None,
     ) -> bool:
-        """Update messages or metadata in a session."""
+        """Update messages, metadata, or status in a session."""
         pass
 
     @abstractmethod
     def delete_session(self, session_id: str) -> bool:
         """Remove a session."""
         pass
+
+    def search_sessions(
+        self, query: str, user_id: Optional[str] = None, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Search sessions by keyword matching in title, metadata, or messages."""
+        return []
+
+    def fork_session(
+        self,
+        session_id: str,
+        new_session_id: str,
+        fork_point_message_id: Optional[str] = None,
+        title: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Fork an existing session into a new branch."""
+        return None
 
     # --- 3. USERS & TENANTS ---
     @abstractmethod

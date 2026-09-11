@@ -1,0 +1,57 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-base: #0a0a0a;
+  --bg-elevated: #141414;
+  --bg-hover: #1c1c1c;
+  --border-subtle: #1f1f1f;
+  --border-strong: #2a2a2a;
+  --text-primary: #f5f5f5;
+  --text-secondary: #a0a0a0;
+  --text-tertiary: #666666;
+  --accent: #3b82f6;
+  --accent-hover: #2563eb;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --code-bg: #1a1a1a;
+}
+
+/* Custom sleek dark scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+}
+
+/* Base selection */
+::selection {
+  background-color: rgba(59, 130, 246, 0.3);
+  color: #ffffff;
+}
+
+/* Micro-transitions */
+button, a, input, textarea {
+  transition: all 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Smooth panel transitions */
+.panel-transition {
+  transition: width 250ms cubic-bezier(0.16, 1, 0.3, 1),
+              transform 250ms cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 250ms cubic-bezier(0.16, 1, 0.3, 1);
+}

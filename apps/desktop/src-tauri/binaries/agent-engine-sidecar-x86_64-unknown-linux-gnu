@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Agent Engine Standalone Sidecar Launcher
+set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Locate repository root (4 levels up from apps/desktop/src-tauri/binaries/)
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." 2>/dev/null && pwd || true)"
+if [ ! -d "${REPO_ROOT}/services" ]; then
+    # Fallback search if installed in bundle
+    REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+fi
+export PYTHONPATH="${REPO_ROOT}:${PYTHONPATH}"
+if [ -x "${REPO_ROOT}/.venv/bin/python" ]; then
+    exec "${REPO_ROOT}/.venv/bin/python" -m services.python.server.api "$@"
+elif command -v uv >/dev/null 2>&1 && [ -f "${REPO_ROOT}/pyproject.toml" ]; then
+    exec uv run --directory "${REPO_ROOT}" python -m services.python.server.api "$@"
+else
+    exec python3 -m services.python.server.api "$@"
+fi
