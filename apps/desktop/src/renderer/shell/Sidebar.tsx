@@ -23,6 +23,7 @@ import {
   PanelLeftOpen,
   Settings as SettingsIcon,
   FolderPlus,
+  FolderKanban,
   MessageSquare,
 } from 'lucide-react';
 import { Mode, Project, RecentChat } from '../types';
@@ -44,8 +45,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onToggleCollapse,
   onNewChat,
   projects = [
-    { id: '1', name: 'Organiser', icon: '▢', threadCount: 8, lastActivity: '2h ago' },
-    { id: '2', name: 'Client Website', icon: '▢', threadCount: 3, lastActivity: '1d ago' },
+    { id: '1', name: 'Organiser Workspace', icon: 'folder', threadCount: 8, lastActivity: '2h ago' },
+    { id: '2', name: 'Client Website', icon: 'folder', threadCount: 3, lastActivity: '1d ago' },
   ],
   recentChats = [
     { id: 'c1', title: 'Saturday Party Planning', mode: 'home', updatedAt: 'Just now' },
@@ -265,7 +266,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   className="w-full flex items-center justify-between px-2.5 py-1 rounded-md text-xs text-text-secondary hover:text-text-primary hover:bg-bg-hover/60 transition-colors"
                 >
                   <span className="truncate flex items-center gap-1.5">
-                    <span className="text-text-tertiary">{p.icon}</span> {p.name}
+                    <FolderKanban className="w-3.5 h-3.5 text-text-tertiary flex-shrink-0" />
+                    <span>{p.name}</span>
                   </span>
                   <span className="text-[10px] text-text-tertiary">{p.threadCount}</span>
                 </button>

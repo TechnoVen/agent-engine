@@ -157,3 +157,93 @@ def test_built_distribution_bundle():
     assert 'id="root"' in content
     assert "Agent Engine" in content
     assert 'src="/assets/' in content
+
+
+def test_task_3_1_universal_chat_input_component():
+    chat_input_file = RENDERER_ROOT / "components" / "ChatInput.tsx"
+    assert chat_input_file.exists(), "apps/desktop/src/renderer/components/ChatInput.tsx must exist"
+    content = chat_input_file.read_text()
+
+    # Verify component props and exports
+    assert "export interface ChatInputProps" in content
+    assert "export const ChatInput" in content
+
+    # Verify universal input capabilities
+    assert "Instant High" in content
+    assert "K3 Swarm High" in content
+    assert "K3 High" in content
+    assert "Est:" in content
+    assert "AttachmentFile" in content
+    assert "Paperclip" in content
+    assert "onStop" in content
+    assert "isStreaming" in content
+    assert "onModeChange" in content
+    assert "onProjectChange" in content
+
+    # Verify Enter to send and Shift+Enter for newline
+    assert "e.key === 'Enter' && !e.shiftKey" in content
+
+
+def test_task_3_1_streaming_message_token_renderer():
+    message_file = RENDERER_ROOT / "components" / "Message.tsx"
+    assert message_file.exists(), "apps/desktop/src/renderer/components/Message.tsx must exist"
+    content = message_file.read_text()
+
+    assert "export interface MessageProps" in content
+    assert "export const Message" in content
+    assert "ChatMessage" in content
+    assert "isStreaming" in content
+
+    # Fast 60fps markdown & code block renderer
+    assert "renderFormattedContent" in content
+    assert "handleCopyCode" in content
+    assert "handleCopyMessage" in content
+    assert "Copy" in content
+    assert "Check" in content
+
+    # Performance & cost attribution telemetry
+    assert "tokensPerSec" in content
+    assert "latencyMs" in content
+    assert "estCost" in content
+    assert "animate-pulse" in content
+
+
+def test_task_3_1_home_screen_empty_and_chat_states():
+    home_file = RENDERER_ROOT / "screens" / "Home.tsx"
+    assert home_file.exists(), "apps/desktop/src/renderer/screens/Home.tsx must exist"
+    content = home_file.read_text()
+
+    # Universal component reuse
+    assert "ChatInput" in content
+    assert "Message" in content
+
+    # Empty state greeting, chips, and inspiration cards
+    assert "getGreeting" in content
+    assert "Explore Inspiration" in content
+    assert "Build an invoice agent" in content
+    assert "Analyze codebase & architecture" in content
+    assert "Deep market research report" in content
+    assert "recentProjects" in content
+
+    # 60fps streaming loop using requestAnimationFrame
+    assert "requestAnimationFrame" in content
+    assert "startStreamingResponse" in content
+    assert "streamAbortController" in content
+    assert "tokensPerSec" in content
+
+
+def test_task_3_1_types_and_global_shortcuts():
+    types_file = RENDERER_ROOT / "types" / "index.ts"
+    assert types_file.exists()
+    types_content = types_file.read_text()
+    assert "ChatMessage" in types_content
+    assert "MessageRole" in types_content
+    assert "MessageMetadata" in types_content
+    assert "AttachmentFile" in types_content
+
+    app_file = RENDERER_ROOT / "App.tsx"
+    app_content = app_file.read_text()
+    assert "chatInputRef" in app_content
+    assert "ctrlKey" in app_content
+    assert "'k'" in app_content
+    assert "setActiveMode('home')" in app_content

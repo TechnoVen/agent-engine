@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Layout } from './shell/Layout';
 import { Home } from './screens/Home';
 import { Mode, ModelTier, SidecarHealth } from './types';
@@ -10,6 +10,8 @@ export const App: React.FC = () => {
   const [activeModel, setActiveModel] = useState<ModelTier>('instant');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [health, setHealth] = useState<SidecarHealth>({ status: 'offline' });
+
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
 
   // Health poll
   useEffect(() => {
@@ -27,12 +29,15 @@ export const App: React.FC = () => {
     };
   }, []);
 
-  // Global keyboard shortcuts (Ctrl+K)
+  // Global keyboard shortcuts (Ctrl+K to focus input anywhere)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setActiveMode('home');
+        setTimeout(() => {
+          chatInputRef.current?.focus();
+        }, 30);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -41,15 +46,25 @@ export const App: React.FC = () => {
 
   const handleNewChat = () => {
     setActiveMode('home');
+    setTimeout(() => {
+      chatInputRef.current?.focus();
+    }, 30);
   };
 
   const renderActiveScreen = () => {
     switch (activeMode) {
       case 'home':
-        return <Home onSelectMode={setActiveMode} activeModel={activeModel} />;
+        return (
+          <Home
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
       default:
         return (
-          <div className="h-full flex flex-col items-center justify-center p-8 text-center">
+          <div className="h-full flex flex-col items-center justify-center p-8 text-center select-none">
             <div className="w-14 h-14 rounded-2xl bg-bg-elevated border border-border-strong flex items-center justify-center mb-4 shadow-xl">
               <Sparkles className="w-7 h-7 text-accent" />
             </div>
@@ -60,10 +75,13 @@ export const App: React.FC = () => {
               Integrated Kimi-style workspace for {activeMode}. Connected to the local-first sidecar engine with automated cost routing.
             </p>
             <button
-              onClick={() => setActiveMode('home')}
-              className="px-4 py-2 bg-bg-elevated hover:bg-bg-hover border border-border-strong rounded-lg text-xs font-medium text-text-primary transition-all"
+              onClick={handleNewChat}
+              className="px-4 py-2 bg-bg-elevated hover:bg-bg-hover border border-border-strong rounded-lg text-xs font-medium text-text-primary transition-all flex items-center gap-2"
             >
-              Return to Chat (Ctrl+K)
+              <span>Return to Chat</span>
+              <kbd className="px-1.5 py-0.5 text-[10px] font-mono rounded bg-bg-base border border-border-subtle text-text-tertiary">
+                Ctrl K
+              </kbd>
             </button>
           </div>
         );

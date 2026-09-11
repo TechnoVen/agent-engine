@@ -108,3 +108,33 @@ export interface UpdateCheckResult {
   sha256?: string | null;
 }
 
+export type MessageRole = 'user' | 'assistant' | 'system';
+
+export interface AttachmentFile {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+  url?: string;
+}
+
+export interface MessageMetadata {
+  modelTier?: ModelTier;
+  modelName?: string;
+  tokenCount?: number;
+  tokensPerSec?: number;
+  latencyMs?: number;
+  estCost?: string;
+  cached?: boolean;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: MessageRole;
+  content: string;
+  timestamp: string;
+  isStreaming?: boolean;
+  metadata?: MessageMetadata;
+  attachments?: AttachmentFile[];
+}
+

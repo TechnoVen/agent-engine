@@ -159,10 +159,11 @@
 
 > **Architectural Standard:** Implements the Kimi-inspired unified shell with mode-based navigation (`apps/desktop/src/renderer/`). Universal `ChatInput.tsx` reusable component across all screens, 3-zone sidebar (Global Actions, Mode Navigation, Context), rich empty states with featured inspiration cases for all 8 modes, inline approvals, and pre-execution cost estimates. See full specification in [`docs/GUI.md`](file:///home/nadir/agent_engine/docs/GUI.md).
 
-- [ ] **Task 3.1 — Chat Shell & Home Mode**
+- [x] **Task 3.1 — Chat Shell & Home Mode**
   - **User Story:** As a user, I want a clean, responsive chat canvas with universal input and inspiration chips so I can immediately collaborate with my agent.
-  - **Deliverables:** `apps/desktop/src/renderer/shell/Layout.tsx`, `Sidebar.tsx`, `TopBar.tsx`, `screens/Home.tsx` (Route `/`), mode-switching state, 60fps streaming token renderer.
-  - **Acceptance Criteria:** `Ctrl+K` focuses input from any screen; greeting and featured case cards appear on empty state; streaming tokens render at 60fps.
+  - **Deliverables:** `apps/desktop/src/renderer/shell/Layout.tsx`, `Sidebar.tsx`, `TopBar.tsx`, `screens/Home.tsx` (Route `/`), universal `ChatInput.tsx` component, 60fps streaming token renderer (`Message.tsx`), mode-switching state, global `Ctrl+K` autofocus handler, and test suite `tests/test_desktop_shell.py`.
+  - **Acceptance Criteria:** `Ctrl+K` focuses input from any screen; greeting and featured case cards appear on empty state; streaming tokens render at 60fps; 11/11 desktop shell tests pass; 100% of monorepo tests pass (224/224).
+  - **Status:** ✅ DONE
 - [ ] **Task 3.2 — Skill Selector & Slash Commands**
   - **User Story:** As a power user, I want to invoke skills and plugins via `/` slash commands directly in the universal input.
   - **Deliverables:** Slash command popup in `ChatInput.tsx`, skill auto-complete, parameter chips, plugin icons row with quick toggles.
