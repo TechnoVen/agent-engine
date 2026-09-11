@@ -1,5 +1,6 @@
 pub mod credentials;
 pub mod sidecar;
+pub mod updater;
 
 use credentials::{
     CredentialClient, CredentialInfo, SetCredentialPayload, TestCredentialPayload,
@@ -8,6 +9,7 @@ use credentials::{
 use sidecar::{SidecarStatus, SidecarSupervisor};
 use std::sync::Arc;
 use tauri::State;
+use updater::{UpdateCheckResult, UpdateClient, UpdateStatus};
 
 #[tauri::command]
 async fn get_sidecar_status(
@@ -77,9 +79,33 @@ async fn test_credential(
     client.test_credential(payload).await
 }
 
+#[tauri::command]
+async fn get_update_status(
+    client: State<'_, Arc<UpdateClient>>,
+) -> Result<UpdateStatus, String> {
+    client.get_status().await
+}
+
+#[tauri::command]
+async fn set_update_channel(
+    client: State<'_, Arc<UpdateClient>>,
+    channel: String,
+) -> Result<UpdateStatus, String> {
+    client.set_channel(channel).await
+}
+
+#[tauri::command]
+async fn check_for_updates(
+    client: State<'_, Arc<UpdateClient>>,
+    channel: Option<String>,
+) -> Result<UpdateCheckResult, String> {
+    client.check_for_updates(channel).await
+}
+
 pub fn run() {
     let supervisor = Arc::new(SidecarSupervisor::new(8000));
     let cred_client = Arc::new(CredentialClient::new(8000));
+    let update_client = Arc::new(UpdateClient::new(8000));
     let shutdown_sup = Arc::clone(&supervisor);
 
     tauri::Builder::default()
@@ -87,6 +113,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .manage(supervisor)
         .manage(cred_client)
+        .manage(update_client)
         .invoke_handler(tauri::generate_handler![
             get_sidecar_status,
             start_sidecar,
@@ -96,7 +123,10 @@ pub fn run() {
             get_credentials,
             set_credential,
             delete_credential,
-            test_credential
+            test_credential,
+            get_update_status,
+            set_update_channel,
+            check_for_updates
         ])
         .build(tauri::generate_context!())
         .expect("error while building agent-engine-desktop")

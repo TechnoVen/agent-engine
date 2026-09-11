@@ -86,3 +86,25 @@ export interface CredentialTestResult {
   error?: string;
 }
 
+export type UpdateChannel = 'stable' | 'beta' | 'nightly';
+
+export interface UpdateStatus {
+  current_version: string;
+  channel: UpdateChannel;
+  auto_check: boolean;
+  last_checked_at?: number | null;
+  feed_url: string;
+}
+
+export interface UpdateCheckResult {
+  update_available: boolean;
+  current_version: string;
+  latest_version: string;
+  channel: UpdateChannel;
+  release_notes: string;
+  pub_date?: string | null;
+  download_url?: string | null;
+  signature?: string | null;
+  sha256?: string | null;
+}
+

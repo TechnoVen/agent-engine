@@ -4,6 +4,9 @@ import {
   CredentialTestResult,
   SetCredentialPayload,
   SidecarHealth,
+  UpdateChannel,
+  UpdateCheckResult,
+  UpdateStatus,
 } from '../types';
 
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
@@ -144,6 +147,40 @@ class SidecarClient {
         latency_ms: 0,
         error: `HTTP ${res.status}: ${res.statusText}`,
       };
+    }
+    return await res.json();
+  }
+
+  async getUpdateStatus(): Promise<UpdateStatus | null> {
+    try {
+      const res = await fetch(`${this.base}/v1/updater/status`);
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  async setUpdateChannel(channel: UpdateChannel): Promise<UpdateStatus> {
+    const res = await fetch(`${this.base}/v1/updater/channel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel }),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to set update channel: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async checkForUpdates(channel?: UpdateChannel): Promise<UpdateCheckResult> {
+    const res = await fetch(`${this.base}/v1/updater/check`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel }),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to check for updates: HTTP ${res.status}`);
     }
     return await res.json();
   }

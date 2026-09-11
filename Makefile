@@ -88,3 +88,11 @@ desktop-verify-sidecar:
 	@echo "==> Verifying sidecar signature and SHA-256 integrity..."
 	$(PYTHON) scripts/sign_artifacts.py --verify
 
+desktop-update-manifest:
+	@echo "==> Generating and signing multi-channel update manifests..."
+	$(PYTHON) scripts/generate_update_manifest.py --output-dir dist/updates --sign
+
+desktop-update-server:
+	@echo "==> Starting local mock update feed server..."
+	$(PYTHON) infra/update-server/serve_feed.py --port 8088 --dir dist/updates
+

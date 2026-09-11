@@ -25,6 +25,8 @@ logs/
 *.sqlite3
 data/*.db*
 data/chroma/
+data/*.json
+data/*.vault
 workspace/
 models/*.gguf
 *.enc

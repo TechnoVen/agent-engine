@@ -1078,6 +1078,56 @@ paths:
               schema:
                 $ref: '#/components/schemas/TestCredentialResponse'
 
+  /updater/status:
+    get:
+      summary: Retrieve auto-updater status, current version, active channel, and feed URL
+      operationId: getUpdaterStatus
+      responses:
+        '200':
+          description: Auto-updater status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateStatusResponse'
+
+  /updater/channel:
+    post:
+      summary: Switch active update distribution channel (stable, beta, nightly)
+      operationId: setUpdaterChannel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetChannelRequest'
+      responses:
+        '200':
+          description: Updated updater configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateStatusResponse'
+        '400':
+          description: Invalid channel specified
+
+  /updater/check:
+    post:
+      summary: Check for new releases against the active or requested channel
+      operationId: checkUpdates
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCheckRequest'
+      responses:
+        '200':
+          description: Release update check outcome
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateCheckResponse'
+
 components:
 
 
@@ -2310,6 +2360,59 @@ components:
         latency_ms:
           type: number
         error:
+          type: string
+
+    UpdateStatusResponse:
+      type: object
+      required: [current_version, channel, auto_check, feed_url]
+      properties:
+        current_version:
+          type: string
+        channel:
+          type: string
+        auto_check:
+          type: boolean
+        last_checked_at:
+          type: number
+        feed_url:
+          type: string
+
+    SetChannelRequest:
+      type: object
+      required: [channel]
+      properties:
+        channel:
+          type: string
+          enum: [stable, beta, nightly]
+
+    UpdateCheckRequest:
+      type: object
+      properties:
+        channel:
+          type: string
+          enum: [stable, beta, nightly]
+
+    UpdateCheckResponse:
+      type: object
+      required: [update_available, current_version, latest_version, channel, release_notes]
+      properties:
+        update_available:
+          type: boolean
+        current_version:
+          type: string
+        latest_version:
+          type: string
+        channel:
+          type: string
+        release_notes:
+          type: string
+        pub_date:
+          type: string
+        download_url:
+          type: string
+        signature:
+          type: string
+        sha256:
           type: string
 
 

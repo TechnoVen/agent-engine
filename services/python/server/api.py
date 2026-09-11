@@ -37,6 +37,7 @@ from core.router import (
 from core.safety import get_policy_engine
 from core.security import get_credential_manager, mask_secret
 from core.storage import get_storage_backend
+from core.updater import get_update_manager
 
 
 from core.session import (
@@ -665,6 +666,34 @@ class TestCredentialResponse(BaseModel):
     valid: bool
     latency_ms: float
     error: Optional[str] = None
+
+
+class UpdateStatusResponse(BaseModel):
+    current_version: str
+    channel: str
+    auto_check: bool
+    last_checked_at: Optional[float] = None
+    feed_url: str
+
+
+class SetChannelRequest(BaseModel):
+    channel: str = Field(..., description="Target update channel: stable, beta, or nightly")
+
+
+class UpdateCheckRequest(BaseModel):
+    channel: Optional[str] = Field(default=None, description="Optional channel override for check")
+
+
+class UpdateCheckResponse(BaseModel):
+    update_available: bool
+    current_version: str
+    latest_version: str
+    channel: str
+    release_notes: str = ""
+    pub_date: Optional[str] = None
+    download_url: Optional[str] = None
+    signature: Optional[str] = None
+    sha256: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1768,6 +1797,38 @@ async def test_credential_endpoint(req: TestCredentialRequest):
         latency_ms=res["latency_ms"],
         error=res.get("error"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Auto-Update Channel Endpoints (Task 2.4 - Milestone M2)
+# ---------------------------------------------------------------------------
+
+
+@v1_router.get("/updater/status", response_model=UpdateStatusResponse)
+async def get_updater_status_endpoint():
+    """Retrieve auto-updater status, current version, active channel, and feed URL."""
+    mgr = get_update_manager()
+    return UpdateStatusResponse(**mgr.get_status())
+
+
+@v1_router.post("/updater/channel", response_model=UpdateStatusResponse)
+async def set_updater_channel_endpoint(req: SetChannelRequest):
+    """Switch active update distribution channel (stable, beta, nightly)."""
+    mgr = get_update_manager()
+    try:
+        mgr.set_channel(req.channel)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return UpdateStatusResponse(**mgr.get_status())
+
+
+@v1_router.post("/updater/check", response_model=UpdateCheckResponse)
+async def check_updates_endpoint(req: Optional[UpdateCheckRequest] = None):
+    """Check for new releases against the active or requested channel."""
+    mgr = get_update_manager()
+    channel_override = req.channel if req else None
+    info = mgr.check_for_updates(channel=channel_override)
+    return UpdateCheckResponse(**info.to_dict())
 
 
 # Mount router to FastAPI app

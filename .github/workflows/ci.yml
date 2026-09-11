@@ -144,3 +144,32 @@ jobs:
       - name: Run sidecar bundling test suite
         run: uv run pytest tests/test_sidecar_bundling.py -v
 
+  auto-update-manifest-verification:
+    name: Auto-Update Manifest & Signature Verification (Task 2.4)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Generate and sign update manifests
+        run: uv run python scripts/generate_update_manifest.py --output-dir dist/updates --sign
+
+      - name: Verify update manifests self-test
+        run: uv run python scripts/generate_update_manifest.py --verify dist/updates/stable.json
+
+      - name: Run auto-updater test suite
+        run: uv run pytest tests/test_auto_updater.py -v
+
