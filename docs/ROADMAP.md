@@ -174,10 +174,11 @@
   - **Deliverables:** `apps/desktop/src/renderer/components/ApprovalCard.tsx`, tool call interceptor in `Home.tsx`, diff preview (code, command, SQL, JSON), risk score badges, Approve / Reject / Edit action buttons, audit ledger logging via `POST /v1/safety/approval`, and unit/integration tests in `tests/test_desktop_shell.py`.
   - **Acceptance Criteria:** High-risk actions render inline approval card; execution pauses until user decides; decision executes in <500ms and logs to tamper-evident audit ledger; 17/17 desktop shell tests pass; 100% of monorepo tests pass.
   - **Status:** ✅ DONE
-- [ ] **Task 3.4 — Model & Agent Switcher**
+- [x] **Task 3.4 — Model & Agent Switcher**
   - **User Story:** As a user, I want to toggle between instant, balanced, and deep reasoning models (or switch primary agents) without leaving the chat.
   - **Deliverables:** Model tier selector in `ChatInput.tsx` (`Instant High`, `K3 Swarm High`, `K3 High`), agent persona picker, cost per 1k token display.
-  - **Acceptance Criteria:** Changing model updates active pipeline immediately; estimated cost per run preview updates dynamically.
+  - **Acceptance Criteria:** Changing model updates active pipeline immediately; estimated cost per run preview updates dynamically; 20/20 desktop shell tests pass; 100% of monorepo tests pass (233/233).
+  - **Status:** ✅ DONE
 - [ ] **Task 3.5 — Session Sidebar & Search**
   - **User Story:** As a user, I want a 3-zone sidebar to manage global actions, modes, projects, and searchable chat history.
   - **Deliverables:** `Sidebar.tsx` with Zone A (Logo, collapse, New Chat `Ctrl+K`), Zone B (Modes list), Zone C (Projects, Recent Chats, User profile footer), real-time search filter over `/v1/sessions/search`.

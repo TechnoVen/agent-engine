@@ -24,6 +24,12 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+LLAMA_MODEL_PATH = os.path.join(
+    PROJECT_ROOT,
+    "models",
+    "qwen2.5-coder-3b-instruct-q4_k_m.gguf",
+)
+
 # Unlock thread restrictions across Streamlit re‑renders
 try:
     type(dspy.settings)._ensure_configure_allowed = lambda self: None
@@ -447,7 +453,7 @@ if not client_mode:
         os.system("pkill -f 'llama-server.*port 8080'")
         cmd = (
             f"/home/nadir/.local/lib/ollama/llama-server "
-            f"-m /home/nadir/agent_engine/models/qwen2.5-coder-3b-instruct-q4_k_m.gguf "
+            f"-m {LLAMA_MODEL_PATH} "
             f"-c {context_choice} --port 8080 > logs_llama_server.log 2>&1 &"
         )
         os.system(cmd)

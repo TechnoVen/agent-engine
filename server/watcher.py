@@ -167,7 +167,7 @@ class AutonomousPatchEngine(dspy.Module):
 
 from core.storage import get_storage_backend
 
-DB_PATH = "/home/nadir/agent_engine/data/audit_sentry.db"
+DB_PATH = os.path.join(PROJECT_ROOT, "data", "audit_sentry.db")
 
 
 def init_db(db_path: str = DB_PATH):
@@ -220,7 +220,7 @@ def reject_staged_patch(patch_id: int, db_path: str = DB_PATH) -> bool:
 # --- 4. FILE FILTERING & AGENTIGNORE ---
 
 
-def get_ignore_spec(root_dir: str = "/home/nadir/agent_engine") -> Optional[pathspec.PathSpec]:
+def get_ignore_spec(root_dir: str = PROJECT_ROOT) -> Optional[pathspec.PathSpec]:
     """Parse .agentignore file rules."""
     ignore_file = os.path.join(root_dir, ".agentignore")
     if not os.path.exists(ignore_file):
@@ -231,7 +231,7 @@ def get_ignore_spec(root_dir: str = "/home/nadir/agent_engine") -> Optional[path
 
 def should_ignore_file(
     file_path: str,
-    root_dir: str = "/home/nadir/agent_engine",
+    root_dir: str = PROJECT_ROOT,
     spec: Optional[pathspec.PathSpec] = None,
 ) -> bool:
     """Check if file matches .agentignore exclusion rules."""
@@ -406,9 +406,7 @@ class SentryWatchHandler(FileSystemEventHandler):
 # --- 6. CLI ENTRYPOINT ---
 
 
-def start_watcher(
-    watch_dir: str = "/home/nadir/agent_engine", auto_apply: bool = False, db_path: str = DB_PATH
-):
+def start_watcher(watch_dir: str = PROJECT_ROOT, auto_apply: bool = False, db_path: str = DB_PATH):
     """Initialize watchdog observer and start monitoring."""
     router = ModelRouter()
     lm, label = router.initialize_and_configure()
@@ -440,9 +438,7 @@ def start_watcher(
 
 def main():
     parser = argparse.ArgumentParser(description="Code Sentry & File Watcher Daemon")
-    parser.add_argument(
-        "--dir", default="/home/nadir/agent_engine", help="Directory path to monitor"
-    )
+    parser.add_argument("--dir", default=PROJECT_ROOT, help="Directory path to monitor")
     parser.add_argument(
         "--auto-apply", action="store_true", help="Automatically write patches to disk on detection"
     )

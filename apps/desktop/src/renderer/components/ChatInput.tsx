@@ -20,15 +20,21 @@ import {
   Check,
   Tag,
   Wand2,
+  Bot,
+  Code2,
+  Mail,
+  Search,
+  FileText,
 } from 'lucide-react';
-import { Mode, ModelTier, AttachmentFile, SkillItem, PluginItem, SelectedSkill } from '../types';
+import { Mode, ModelTier, AttachmentFile, SkillItem, PluginItem, SelectedSkill, AgentPersona } from '../types';
 import { SlashCommandPopup, SlashCommandItem, BUILT_IN_COMMANDS } from './SlashCommandPopup';
-import { sidecarClient } from '../api/client';
+import { sidecarClient, DEFAULT_PERSONAS } from '../api/client';
 
 export interface ChatInputProps {
   mode?: Mode;
   placeholder?: string;
   model: ModelTier;
+  personaId?: string;
   projectId?: string;
   projectName?: string;
   isStreaming?: boolean;
@@ -36,6 +42,7 @@ export interface ChatInputProps {
     message: string,
     options?: {
       model: ModelTier;
+      personaId?: string;
       projectId?: string;
       attachments?: AttachmentFile[];
       skill?: SelectedSkill;
@@ -45,6 +52,7 @@ export interface ChatInputProps {
   onStop?: () => void;
   onModeChange?: (mode: Mode) => void;
   onModelChange?: (model: ModelTier) => void;
+  onPersonaChange?: (persona: AgentPersona) => void;
   onProjectChange?: (projectId: string) => void;
   onClearChat?: () => void;
   inputRef?: React.RefObject<HTMLTextAreaElement>;
@@ -137,6 +145,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   mode = 'home',
   placeholder,
   model,
+  personaId = 'general',
   projectId,
   projectName,
   isStreaming = false,
@@ -144,6 +153,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   onStop,
   onModeChange,
   onModelChange,
+  onPersonaChange,
   onProjectChange,
   onClearChat,
   inputRef: externalInputRef,
@@ -153,9 +163,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const [prompt, setPrompt] = useState(initialValue);
   const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
+  const [personaDropdownOpen, setPersonaDropdownOpen] = useState(false);
   const [projectDropdownOpen, setProjectDropdownOpen] = useState(false);
   const [pluginsDropdownOpen, setPluginsDropdownOpen] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+
+  // Agent Personas state
+  const [activePersonaId, setActivePersonaId] = useState<string>(personaId);
+  const [personasCatalog, setPersonasCatalog] = useState<AgentPersona[]>(DEFAULT_PERSONAS);
 
   // Slash commands & Skills state
   const [skillsCatalog, setSkillsCatalog] = useState<SkillItem[]>([]);
@@ -171,16 +186,27 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeTextareaRef = externalInputRef || internalInputRef;
 
-  // Load skills catalog on mount
+  // Sync external personaId
+  useEffect(() => {
+    if (personaId) {
+      setActivePersonaId(personaId);
+    }
+  }, [personaId]);
+
+  // Load skills & personas catalog on mount
   useEffect(() => {
     let mounted = true;
-    const fetchSkills = async () => {
-      const list = await sidecarClient.getSkills();
+    const fetchCatalog = async () => {
+      const [skills, personas] = await Promise.all([
+        sidecarClient.getSkills(),
+        sidecarClient.getPersonas(),
+      ]);
       if (mounted) {
-        setSkillsCatalog(list);
+        if (skills && skills.length > 0) setSkillsCatalog(skills);
+        if (personas && personas.length > 0) setPersonasCatalog(personas);
       }
     };
-    fetchSkills();
+    fetchCatalog();
     return () => {
       mounted = false;
     };
@@ -378,6 +404,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
     onSend(cleanText, {
       model,
+      personaId: currentPersona.id,
       projectId,
       attachments: attachments.length > 0 ? attachments : undefined,
       skill: selectedSkill || undefined,
@@ -446,6 +473,38 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   const currentPlaceholder =
     placeholder || MODE_PLACEHOLDERS[mode] || MODE_PLACEHOLDERS.home;
+
+  const currentPersona =
+    personasCatalog.find((p) => p.id === activePersonaId) ||
+    personasCatalog[0] ||
+    DEFAULT_PERSONAS[0];
+
+  const handleSelectPersona = (p: AgentPersona) => {
+    setActivePersonaId(p.id);
+    setPersonaDropdownOpen(false);
+    onPersonaChange?.(p);
+    if (p.suggestedModel && p.suggestedModel !== model) {
+      onModelChange?.(p.suggestedModel);
+    }
+  };
+
+  const renderPersonaIcon = (avatarName: string, className = 'w-3.5 h-3.5') => {
+    switch (avatarName) {
+      case 'Code2':
+        return <Code2 className={className} />;
+      case 'Search':
+        return <Search className={className} />;
+      case 'FileText':
+        return <FileText className={className} />;
+      case 'ShieldCheck':
+        return <ShieldCheck className={className} />;
+      case 'Mail':
+        return <Mail className={className} />;
+      case 'Bot':
+      default:
+        return <Bot className={className} />;
+    }
+  };
 
   const renderPluginIcon = (iconName: string) => {
     switch (iconName) {
@@ -810,29 +869,119 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           </div>
         </div>
 
-        {/* Right cluster: Model Tier Dropdown & Send/Stop Button */}
-        <div className="flex items-center gap-2">
+        {/* Right cluster: Agent Persona, Model Tier Dropdown & Send/Stop Button */}
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          {/* Agent Persona Selector */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => {
+                setPersonaDropdownOpen(!personaDropdownOpen);
+                setModelDropdownOpen(false);
+                setProjectDropdownOpen(false);
+                setPluginsDropdownOpen(false);
+              }}
+              aria-label="Select agent persona"
+              title={`Agent Persona: ${currentPersona.name} (${currentPersona.role})`}
+              className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-bg-base hover:bg-bg-hover border border-border-subtle hover:border-border-strong text-xs text-text-primary transition-colors"
+            >
+              <span className="text-accent flex items-center justify-center">
+                {renderPersonaIcon(currentPersona.avatar)}
+              </span>
+              <span className="hidden sm:inline font-medium text-[11px] truncate max-w-[100px]">
+                {currentPersona.name}
+              </span>
+              <ChevronDown className="w-3 h-3 text-text-tertiary" />
+            </button>
+
+            {personaDropdownOpen && (
+              <div
+                role="listbox"
+                aria-label="Agent personas"
+                className="absolute right-0 bottom-full mb-1 w-72 bg-bg-elevated border border-border-strong rounded-lg shadow-2xl py-1 z-50 animate-in fade-in duration-100"
+              >
+                <div className="px-3 py-1.5 text-[10px] uppercase font-semibold text-text-tertiary tracking-wider border-b border-border-subtle flex items-center justify-between">
+                  <span>Agent Persona</span>
+                  <span className="text-[9px] text-text-secondary">Persona Co-Pilot</span>
+                </div>
+                <div className="max-h-60 overflow-y-auto py-1">
+                  {personasCatalog.map((p) => {
+                    const isSelected = p.id === activePersonaId;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => handleSelectPersona(p)}
+                        className={`w-full text-left px-3 py-2 hover:bg-bg-hover flex items-start gap-2.5 transition-colors ${
+                          isSelected ? 'bg-bg-hover/80' : ''
+                        }`}
+                      >
+                        <div className="p-1.5 rounded-md bg-bg-base border border-border-subtle text-accent mt-0.5 flex items-center justify-center">
+                          {renderPersonaIcon(p.avatar)}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-semibold text-text-primary truncate">
+                              {p.name}
+                            </span>
+                            <div className="flex items-center gap-1">
+                              <span className="px-1 py-0.2 text-[9px] font-mono rounded bg-bg-base border border-border-subtle text-text-secondary">
+                                {p.suggestedModel === 'instant' ? '$0.0002/1k' : p.suggestedModel === 'swarm' ? '$0.0015/1k' : '$0.0080/1k'}
+                              </span>
+                              {isSelected && <Check className="w-3.5 h-3.5 text-accent" />}
+                            </div>
+                          </div>
+                          <div className="text-[10px] text-accent font-medium">
+                            {p.role} · {p.pipelineName}
+                          </div>
+                          <div className="text-[10px] text-text-secondary line-clamp-1 mt-0.5">
+                            {p.description}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Quick Model Selector in Input */}
           <div className="relative">
             <button
               type="button"
-              onClick={() => setModelDropdownOpen(!modelDropdownOpen)}
+              onClick={() => {
+                setModelDropdownOpen(!modelDropdownOpen);
+                setPersonaDropdownOpen(false);
+                setProjectDropdownOpen(false);
+                setPluginsDropdownOpen(false);
+              }}
+              aria-label="Select model routing tier"
+              title={`Model Tier: ${currentTierConfig.label} (${currentTierConfig.rateStr})`}
               className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-bg-base hover:bg-bg-hover border border-border-subtle hover:border-border-strong text-xs text-text-primary transition-colors"
             >
               {currentTierConfig.icon}
               <span className="hidden md:inline font-medium text-[11px]">
                 {currentTierConfig.label}
               </span>
+              <span className="hidden xl:inline text-[10px] font-mono text-text-tertiary">
+                {currentTierConfig.rateStr}
+              </span>
               <ChevronDown className="w-3 h-3 text-text-tertiary" />
             </button>
 
             {modelDropdownOpen && (
-              <div className="absolute right-0 bottom-full mb-1 w-56 bg-bg-elevated border border-border-strong rounded-lg shadow-2xl py-1 z-50">
+              <div
+                role="listbox"
+                aria-label="Model tiers"
+                className="absolute right-0 bottom-full mb-1 w-56 bg-bg-elevated border border-border-strong rounded-lg shadow-2xl py-1 z-50 animate-in fade-in duration-100"
+              >
                 <div className="px-3 py-1 text-[10px] uppercase font-semibold text-text-tertiary tracking-wider border-b border-border-subtle">
                   Model Routing Tier
                 </div>
                 {(Object.keys(MODEL_TIER_CONFIG) as ModelTier[]).map((tierKey) => {
                   const item = MODEL_TIER_CONFIG[tierKey];
+                  const isSelected = model === tierKey;
                   return (
                     <button
                       key={tierKey}
@@ -842,7 +991,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                         setModelDropdownOpen(false);
                       }}
                       className={`w-full text-left px-3 py-1.5 hover:bg-bg-hover flex items-center justify-between transition-colors ${
-                        model === tierKey ? 'bg-bg-hover' : ''
+                        isSelected ? 'bg-bg-hover' : ''
                       }`}
                     >
                       <div className="flex items-center gap-2">
@@ -851,9 +1000,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                           {item.label}
                         </span>
                       </div>
-                      <span className="text-[10px] font-mono text-text-tertiary">
-                        {item.rateStr}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] font-mono text-text-tertiary">
+                          {item.rateStr}
+                        </span>
+                        {isSelected && <Check className="w-3 h-3 text-accent" />}
+                      </div>
                     </button>
                   );
                 })}

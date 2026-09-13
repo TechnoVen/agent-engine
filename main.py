@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
@@ -15,6 +16,8 @@ from server.watcher import (
     reject_staged_patch,
     start_watcher,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parent
 
 console = Console()
 
@@ -154,9 +157,7 @@ def main():
 
     # Watcher commands
     watch_p = subparsers.add_parser("watch", help="Start the Code Sentry / File-Watcher daemon")
-    watch_p.add_argument(
-        "--dir", default="/home/nadir/agent_engine", help="Directory path to monitor"
-    )
+    watch_p.add_argument("--dir", default=str(PROJECT_ROOT), help="Directory path to monitor")
     watch_p.add_argument(
         "--auto-apply", action="store_true", help="Automatically write patches to disk on detection"
     )
@@ -189,7 +190,7 @@ def main():
                 "-m",
                 "streamlit",
                 "run",
-                "/home/nadir/agent_engine/server/dashboard.py",
+                str(PROJECT_ROOT / "server" / "dashboard.py"),
                 "--server.port",
                 "8501",
                 "--server.headless",

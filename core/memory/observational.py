@@ -3,6 +3,7 @@ import os
 import re
 import time
 import uuid
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -12,6 +13,9 @@ from dotenv import load_dotenv
 from core.memory.vector import _CHROMA_CLIENTS
 
 load_dotenv()
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CHROMA_DIR = str(PROJECT_ROOT / "data" / "chroma")
 
 
 @dataclass
@@ -332,7 +336,7 @@ class ObservationalMemory:
         collection_name: str = "agent_observations",
     ):
         self.persist_directory = persist_directory or os.getenv(
-            "CHROMA_PERSIST_DIR", "/home/nadir/agent_engine/data/chroma"
+            "CHROMA_PERSIST_DIR", DEFAULT_CHROMA_DIR
         )
         os.makedirs(self.persist_directory, exist_ok=True)
 

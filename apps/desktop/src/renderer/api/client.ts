@@ -10,6 +10,7 @@ import {
   SkillItem,
   AuditLogEntry,
   RiskLevel,
+  AgentPersona,
 } from '../types';
 
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
@@ -211,6 +212,10 @@ class SidecarClient {
     }
 
     return DEFAULT_SKILLS_CATALOG;
+  }
+
+  async getPersonas(): Promise<AgentPersona[]> {
+    return DEFAULT_PERSONAS;
   }
 
   async executeSkill(
@@ -447,6 +452,69 @@ export const DEFAULT_SKILLS_CATALOG: SkillItem[] = [
       brief: 'Follow up with design team on Kimi-style universal shell feedback',
       tone: 'friendly professional',
     },
+  },
+];
+
+export const DEFAULT_PERSONAS: AgentPersona[] = [
+  {
+    id: 'general',
+    name: 'General Assistant',
+    role: 'Versatile Co-Pilot',
+    description: 'Fast, lightweight conversational agent for general queries, daily tasks, and planning.',
+    avatar: 'Bot',
+    suggestedModel: 'instant',
+    pipelineName: 'fast_text_generation',
+    badge: 'Fast',
+  },
+  {
+    id: 'coder',
+    name: 'Senior Engineer',
+    role: 'Full-Stack Developer',
+    description: 'Specializes in clean architectures, refactoring, unit tests, and bug fixes.',
+    avatar: 'Code2',
+    suggestedModel: 'swarm',
+    pipelineName: 'code_fix',
+    badge: 'Code',
+  },
+  {
+    id: 'researcher',
+    name: 'Deep Researcher',
+    role: 'Research Analyst',
+    description: 'Synthesizes domain literature, technical papers, and structured data.',
+    avatar: 'Search',
+    suggestedModel: 'reasoning',
+    pipelineName: 'finance_extract',
+    badge: 'Deep',
+  },
+  {
+    id: 'writer',
+    name: 'Technical Writer',
+    role: 'Content & Docs Author',
+    description: 'Drafts polished specifications, blog posts, and long-form chapters.',
+    avatar: 'FileText',
+    suggestedModel: 'instant',
+    pipelineName: 'chapter_write',
+    badge: 'Docs',
+  },
+  {
+    id: 'auditor',
+    name: 'Security Auditor',
+    role: 'Zero-Trust Safety Officer',
+    description: 'Inspects ASTs, vulnerability disclosures, and policy compliance.',
+    avatar: 'ShieldCheck',
+    suggestedModel: 'reasoning',
+    pipelineName: 'security_audit',
+    badge: 'Audit',
+  },
+  {
+    id: 'communicator',
+    name: 'Executive Drafter',
+    role: 'Corporate Communications',
+    description: 'Crafts high-impact executive summaries and tailored email correspondence.',
+    avatar: 'Mail',
+    suggestedModel: 'instant',
+    pipelineName: 'email_draft',
+    badge: 'Email',
   },
 ];
 

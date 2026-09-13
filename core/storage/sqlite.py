@@ -9,11 +9,13 @@ import os
 import sqlite3
 import threading
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.storage.base import StorageBackend
 
-DEFAULT_SQLITE_PATH = "/home/nadir/agent_engine/data/agent_engine.db"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_SQLITE_PATH = str(PROJECT_ROOT / "data" / "agent_engine.db")
 
 
 class SQLiteBackend(StorageBackend):

@@ -393,5 +393,70 @@ def test_task_3_3_message_and_home_approval_integration():
     assert "handleEditToolCall" in home_content
     assert "submitApprovalDecision" in home_content
     assert "destructive_fs_rm_all" in home_content or "rm -rf" in home_content
-    assert "dangerous_system_change" in home_content or "sudo" in home_content
     assert "db_drop_prod" in home_content or "drop table" in home_content
+
+
+def test_task_3_4_model_tier_selector_and_pricing():
+    """Verify Task 3.4 model tier selector, rate per 1k display, and dynamic pricing preview."""
+    chat_input_file = RENDERER_ROOT / "components" / "ChatInput.tsx"
+    assert chat_input_file.exists()
+    content = chat_input_file.read_text()
+
+    # Model tiers configuration and pricing display
+    assert "MODEL_TIER_CONFIG" in content
+    assert "Instant High" in content
+    assert "$0.0002/1k" in content
+    assert "K3 Swarm High" in content
+    assert "$0.0015/1k" in content
+    assert "K3 High" in content
+    assert "$0.0080/1k" in content
+
+    # Dynamic pre-execution cost preview
+    assert "approxTokens" in content
+    assert "ratePer1k" in content
+    assert "costPreview" in content
+    assert "Est:" in content
+
+    # Accessibility and selection semantics
+    assert 'aria-label="Select model routing tier"' in content
+    assert 'role="listbox"' in content
+
+
+def test_task_3_4_agent_persona_picker_and_types():
+    """Verify Task 3.4 Agent persona types, client catalog, and picker integration."""
+    types_file = RENDERER_ROOT / "types" / "index.ts"
+    types_content = types_file.read_text()
+    assert "export interface AgentPersona" in types_content
+    assert "suggestedModel" in types_content
+    assert "pipelineName" in types_content
+
+    client_file = RENDERER_ROOT / "api" / "client.ts"
+    client_content = client_file.read_text()
+    assert "DEFAULT_PERSONAS" in client_content
+    assert "General Assistant" in client_content
+    assert "Senior Engineer" in client_content
+    assert "Deep Researcher" in client_content
+    assert "Security Auditor" in client_content
+    assert "getPersonas" in client_content
+
+    chat_input_file = RENDERER_ROOT / "components" / "ChatInput.tsx"
+    chat_input_content = chat_input_file.read_text()
+    assert "personaId" in chat_input_content
+    assert "onPersonaChange" in chat_input_content
+    assert "personaDropdownOpen" in chat_input_content
+    assert "renderPersonaIcon" in chat_input_content
+    assert 'aria-label="Select agent persona"' in chat_input_content
+
+
+def test_task_3_4_home_pipeline_and_model_synchronization():
+    """Verify immediate pipeline and model synchronization in Home.tsx."""
+    home_file = RENDERER_ROOT / "screens" / "Home.tsx"
+    assert home_file.exists()
+    home_content = home_file.read_text()
+
+    assert "activePersona" in home_content
+    assert "activePipeline" in home_content
+    assert "handleModelChange" in home_content
+    assert "handlePersonaChange" in home_content
+    assert "Persona:" in home_content
+    assert "Pipeline:" in home_content

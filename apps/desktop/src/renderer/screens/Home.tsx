@@ -13,10 +13,10 @@ import {
   ArrowRight,
   FolderKanban,
 } from 'lucide-react';
-import { Mode, ModelTier, ChatMessage, AttachmentFile, SelectedSkill, ApprovalRequest } from '../types';
+import { Mode, ModelTier, ChatMessage, AttachmentFile, SelectedSkill, ApprovalRequest, AgentPersona } from '../types';
 import { ChatInput } from '../components/ChatInput';
 import { Message } from '../components/Message';
-import { sidecarClient } from '../api/client';
+import { sidecarClient, DEFAULT_PERSONAS } from '../api/client';
 
 export interface HomeProps {
   onSelectMode: (mode: Mode) => void;
@@ -225,11 +225,41 @@ export const Home: React.FC<HomeProps> = ({
   const [activeProjectId, setActiveProjectId] = useState<string>('');
   const [activeProjectName, setActiveProjectName] = useState<string>('');
   const [initialInputText, setInitialInputText] = useState('');
+  const [activePersona, setActivePersona] = useState<AgentPersona>(DEFAULT_PERSONAS[0]);
+  const [activePipeline, setActivePipeline] = useState<string>(DEFAULT_PERSONAS[0].pipelineName);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const internalInputRef = useRef<HTMLTextAreaElement>(null);
   const activeInputRef = externalInputRef || internalInputRef;
   const streamAbortController = useRef<{ aborted: boolean }>({ aborted: false });
+
+  // Update model and immediately sync pipeline state
+  const handleModelChange = useCallback(
+    (newModel: ModelTier) => {
+      onSelectModel?.(newModel);
+      // Map model to optimal execution tier pipeline
+      if (newModel === 'reasoning') {
+        setActivePipeline(activePersona.id === 'general' ? 'cot_reasoning' : activePersona.pipelineName);
+      } else if (newModel === 'swarm') {
+        setActivePipeline(activePersona.id === 'general' ? 'swarm_parallel' : activePersona.pipelineName);
+      } else {
+        setActivePipeline(activePersona.pipelineName);
+      }
+    },
+    [onSelectModel, activePersona]
+  );
+
+  // Switch persona and immediately activate persona pipeline and suggested model
+  const handlePersonaChange = useCallback(
+    (persona: AgentPersona) => {
+      setActivePersona(persona);
+      setActivePipeline(persona.pipelineName);
+      if (persona.suggestedModel && persona.suggestedModel !== activeModel) {
+        onSelectModel?.(persona.suggestedModel);
+      }
+    },
+    [activeModel, onSelectModel]
+  );
 
   // Auto-scroll when messages change or stream updates
   useEffect(() => {
@@ -783,6 +813,16 @@ All constraints satisfied. Ready for your follow-up command!`;
               <p className="text-sm text-text-secondary max-w-lg leading-relaxed">
                 Collaborate with your local-first multi-agent engine. 90% code & cache, 9% small models, 1% frontier.
               </p>
+              <div className="flex items-center justify-center gap-2 pt-1 text-xs text-text-tertiary">
+                <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-bg-elevated border border-border-subtle">
+                  <span className="text-accent">Persona:</span>
+                  <span className="text-text-primary font-medium">{activePersona.name}</span>
+                </span>
+                <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-bg-elevated border border-border-subtle font-mono text-[11px]">
+                  <span className="text-text-tertiary">Pipeline:</span>
+                  <span className="text-accent">{activePipeline}</span>
+                </span>
+              </div>
             </div>
 
             {/* Universal ChatInput Box */}
@@ -790,13 +830,15 @@ All constraints satisfied. Ready for your follow-up command!`;
               <ChatInput
                 mode="home"
                 model={activeModel}
+                personaId={activePersona.id}
                 projectId={activeProjectId}
                 projectName={activeProjectName}
                 isStreaming={isStreaming}
                 onSend={handleSend}
                 onStop={handleStop}
                 onModeChange={onSelectMode}
-                onModelChange={onSelectModel}
+                onModelChange={handleModelChange}
+                onPersonaChange={handlePersonaChange}
                 onProjectChange={handleProjectSelect}
                 onClearChat={handleResetChat}
                 inputRef={activeInputRef}
@@ -916,13 +958,15 @@ All constraints satisfied. Ready for your follow-up command!`;
             <ChatInput
               mode="home"
               model={activeModel}
+              personaId={activePersona.id}
               projectId={activeProjectId}
               projectName={activeProjectName}
               isStreaming={isStreaming}
               onSend={handleSend}
               onStop={handleStop}
               onModeChange={onSelectMode}
-              onModelChange={onSelectModel}
+              onModelChange={handleModelChange}
+              onPersonaChange={handlePersonaChange}
               onProjectChange={handleProjectSelect}
               onClearChat={handleResetChat}
               inputRef={activeInputRef}

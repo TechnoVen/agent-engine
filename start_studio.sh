@@ -14,7 +14,7 @@ set -e
 
 # 1. Parse Context Dynamic Arguments (Default to 4096 if unassigned)
 CONTEXT_SIZE=${1:-4096}
-PROJECT_DIR="/home/nadir/agent_engine"
+PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "$PROJECT_DIR/logs"
 
 echo -e "${GREEN}🎯 Target Workspace KV Cache Limit: ${CONTEXT_SIZE} Tokens${NC}"

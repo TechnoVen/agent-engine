@@ -747,3 +747,14 @@ apps/desktop/src/
 - Study → "Study" mode with RAG over PDFs
 
 Each mode uses the same shell, the same input, the same chat history, the same project system. The only differences are the skills, pipelines, and policies bound to each mode. **Adding a new vertical is a new mode + new skills, not a new app.**
+
+---
+
+## Part 9 — Screen Gallery & Visual Verification
+
+### Task 3.4 — Model & Agent Switcher (Home Screen)
+![Task 3.4 Model & Agent Switcher](screenshots/screen_task_3_4_home_model_switcher.png)
+1. **Interactive Routing Tiers:** Seamlessly toggle between `Instant High` ($0.0002/1k), `K3 Swarm High` ($0.0015/1k), and `K3 High` ($0.0080/1k) with live pre-execution cost estimation in the universal chat input.
+2. **Specialized Persona Selection:** Instantly switch agent personas (General Assistant, Senior Engineer, Deep Researcher, Security Auditor) with automatic model suggestions and pipeline synchronization.
+3. **Execution Transparency:** Home status badges dynamically reflect the active persona, backing pipeline, and cost parameters while strictly enforcing the 90/9/1 routing split.
+

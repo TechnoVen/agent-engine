@@ -227,3 +227,15 @@ export interface AuditLogEntry {
   suggestion?: string;
 }
 
+export interface AgentPersona {
+  id: string;
+  name: string;
+  role: string;
+  description: string;
+  avatar: string;
+  suggestedModel: ModelTier;
+  pipelineName: string;
+  systemPrompt?: string;
+  badge?: string;
+}
+
