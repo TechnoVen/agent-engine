@@ -204,10 +204,11 @@
   - **Deliverables:** `apps/desktop/src/renderer/components/ChatInput.tsx`, dynamic textarea, `+` file attachment button, mode chip, model dropdown, send arrow, project selector row, plugin toggle icons, token cost preview, `Ctrl+K` focus handler.
   - **Acceptance Criteria:** 60fps responsiveness on 10,000+ char input; handles paste image and drag-drop; token cost preview accurate to ±5%; zero duplication across screens; 25/25 desktop shell tests pass; 100% of monorepo tests pass (238/238).
   - **Status:** ✅ DONE
-- [ ] **Task 3.10 — Mode Landing Page Template (`ModePage.tsx`)**
+- [x] **Task 3.10 — Mode Landing Page Template (`ModePage.tsx`)**
   - **User Story:** As a user exploring different capabilities, I want rich empty states with curated example cases rather than blank screens.
   - **Deliverables:** `apps/desktop/src/renderer/components/ModePage.tsx`, reusable header with tagline, embedded `ChatInput`, category filter tabs, `FeaturedGrid.tsx` for example cards.
-  - **Acceptance Criteria:** Shared across all 8 modes (`/modes/{mode}`); switching modes preserves chat history; loads mode-specific skills automatically.
+  - **Acceptance Criteria:** Shared across all 8 modes (`/modes/{mode}`); switching modes preserves chat history; loads mode-specific skills automatically; 26/26 desktop shell tests pass; 100% of monorepo tests pass (239/239).
+  - **Status:** ✅ DONE
 - [ ] **Task 3.11 — Featured Cases Content Curation**
   - **User Story:** As a new user, I want inspirational, one-click prompts for Code, Deep Research, Docs, Sheets, Slides, Websites, Design, and Diagrams.
   - **Deliverables:** Curated case templates in `configs/cases/` and `apps/desktop/src/renderer/screens/Modes/` covering all 8 modes with realistic prompts, expected tool chains, and sample outputs.

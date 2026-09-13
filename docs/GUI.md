@@ -788,4 +788,11 @@ Each mode uses the same shell, the same input, the same chat history, the same p
 2. **Multi-Modal Clipboard Paste & Drag-Drop:** Direct clipboard paste support for image screenshots with base64 visual snippet previews and automatic observational memory grounding.
 3. **Calibrated ±5% Token Cost Estimator:** Accurate pre-execution token counting across code and English prose with model tier dropdown, global `Ctrl+K` auto-focus, and inline error banner.
 
+### Task 3.10 — Mode Landing Page Template & FeaturedGrid
+![Task 3.10 Mode Landing Page Template](screenshots/screen_task_3_10_mode_page_template.png)
+1. **Unified Capability Shell:** Dynamic ModePage template rendering across all 8 capability modes (Code, Deep Research, Docs, Sheets, Slides, Websites, Design, Diagrams) with specialized headers, pipeline badges, and category filters.
+2. **FeaturedGrid Case Templates:** Responsive card grid showcasing real-world problem templates with category filters, estimated cost per run, icon badges, and one-click prompt injection.
+3. **Persistent Chat & Zero-Duplication Reusability:** Embedded hardened `ChatInput` and conversation history preserved across mode switches with instant "New Session" reset and URL hash routing.
+
+
 

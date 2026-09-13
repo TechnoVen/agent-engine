@@ -706,3 +706,48 @@ def test_task_3_9_universal_chat_input_hardening():
     estimated_tokens = round(len(sample_text_10k.strip()) / 3.9)
     # Target range within ±5% of 2596 is [2466, 2725]
     assert 2466 <= estimated_tokens <= 2725
+
+
+def test_task_3_10_mode_landing_page_template():
+    """Verify Task 3.10 Mode Landing Page Template and FeaturedGrid across capability modes."""
+    grid_file = RENDERER_ROOT / "components" / "FeaturedGrid.tsx"
+    assert grid_file.exists(), "FeaturedGrid.tsx must exist"
+    grid_content = grid_file.read_text()
+
+    assert "export const FeaturedGrid" in grid_content
+    assert "FeaturedCardItem" in grid_content
+    assert "renderCardIcon" in grid_content
+    assert "onSelectCard" in grid_content
+
+    mode_page_file = RENDERER_ROOT / "components" / "ModePage.tsx"
+    assert mode_page_file.exists(), "ModePage.tsx must exist"
+    mode_page_content = mode_page_file.read_text()
+
+    assert "export const ModePage" in mode_page_content
+    assert "MODE_CONFIGS" in mode_page_content
+
+    # Check that all 8 capability modes are registered with rich configurations
+    expected_modes = [
+        "code",
+        "deep-research",
+        "docs",
+        "sheets",
+        "slides",
+        "websites",
+        "design",
+        "diagrams",
+    ]
+    for mode_name in expected_modes:
+        assert mode_name in mode_page_content, f"Mode '{mode_name}' missing from ModePage"
+
+    # Category filter tabs, chat input reuse, and message list
+    assert "activeCategory" in mode_page_content
+    assert "<ChatInput" in mode_page_content
+    assert "<FeaturedGrid" in mode_page_content
+    assert "<Message" in mode_page_content
+
+    # Wire into App.tsx
+    app_content = (RENDERER_ROOT / "App.tsx").read_text()
+    assert "ModePage" in app_content
+    for mode_name in expected_modes:
+        assert f"case '{mode_name}':" in app_content or f"'{mode_name}'" in app_content

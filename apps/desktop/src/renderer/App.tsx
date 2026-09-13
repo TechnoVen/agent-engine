@@ -3,6 +3,7 @@ import { Layout } from './shell/Layout';
 import { Home } from './screens/Home';
 import { Agent } from './screens/Agent';
 import { Tasks } from './screens/Tasks';
+import { ModePage } from './components/ModePage';
 import { Mode, ModelTier, SidecarHealth } from './types';
 import { sidecarClient } from './api/client';
 import { Sparkles } from 'lucide-react';
@@ -102,6 +103,23 @@ export const App: React.FC = () => {
       case 'tasks':
         return (
           <Tasks
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'code':
+      case 'deep-research':
+      case 'docs':
+      case 'sheets':
+      case 'slides':
+      case 'websites':
+      case 'design':
+      case 'diagrams':
+        return (
+          <ModePage
+            mode={activeMode}
             onSelectMode={setActiveMode}
             activeModel={activeModel}
             onSelectModel={setActiveModel}
