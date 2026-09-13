@@ -8,6 +8,7 @@ import { Sparkles } from 'lucide-react';
 export const App: React.FC = () => {
   const [activeMode, setActiveMode] = useState<Mode>('home');
   const [activeModel, setActiveModel] = useState<ModelTier>('instant');
+  const [activeSessionId, setActiveSessionId] = useState<string | undefined>('c1');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [health, setHealth] = useState<SidecarHealth>({ status: 'offline' });
 
@@ -92,6 +93,8 @@ export const App: React.FC = () => {
     <Layout
       activeMode={activeMode}
       onSelectMode={setActiveMode}
+      activeSessionId={activeSessionId}
+      onSelectSession={setActiveSessionId}
       activeModel={activeModel}
       onSelectModel={setActiveModel}
       sidebarCollapsed={sidebarCollapsed}

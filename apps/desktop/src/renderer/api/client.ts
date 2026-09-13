@@ -11,6 +11,7 @@ import {
   AuditLogEntry,
   RiskLevel,
   AgentPersona,
+  SessionSearchResult,
 } from '../types';
 
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
@@ -79,6 +80,20 @@ class SidecarClient {
       if (!res.ok) return [];
       const data = await res.json();
       return data.sessions || [];
+    } catch {
+      return [];
+    }
+  }
+
+  async searchSessions(query: string, limit = 20): Promise<SessionSearchResult[]> {
+    const trimmed = query.trim();
+    if (!trimmed) return [];
+    try {
+      const res = await fetch(
+        `${this.base}/v1/sessions/search?q=${encodeURIComponent(trimmed)}&limit=${limit}`
+      );
+      if (!res.ok) return [];
+      return await res.json();
     } catch {
       return [];
     }

@@ -179,10 +179,11 @@
   - **Deliverables:** Model tier selector in `ChatInput.tsx` (`Instant High`, `K3 Swarm High`, `K3 High`), agent persona picker, cost per 1k token display.
   - **Acceptance Criteria:** Changing model updates active pipeline immediately; estimated cost per run preview updates dynamically; 20/20 desktop shell tests pass; 100% of monorepo tests pass (233/233).
   - **Status:** ✅ DONE
-- [ ] **Task 3.5 — Session Sidebar & Search**
+- [x] **Task 3.5 — Session Sidebar & Search**
   - **User Story:** As a user, I want a 3-zone sidebar to manage global actions, modes, projects, and searchable chat history.
   - **Deliverables:** `Sidebar.tsx` with Zone A (Logo, collapse, New Chat `Ctrl+K`), Zone B (Modes list), Zone C (Projects, Recent Chats, User profile footer), real-time search filter over `/v1/sessions/search`.
-  - **Acceptance Criteria:** Sidebar collapses to icon strip; search finds keywords across titles and message contents; active session highlights cleanly.
+  - **Acceptance Criteria:** Sidebar collapses to icon strip; search finds keywords across titles and message contents; active session highlights cleanly; 21/21 desktop shell tests pass; 100% of monorepo tests pass (234/234).
+  - **Status:** ✅ DONE
 - [ ] **Task 3.6 — Document Drop & RAG Ingestion**
   - **User Story:** As a researcher/writer, I want to drag-and-drop PDFs, CSVs, and code files directly onto the chat canvas for immediate grounding.
   - **Deliverables:** Canvas drag-and-drop target, upload progress bar, multi-file chip attachments in `ChatInput.tsx`, sidecar `/v1/memory/observe` integration.

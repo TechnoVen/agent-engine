@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Sparkles,
   Clock,
@@ -25,12 +25,17 @@ import {
   FolderPlus,
   FolderKanban,
   MessageSquare,
+  X,
+  Loader2,
 } from 'lucide-react';
-import { Mode, Project, RecentChat } from '../types';
+import { Mode, Project, RecentChat, SessionSearchResult } from '../types';
+import { sidecarClient } from '../api/client';
 
 interface SidebarProps {
   activeMode: Mode;
   onSelectMode: (mode: Mode) => void;
+  activeSessionId?: string;
+  onSelectSession?: (sessionId: string) => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
   onNewChat: () => void;
@@ -41,6 +46,8 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({
   activeMode,
   onSelectMode,
+  activeSessionId,
+  onSelectSession,
   collapsed,
   onToggleCollapse,
   onNewChat,
@@ -54,6 +61,53 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'c3', title: 'Book Chapter 4', mode: 'docs', updatedAt: 'Yesterday' },
   ],
 }) => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<SessionSearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const trimmed = searchQuery.trim();
+    if (!trimmed) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+
+    let active = true;
+    setIsSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const results = await sidecarClient.searchSessions(trimmed);
+        if (active) {
+          setSearchResults(results);
+          setIsSearching(false);
+        }
+      } catch {
+        if (active) {
+          setSearchResults([]);
+          setIsSearching(false);
+        }
+      }
+    }, 200);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [searchQuery]);
+
+  const handleClearSearch = () => {
+    setSearchQuery('');
+    setSearchResults([]);
+  };
+
+  const handleKeyDownSearch = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Escape') {
+      handleClearSearch();
+      searchInputRef.current?.blur();
+    }
+  };
   const primaryModes: { id: Mode; label: string; icon: React.ReactNode }[] = [
     { id: 'agent', label: 'My Agent', icon: <Sparkles className="w-4 h-4 text-accent" /> },
     { id: 'tasks', label: 'Scheduled Tasks', icon: <Clock className="w-4 h-4 text-text-secondary" /> },
@@ -243,57 +297,189 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
 
-        {/* Projects Section */}
-        {!collapsed && (
-          <div>
-            <div className="flex items-center justify-between px-2.5 mb-1.5">
-              <span className="text-[10px] font-semibold tracking-wider text-text-tertiary uppercase">
-                Projects
-              </span>
-              <button
-                title="New Project"
-                onClick={() => onSelectMode('projects')}
-                className="text-text-tertiary hover:text-text-primary"
-              >
-                <FolderPlus className="w-3.5 h-3.5" />
-              </button>
-            </div>
-            <div className="space-y-0.5">
-              {projects.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => onSelectMode('projects')}
-                  className="w-full flex items-center justify-between px-2.5 py-1 rounded-md text-xs text-text-secondary hover:text-text-primary hover:bg-bg-hover/60 transition-colors"
-                >
-                  <span className="truncate flex items-center gap-1.5">
-                    <FolderKanban className="w-3.5 h-3.5 text-text-tertiary flex-shrink-0" />
-                    <span>{p.name}</span>
-                  </span>
-                  <span className="text-[10px] text-text-tertiary">{p.threadCount}</span>
-                </button>
-              ))}
-            </div>
+        {/* Collapsed strip extras */}
+        {collapsed && (
+          <div className="pt-2 border-t border-border-subtle space-y-1">
+            <button
+              onClick={() => {
+                onToggleCollapse();
+                setTimeout(() => searchInputRef.current?.focus(), 100);
+              }}
+              title="Search sessions (Ctrl+/)"
+              aria-label="Search sessions"
+              className="w-full flex items-center justify-center p-2 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover"
+            >
+              <Search className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => onSelectMode('projects')}
+              title="Projects"
+              aria-label="Projects"
+              className="w-full flex items-center justify-center p-2 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover"
+            >
+              <FolderKanban className="w-4 h-4" />
+            </button>
           </div>
         )}
 
-        {/* Recent Chats */}
+        {/* Zone C: Context (Search, Projects, Recent Chats) */}
         {!collapsed && (
-          <div>
-            <div className="px-2.5 mb-1.5 text-[10px] font-semibold tracking-wider text-text-tertiary uppercase">
-              Recent Chats
+          <div className="space-y-4 pt-2 border-t border-border-subtle">
+            {/* Real-Time Session Search */}
+            <div className="px-1">
+              <div
+                role="search"
+                className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-bg-base border border-border-subtle focus-within:border-accent/50 focus-within:ring-1 focus-within:ring-accent/30 transition-all text-xs"
+              >
+                <Search className="w-3.5 h-3.5 text-text-tertiary flex-shrink-0" />
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={handleKeyDownSearch}
+                  placeholder="Search sessions... (Esc)"
+                  aria-label="Search sessions"
+                  className="bg-transparent text-text-primary placeholder:text-text-tertiary focus:outline-none w-full text-xs"
+                />
+                {isSearching && <Loader2 className="w-3 h-3 text-accent animate-spin flex-shrink-0" />}
+                {searchQuery && !isSearching && (
+                  <button
+                    onClick={handleClearSearch}
+                    aria-label="Clear search"
+                    className="text-text-tertiary hover:text-text-primary p-0.5 rounded"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
             </div>
-            <div className="space-y-0.5">
-              {recentChats.map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => onSelectMode(c.mode)}
-                  className="w-full flex items-center gap-2 px-2.5 py-1 rounded-md text-xs text-text-secondary hover:text-text-primary hover:bg-bg-hover/60 transition-colors"
-                >
-                  <MessageSquare className="w-3 h-3 text-text-tertiary flex-shrink-0" />
-                  <span className="truncate text-left">{c.title}</span>
-                </button>
-              ))}
-            </div>
+
+            {/* If actively searching: show search results */}
+            {searchQuery.trim() ? (
+              <div className="space-y-1">
+                <div className="flex items-center justify-between px-2.5 mb-1.5">
+                  <span className="text-[10px] font-semibold tracking-wider text-text-tertiary uppercase">
+                    Search Results ({searchResults.length})
+                  </span>
+                  <button
+                    onClick={handleClearSearch}
+                    className="text-[10px] text-accent hover:underline"
+                  >
+                    Clear
+                  </button>
+                </div>
+                {searchResults.length === 0 && !isSearching ? (
+                  <div className="px-2.5 py-3 text-center text-xs text-text-tertiary">
+                    No sessions matching &ldquo;{searchQuery}&rdquo;
+                  </div>
+                ) : (
+                  <div className="space-y-1 max-h-48 overflow-y-auto px-1">
+                    {searchResults.map((res) => {
+                      const isSelected = activeSessionId === res.session_id;
+                      const snippet = res.matched_snippets?.[0]?.content;
+                      return (
+                        <button
+                          key={res.session_id}
+                          onClick={() => {
+                            onSelectSession?.(res.session_id);
+                            onSelectMode('home');
+                          }}
+                          aria-selected={isSelected}
+                          className={`w-full text-left p-2 rounded-lg text-xs transition-all ${
+                            isSelected
+                              ? 'bg-accent/15 text-accent font-medium border-l-2 border-accent'
+                              : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover/60 border border-transparent'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-1 mb-0.5">
+                            <span className="font-medium truncate text-text-primary">{res.title}</span>
+                            <span className="px-1 py-0.2 rounded bg-bg-base text-[9px] text-text-tertiary uppercase">
+                              {res.channel}
+                            </span>
+                          </div>
+                          {snippet && (
+                            <p className="text-[11px] text-text-tertiary line-clamp-1 italic">
+                              &ldquo;{snippet}&rdquo;
+                            </p>
+                          )}
+                          <div className="text-[10px] text-text-tertiary mt-0.5">
+                            {res.total_messages} messages
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <>
+                {/* Projects Section */}
+                <div>
+                  <div className="flex items-center justify-between px-2.5 mb-1.5">
+                    <span className="text-[10px] font-semibold tracking-wider text-text-tertiary uppercase">
+                      Projects
+                    </span>
+                    <button
+                      title="New Project"
+                      onClick={() => onSelectMode('projects')}
+                      aria-label="New Project"
+                      className="text-text-tertiary hover:text-text-primary p-0.5 rounded"
+                    >
+                      <FolderPlus className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <div className="space-y-0.5">
+                    {projects.map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={() => onSelectMode('projects')}
+                        className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs text-text-secondary hover:text-text-primary hover:bg-bg-hover/60 transition-colors"
+                      >
+                        <span className="truncate flex items-center gap-1.5">
+                          <FolderKanban className="w-3.5 h-3.5 text-text-tertiary flex-shrink-0" />
+                          <span>{p.name}</span>
+                        </span>
+                        <span className="text-[10px] text-text-tertiary">{p.threadCount}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Recent Chats */}
+                <div>
+                  <div className="px-2.5 mb-1.5 text-[10px] font-semibold tracking-wider text-text-tertiary uppercase">
+                    Recent Chats
+                  </div>
+                  <div className="space-y-0.5">
+                    {recentChats.map((c) => {
+                      const isSelected = activeSessionId === c.id;
+                      return (
+                        <button
+                          key={c.id}
+                          onClick={() => {
+                            onSelectSession?.(c.id);
+                            onSelectMode(c.mode);
+                          }}
+                          aria-selected={isSelected}
+                          className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs transition-colors ${
+                            isSelected
+                              ? 'bg-accent/15 text-accent font-medium border-l-2 border-accent'
+                              : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover/60'
+                          }`}
+                        >
+                          <span className="truncate flex items-center gap-2">
+                            <MessageSquare className="w-3.5 h-3.5 text-text-tertiary flex-shrink-0" />
+                            <span className="truncate text-left">{c.title}</span>
+                          </span>
+                          <span className="text-[10px] text-text-tertiary flex-shrink-0 ml-1">{c.updatedAt}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>

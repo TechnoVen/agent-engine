@@ -6,6 +6,8 @@ import { Mode, ModelTier, SidecarHealth } from '../types';
 interface LayoutProps {
   activeMode: Mode;
   onSelectMode: (mode: Mode) => void;
+  activeSessionId?: string;
+  onSelectSession?: (sessionId: string) => void;
   activeModel: ModelTier;
   onSelectModel: (model: ModelTier) => void;
   sidebarCollapsed: boolean;
@@ -18,6 +20,8 @@ interface LayoutProps {
 export const Layout: React.FC<LayoutProps> = ({
   activeMode,
   onSelectMode,
+  activeSessionId,
+  onSelectSession,
   activeModel,
   onSelectModel,
   sidebarCollapsed,
@@ -32,6 +36,8 @@ export const Layout: React.FC<LayoutProps> = ({
       <Sidebar
         activeMode={activeMode}
         onSelectMode={onSelectMode}
+        activeSessionId={activeSessionId}
+        onSelectSession={onSelectSession}
         collapsed={sidebarCollapsed}
         onToggleCollapse={onToggleSidebar}
         onNewChat={onNewChat}

@@ -758,3 +758,10 @@ Each mode uses the same shell, the same input, the same chat history, the same p
 2. **Specialized Persona Selection:** Instantly switch agent personas (General Assistant, Senior Engineer, Deep Researcher, Security Auditor) with automatic model suggestions and pipeline synchronization.
 3. **Execution Transparency:** Home status badges dynamically reflect the active persona, backing pipeline, and cost parameters while strictly enforcing the 90/9/1 routing split.
 
+### Task 3.5 — Session Sidebar & Search
+![Task 3.5 Session Sidebar & Search](screenshots/screen_task_3_5_sidebar_search.png)
+1. **Three-Zone Organization:** Structured desktop navigation combining Zone A global actions (New Chat with `Ctrl+K`), Zone B mode list, and Zone C context (Projects, Recent Chats, and Nadir user profile).
+2. **Real-Time Session Search:** Fast keyword search querying `/v1/sessions/search` with matched snippet previews, message counts, and keyboard escape reset (`Esc`).
+3. **Active State & Icon Strip Collapse:** Clean active session visual highlighting (`bg-accent/15`) with full collapse into a compact icon strip featuring tooltip-guided actions.
+
+

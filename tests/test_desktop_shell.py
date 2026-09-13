@@ -460,3 +460,53 @@ def test_task_3_4_home_pipeline_and_model_synchronization():
     assert "handlePersonaChange" in home_content
     assert "Persona:" in home_content
     assert "Pipeline:" in home_content
+
+
+def test_task_3_5_session_sidebar_and_search():
+    """Verify Task 3.5 Session Sidebar 3-zone structure, search filter, and active session highlighting."""
+    # 1. Type and client contract
+    types_file = RENDERER_ROOT / "types" / "index.ts"
+    assert "SessionSearchResult" in types_file.read_text()
+
+    client_file = RENDERER_ROOT / "api" / "client.ts"
+    client_content = client_file.read_text()
+    assert "searchSessions" in client_content
+    assert "/v1/sessions/search" in client_content
+
+    # 2. Sidebar component deliverables
+    sidebar_file = RENDERER_ROOT / "shell" / "Sidebar.tsx"
+    assert sidebar_file.exists()
+    sidebar_content = sidebar_file.read_text()
+
+    # Zone A: Logo, collapse, New Chat Ctrl+K
+    assert "New Chat" in sidebar_content
+    assert "Ctrl K" in sidebar_content
+    assert "onToggleCollapse" in sidebar_content
+
+    # Zone B: Modes list
+    assert "primaryModes" in sidebar_content
+    assert "capabilityModes" in sidebar_content
+
+    # Zone C: Projects, Recent Chats, User Profile, Real-time search
+    assert "searchQuery" in sidebar_content
+    assert "searchResults" in sidebar_content
+    assert "sidecarClient.searchSessions" in sidebar_content
+    assert "activeSessionId" in sidebar_content
+    assert "Search sessions" in sidebar_content
+    assert "Projects" in sidebar_content
+    assert "Recent Chats" in sidebar_content
+    assert "Nadir" in sidebar_content
+
+    # Collapsed mode icon strip
+    assert "collapsed" in sidebar_content
+
+    # 3. Layout & App prop wiring
+    layout_file = RENDERER_ROOT / "shell" / "Layout.tsx"
+    layout_content = layout_file.read_text()
+    assert "activeSessionId" in layout_content
+    assert "onSelectSession" in layout_content
+
+    app_file = RENDERER_ROOT / "App.tsx"
+    app_content = app_file.read_text()
+    assert "activeSessionId" in app_content
+    assert "setActiveSessionId" in app_content

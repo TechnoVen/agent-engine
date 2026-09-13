@@ -239,3 +239,17 @@ export interface AgentPersona {
   badge?: string;
 }
 
+export interface SessionSearchResult {
+  session_id: string;
+  title: string;
+  channel: string;
+  matched_snippets: Array<{
+    role?: string;
+    content?: string;
+    field?: string;
+  }>;
+  total_messages: number;
+  updated_at: string;
+}
+
+
