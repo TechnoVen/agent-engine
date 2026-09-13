@@ -600,3 +600,58 @@ def test_task_3_7_agent_screen_identity_memory_growth():
     client_file = RENDERER_ROOT / "api" / "client.ts"
     client_content = client_file.read_text()
     assert "queryObservations" in client_content
+
+
+def test_task_3_8_scheduled_tasks_screen():
+    """Verify Task 3.8 Scheduled Tasks Screen (Route /tasks, cron builder, off-peak Law 7, create modal, templates)."""
+    # 1. Tasks screen component existence
+    tasks_file = RENDERER_ROOT / "screens" / "Tasks.tsx"
+    assert tasks_file.exists(), "Tasks.tsx must exist"
+    content = tasks_file.read_text()
+
+    # 2. Plain-English cron builder and human translation
+    assert "cronToPlainEnglish" in content
+    assert "Plain-English preview" in content
+    assert "Off-Peak Engine (Law 7)" in content or "Law 7" in content
+
+    # 3. Create Dropdown & Modal with 3 creation paths
+    assert "Manually" in content
+    assert "Via chat" in content
+    assert "From template" in content
+
+    # 4. 4 Built-in Curated Templates
+    assert "Daily inbox digest at 8 AM" in content
+    assert "Weekly expense report Sunday 6 PM" in content
+    assert "Hourly code audit on save" in content
+    assert "Monthly book progress summary" in content
+
+    # 5. Off-peak default and channel notifications
+    assert "is_off_peak" in content
+    assert "notification_channel" in content
+    assert "slack" in content
+    assert "cost_per_run" in content
+    assert "monthly_estimate" in content
+
+    # 6. Embedded ChatInput and App.tsx route wiring
+    assert "ChatInput" in content
+    assert 'mode="tasks"' in content
+
+    app_file = RENDERER_ROOT / "App.tsx"
+    app_content = app_file.read_text()
+    assert "import { Tasks } from './screens/Tasks';" in app_content
+    assert "case 'tasks':" in app_content
+    assert "<Tasks" in app_content
+
+    # 7. Sidecar client and types contracts
+    client_file = RENDERER_ROOT / "api" / "client.ts"
+    client_content = client_file.read_text()
+    assert "listScheduledTasks" in client_content
+    assert "createScheduledTask" in client_content
+    assert "toggleScheduledTask" in client_content
+    assert "DEFAULT_SCHEDULED_TASKS" in client_content
+
+    types_file = RENDERER_ROOT / "types" / "index.ts"
+    types_content = types_file.read_text()
+    assert "ScheduledTask" in types_content
+    assert "TaskScheduleStatus" in types_content
+    assert "NotificationChannel" in types_content

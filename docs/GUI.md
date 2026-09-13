@@ -775,3 +775,10 @@ Each mode uses the same shell, the same input, the same chat history, the same p
 1. **Identity & 365-Day Contribution Heatmap:** Personal agent identity banner showing level, experience streak, and GitHub-style 365-day interaction heatmap rendering in <200ms with level grading.
 2. **Four Deep-Insight Tabs:** Structured tabs for Closeness (trust metrics, topic affinities), Growth (capability radars, milestones, skills unlocked), Memory (searchable observational ledger), and Cost (90/9/1 routing savings breakdown).
 3. **Observational Memory Ledger & Self-Growth Toggle:** Live inline memory search, editing, creation, and deletion backed by `/v1/memory/observe` with persistent per-user self-growth toggle and embedded universal chat input.
+
+### Task 3.8 — Scheduled Tasks Screen
+![Task 3.8 Scheduled Tasks Screen](screenshots/screen_task_3_8_scheduled_tasks.png)
+1. **Plain-English Cron Builder & Presets:** Human-readable cron schedule preview translating expressions in real-time, accompanied by quick presets for daily, weekly, and monthly automated execution.
+2. **Off-Peak Engine (Law 7) & Cost Tracking:** Default off-peak execution (02:00–06:00 window) to protect frontier token quotas with transparent cost-per-run and monthly spend projections.
+3. **Multi-Modal Creation & Channel Alerts:** Three creation pathways ("Manually", "Via chat", "From template") with four built-in routines and multi-channel failure alerts across Slack, Telegram, and webhooks.
+

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Layout } from './shell/Layout';
 import { Home } from './screens/Home';
 import { Agent } from './screens/Agent';
+import { Tasks } from './screens/Tasks';
 import { Mode, ModelTier, SidecarHealth } from './types';
 import { sidecarClient } from './api/client';
 import { Sparkles } from 'lucide-react';
@@ -92,6 +93,15 @@ export const App: React.FC = () => {
       case 'agent':
         return (
           <Agent
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'tasks':
+        return (
+          <Tasks
             onSelectMode={setActiveMode}
             activeModel={activeModel}
             onSelectModel={setActiveModel}

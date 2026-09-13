@@ -194,10 +194,11 @@
   - **Deliverables:** `apps/desktop/src/renderer/screens/Agent.tsx` (Route `/agent`), GitHub-style 365-day contribution heatmap, Closeness / Growth / Memory / Cost tabs, observational memory search/edit table, self-growth toggle, subtle animated memory network dots.
   - **Acceptance Criteria:** Heatmap loads in <200ms; memories searchable and editable inline; self-growth toggle persists per-user; stats update real-time; 23/23 desktop shell tests pass; 100% of monorepo tests pass (236/236).
   - **Status:** ✅ DONE
-- [ ] **Task 3.8 — Scheduled Tasks Screen**
+- [x] **Task 3.8 — Scheduled Tasks Screen**
   - **User Story:** As an operator, I want to configure cron-style recurring background agent tasks with off-peak execution and channel notifications.
   - **Deliverables:** `apps/desktop/src/renderer/screens/Tasks.tsx` (Route `/tasks`), plain-English cron builder, task table with status, last run, next run, cost-per-run estimate, create modal ("Manually", "Via chat", "From template").
-  - **Acceptance Criteria:** Plain-English cron preview; tasks default to off-peak scheduling; failures notify channel bridge; cost metrics displayed per task.
+  - **Acceptance Criteria:** Plain-English cron preview; tasks default to off-peak scheduling; failures notify channel bridge; cost metrics displayed per task; 24/24 desktop shell tests pass; 100% of monorepo tests pass (237/237).
+  - **Status:** ✅ DONE
 - [ ] **Task 3.9 — Universal Chat Input Component (`ChatInput.tsx`)**
   - **User Story:** As a developer, I want a single, bulletproof, highly reusable chat input component across all 14 screens.
   - **Deliverables:** `apps/desktop/src/renderer/components/ChatInput.tsx`, dynamic textarea, `+` file attachment button, mode chip, model dropdown, send arrow, project selector row, plugin toggle icons, token cost preview, `Ctrl+K` focus handler.

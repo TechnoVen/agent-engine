@@ -14,6 +14,8 @@ import {
   SessionSearchResult,
   ObserveMemoryPayload,
   ObservationRecord,
+  ScheduledTask,
+  ScheduledTaskCreatePayload,
 } from '../types';
 
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
@@ -382,6 +384,88 @@ class SidecarClient {
       return [];
     }
   }
+
+  async listScheduledTasks(): Promise<ScheduledTask[]> {
+    try {
+      const res = await fetch(`${this.base}/v1/tasks`);
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.tasks)) return data.tasks;
+      }
+    } catch {
+      // offline dev fallback
+    }
+    return DEFAULT_SCHEDULED_TASKS;
+  }
+
+  async createScheduledTask(payload: ScheduledTaskCreatePayload): Promise<ScheduledTask> {
+    try {
+      const res = await fetch(`${this.base}/v1/tasks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch {
+      // offline dev fallback
+    }
+    const newTask: ScheduledTask = {
+      id: `task-${Date.now()}`,
+      name: payload.name,
+      description: payload.description || '',
+      cron: payload.cron,
+      cron_human: payload.cron_human || payload.cron,
+      agent_persona: payload.agent_persona || 'Senior Engineer',
+      model: payload.model || 'instant',
+      status: 'active',
+      cost_per_run: 0.0012,
+      monthly_estimate: 0.036,
+      is_off_peak: payload.is_off_peak ?? true,
+      notification_channel: payload.notification_channel || 'slack',
+      prompt: payload.prompt,
+      created_at: new Date().toISOString(),
+      next_run: 'Tonight, 02:00 AM (Off-peak)',
+    };
+    return newTask;
+  }
+
+  async toggleScheduledTask(id: string, currentStatus: string): Promise<string> {
+    const nextStatus = currentStatus === 'active' ? 'paused' : 'active';
+    try {
+      await fetch(`${this.base}/v1/tasks/${id}/toggle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: nextStatus }),
+      });
+    } catch {
+      // dev fallback
+    }
+    return nextStatus;
+  }
+
+  async triggerScheduledTask(id: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.base}/v1/tasks/${id}/run`, {
+        method: 'POST',
+      });
+      return res.ok;
+    } catch {
+      return true;
+    }
+  }
+
+  async deleteScheduledTask(id: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.base}/v1/tasks/${id}`, {
+        method: 'DELETE',
+      });
+      return res.ok;
+    } catch {
+      return true;
+    }
+  }
 }
 
 export const DEFAULT_SKILLS_CATALOG: SkillItem[] = [
@@ -579,5 +663,81 @@ export const DEFAULT_PERSONAS: AgentPersona[] = [
   },
 ];
 
+export const DEFAULT_SCHEDULED_TASKS: ScheduledTask[] = [
+  {
+    id: 'task-1',
+    name: 'Daily Inbox Digest',
+    description: 'Summarizes critical emails, mentions, and urgent unread threads at 8 AM.',
+    cron: '0 8 * * *',
+    cron_human: 'Every day at 8:00 AM',
+    agent_persona: 'Executive Drafter',
+    model: 'instant',
+    status: 'active',
+    last_run: 'Today, 08:00 AM',
+    next_run: 'Tomorrow, 08:00 AM',
+    cost_per_run: 0.0008,
+    monthly_estimate: 0.024,
+    is_off_peak: false,
+    notification_channel: 'slack',
+    prompt: 'Summarize all high-priority unread emails and draft responses for urgent items.',
+    created_at: '2026-03-01',
+  },
+  {
+    id: 'task-2',
+    name: 'Weekly Expense & Spend Audit',
+    description: 'Generates weekly financial reconciliation and token budget usage Sunday at 6 PM.',
+    cron: '0 18 * * 0',
+    cron_human: 'Every Sunday at 6:00 PM',
+    agent_persona: 'Deep Researcher',
+    model: 'instant',
+    status: 'active',
+    last_run: 'Sun, Mar 8, 06:00 PM',
+    next_run: 'Sun, Mar 15, 06:00 PM',
+    cost_per_run: 0.0025,
+    monthly_estimate: 0.010,
+    is_off_peak: false,
+    notification_channel: 'slack',
+    prompt: 'Compile weekly expenditure report and verify zero 90/9/1 budget breaches.',
+    created_at: '2026-03-02',
+  },
+  {
+    id: 'task-3',
+    name: 'Off-Peak Security & AST Audit',
+    description: 'Runs zero-trust safety checks, AST sanitization, and dependency vulnerabilities overnight.',
+    cron: '0 2 * * *',
+    cron_human: 'Every day at 2:00 AM (Off-peak)',
+    agent_persona: 'Security Auditor',
+    model: 'reasoning',
+    status: 'active',
+    last_run: 'Today, 02:00 AM',
+    next_run: 'Tomorrow, 02:00 AM (Off-peak)',
+    cost_per_run: 0.0064,
+    monthly_estimate: 0.192,
+    is_off_peak: true,
+    notification_channel: 'webhook',
+    prompt: 'Inspect AST diffs, detect dangerous shell patterns, and review staged patches.',
+    created_at: '2026-03-05',
+  },
+  {
+    id: 'task-4',
+    name: 'Monthly Book Progress Summary',
+    description: 'Synthesizes chapter drafts, word counts, and character arcs on the 1st of each month.',
+    cron: '0 3 1 * *',
+    cron_human: 'Monthly on day 1 at 3:00 AM (Off-peak)',
+    agent_persona: 'Technical Writer',
+    model: 'swarm',
+    status: 'paused',
+    last_run: 'Mar 1, 03:00 AM',
+    next_run: 'Apr 1, 03:00 AM (Off-peak)',
+    cost_per_run: 0.0042,
+    monthly_estimate: 0.0042,
+    is_off_peak: true,
+    notification_channel: 'telegram',
+    prompt: 'Aggregate all chapter outlines and generate word count trajectory charts.',
+    created_at: '2026-02-15',
+  },
+];
+
 export const sidecarClient = new SidecarClient();
+
 

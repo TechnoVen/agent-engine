@@ -272,4 +272,39 @@ export interface SessionSearchResult {
   updated_at: string;
 }
 
+export type TaskScheduleStatus = 'active' | 'paused' | 'running' | 'error';
+export type NotificationChannel = 'whatsapp' | 'telegram' | 'slack' | 'webhook';
+
+export interface ScheduledTask {
+  id: string;
+  name: string;
+  description: string;
+  cron: string;
+  cron_human: string;
+  agent_persona: string;
+  model: ModelTier;
+  status: TaskScheduleStatus;
+  last_run?: string;
+  next_run?: string;
+  cost_per_run: number;
+  monthly_estimate: number;
+  is_off_peak: boolean;
+  notification_channel: NotificationChannel;
+  prompt: string;
+  created_at: string;
+}
+
+export interface ScheduledTaskCreatePayload {
+  name: string;
+  description?: string;
+  cron: string;
+  cron_human?: string;
+  agent_persona?: string;
+  model?: ModelTier;
+  is_off_peak?: boolean;
+  notification_channel?: NotificationChannel;
+  prompt: string;
+}
+
+
 
