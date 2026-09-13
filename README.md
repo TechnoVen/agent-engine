@@ -10,6 +10,15 @@
 
 ---
 
+### 📚 Documentation Quicklinks
+- 📘 [**User Guide & Operational Manual**](docs/USER_GUIDE.md) — End-to-end guide for launching, screens, modes, and keyboard shortcuts.
+- 🧭 [**GUI Specifications & Screen Gallery**](docs/GUI.md) — Design tokens, component contracts, and visual verification gallery.
+- 🗺️ [**Master Roadmap**](docs/ROADMAP.md) — Phases 0–14 execution plan (Phases 0–3 complete, 240/240 tests passing).
+- 🧠 [**Engineering Memory**](MEMORY.md) — Architectural memory, state snapshot, and upcoming Phase 4 tasks.
+- 💰 [**Cost Optimization Guide**](docs/COST_OPTIMIZATION_GUIDE.md) — The 90/9/1 token optimization framework.
+
+---
+
 ## 📖 Overview
 
 **Agent Engine** is a **cross-platform, local-first, multi-agent studio** that lets anyone (developer, author, business owner, enterprise) build, run, supervise, and deploy AI agents — locally or in the cloud — with safety, memory, workflow orchestration, cost discipline, and human approval built in.
