@@ -116,6 +116,26 @@ export interface AttachmentFile {
   size: number;
   type: string;
   url?: string;
+  snippet?: string;
+  uploadProgress?: number;
+  status?: 'pending' | 'uploading' | 'indexed' | 'error';
+}
+
+export interface ObserveMemoryPayload {
+  content: string;
+  category?: string;
+  importance?: number;
+  session_id?: string;
+  metadata?: Record<string, any>;
+}
+
+export interface ObservationRecord {
+  id: string;
+  content: string;
+  category?: string;
+  importance?: number;
+  created_at?: string;
+  session_id?: string;
 }
 
 export interface MessageMetadata {

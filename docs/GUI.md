@@ -764,4 +764,11 @@ Each mode uses the same shell, the same input, the same chat history, the same p
 2. **Real-Time Session Search:** Fast keyword search querying `/v1/sessions/search` with matched snippet previews, message counts, and keyboard escape reset (`Esc`).
 3. **Active State & Icon Strip Collapse:** Clean active session visual highlighting (`bg-accent/15`) with full collapse into a compact icon strip featuring tooltip-guided actions.
 
+### Task 3.6 — Document Drop & RAG Ingestion
+![Task 3.6 Document Drop & RAG Ingestion](screenshots/screen_task_3_6_document_drop_rag.png)
+1. **Interactive Drag Target:** Native full-canvas drag-and-drop overlay welcoming PDFs, CSVs, code files (.ts, .py, .rs), and Markdown with zero token overhead.
+2. **Observational Ingestion & Progress:** Real-time upload progress tracking with automatic sidecar grounding into ChromaDB vector and observational memory (`/v1/memory/observe`).
+3. **Multi-File Attachment Chips & Snippet Inspection:** Rich chips in universal `ChatInput` with indexed status badges, upload indicators, and one-click snippet previews before dispatch.
+
+
 

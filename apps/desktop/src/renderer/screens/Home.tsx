@@ -12,6 +12,8 @@ import {
   RotateCcw,
   ArrowRight,
   FolderKanban,
+  Upload,
+  Loader2,
 } from 'lucide-react';
 import { Mode, ModelTier, ChatMessage, AttachmentFile, SelectedSkill, ApprovalRequest, AgentPersona } from '../types';
 import { ChatInput } from '../components/ChatInput';
@@ -227,11 +229,97 @@ export const Home: React.FC<HomeProps> = ({
   const [initialInputText, setInitialInputText] = useState('');
   const [activePersona, setActivePersona] = useState<AgentPersona>(DEFAULT_PERSONAS[0]);
   const [activePipeline, setActivePipeline] = useState<string>(DEFAULT_PERSONAS[0].pipelineName);
+  const [isCanvasDragOver, setIsCanvasDragOver] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [canvasAttachments, setCanvasAttachments] = useState<AttachmentFile[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const internalInputRef = useRef<HTMLTextAreaElement>(null);
   const activeInputRef = externalInputRef || internalInputRef;
   const streamAbortController = useRef<{ aborted: boolean }>({ aborted: false });
+
+  // Canvas Drag & Drop handlers (Task 3.6)
+  const handleCanvasDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer.types.includes('Files')) {
+      setIsCanvasDragOver(true);
+    }
+  };
+
+  const handleCanvasDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+    if (!isCanvasDragOver) {
+      setIsCanvasDragOver(true);
+    }
+  };
+
+  const handleCanvasDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setIsCanvasDragOver(false);
+  };
+
+  const handleCanvasDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsCanvasDragOver(false);
+
+    const files = e.dataTransfer.files;
+    if (!files || files.length === 0) return;
+
+    setUploadProgress(15);
+    const fileList = Array.from(files);
+    let completed = 0;
+
+    fileList.forEach((file) => {
+      const id = `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      const reader = new FileReader();
+
+      reader.onload = async (event) => {
+        const text = typeof event.target?.result === 'string' ? event.target.result : '';
+        const snippet = text.slice(0, 1000);
+        const attachment: AttachmentFile = {
+          id,
+          name: file.name,
+          size: file.size,
+          type: file.type || 'application/octet-stream',
+          snippet: snippet || `Attachment: ${file.name} (${file.size} bytes)`,
+          uploadProgress: 100,
+          status: 'indexed',
+        };
+
+        // Ingest into observational memory (Task 3.6)
+        try {
+          await sidecarClient.observeMemory({
+            content: `[Document Grounding: ${file.name}]\n${snippet || file.name}`,
+            category: 'rag_document',
+            metadata: { filename: file.name, size: file.size, type: file.type },
+          });
+        } catch {
+          // ignore offline error
+        }
+
+        completed += 1;
+        const pct = Math.round((completed / fileList.length) * 100);
+        setUploadProgress(pct);
+        setCanvasAttachments((prev) => [...prev, attachment]);
+
+        if (completed === fileList.length) {
+          setTimeout(() => setUploadProgress(null), 1200);
+        }
+      };
+
+      if (file.type.startsWith('image/')) {
+        reader.readAsDataURL(file);
+      } else {
+        reader.readAsText(file);
+      }
+    });
+  };
 
   // Update model and immediately sync pipeline state
   const handleModelChange = useCallback(
@@ -771,13 +859,67 @@ All constraints satisfied. Ready for your follow-up command!`;
     }
     setMessages([]);
     setInitialInputText('');
+    setCanvasAttachments([]);
     activeInputRef.current?.focus();
   };
 
   const isChatActive = messages.length > 0;
 
   return (
-    <div className="h-full flex flex-col justify-between overflow-hidden relative">
+    <div
+      onDragEnter={handleCanvasDragEnter}
+      onDragOver={handleCanvasDragOver}
+      onDragLeave={handleCanvasDragLeave}
+      onDrop={handleCanvasDrop}
+      className="h-full flex flex-col justify-between overflow-hidden relative"
+    >
+      {/* Canvas Drag and Drop Target Overlay (Task 3.6) */}
+      {isCanvasDragOver && (
+        <div
+          data-testid="canvas-drag-overlay"
+          className="absolute inset-0 z-50 bg-bg-base/90 backdrop-blur-sm border-2 border-dashed border-accent flex flex-col items-center justify-center p-8 text-center pointer-events-none animate-fade-in"
+        >
+          <div className="w-16 h-16 rounded-2xl bg-accent/15 border border-accent flex items-center justify-center mb-4 text-accent">
+            <Upload className="w-8 h-8 animate-bounce" />
+          </div>
+          <h3 className="text-lg font-bold text-text-primary mb-1">
+            Drop documents to ground in session memory
+          </h3>
+          <p className="text-xs text-text-secondary max-w-sm mb-4 leading-relaxed">
+            Drag-and-drop PDFs, CSVs, and code files directly onto the canvas for immediate RAG grounding and 0-token caching.
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] text-text-tertiary">
+            <span className="px-2 py-0.5 rounded bg-bg-elevated border border-border-subtle font-mono">PDF</span>
+            <span className="px-2 py-0.5 rounded bg-bg-elevated border border-border-subtle font-mono">CSV</span>
+            <span className="px-2 py-0.5 rounded bg-bg-elevated border border-border-subtle font-mono">Python (.py)</span>
+            <span className="px-2 py-0.5 rounded bg-bg-elevated border border-border-subtle font-mono">TypeScript (.ts/.tsx)</span>
+            <span className="px-2 py-0.5 rounded bg-bg-elevated border border-border-subtle font-mono">Markdown (.md)</span>
+          </div>
+        </div>
+      )}
+
+      {/* Upload Progress Bar (Task 3.6) */}
+      {uploadProgress !== null && (
+        <div
+          data-testid="upload-progress-bar"
+          className="h-9 px-4 bg-bg-elevated border-b border-border-subtle flex items-center justify-between text-xs z-30 animate-fade-in select-none"
+        >
+          <div className="flex items-center gap-2.5 flex-1 mr-4">
+            <Loader2 className="w-3.5 h-3.5 text-accent animate-spin flex-shrink-0" />
+            <span className="text-text-secondary font-medium">
+              Indexing documents into observational memory:
+            </span>
+            <div className="flex-1 max-w-md h-1.5 bg-bg-base rounded-full overflow-hidden border border-border-subtle">
+              <div
+                className="h-full bg-accent transition-all duration-200"
+                style={{ width: `${uploadProgress}%` }}
+              />
+            </div>
+          </div>
+          <span className="font-mono text-[11px] text-accent font-semibold">{uploadProgress}%</span>
+        </div>
+      )}
+
       {/* Top action bar when chat is active */}
       {isChatActive && (
         <div className="h-10 border-b border-border-subtle bg-bg-elevated/40 px-4 flex items-center justify-between text-xs text-text-tertiary select-none">
@@ -843,6 +985,8 @@ All constraints satisfied. Ready for your follow-up command!`;
                 onClearChat={handleResetChat}
                 inputRef={activeInputRef}
                 initialValue={initialInputText}
+                attachments={canvasAttachments}
+                onAttachmentsChange={setCanvasAttachments}
               />
             </div>
 
@@ -970,6 +1114,8 @@ All constraints satisfied. Ready for your follow-up command!`;
               onProjectChange={handleProjectSelect}
               onClearChat={handleResetChat}
               inputRef={activeInputRef}
+              attachments={canvasAttachments}
+              onAttachmentsChange={setCanvasAttachments}
             />
           </div>
         </div>

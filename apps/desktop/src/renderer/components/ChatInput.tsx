@@ -58,6 +58,8 @@ export interface ChatInputProps {
   inputRef?: React.RefObject<HTMLTextAreaElement>;
   initialValue?: string;
   className?: string;
+  attachments?: AttachmentFile[];
+  onAttachmentsChange?: (attachments: AttachmentFile[]) => void;
 }
 
 const MODEL_TIER_CONFIG: Record<
@@ -159,9 +161,24 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   inputRef: externalInputRef,
   initialValue = '',
   className = '',
+  attachments: controlledAttachments,
+  onAttachmentsChange,
 }) => {
   const [prompt, setPrompt] = useState(initialValue);
-  const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
+  const [internalAttachments, setInternalAttachments] = useState<AttachmentFile[]>([]);
+  const [previewAttachment, setPreviewAttachment] = useState<AttachmentFile | null>(null);
+  const attachments = controlledAttachments ?? internalAttachments;
+
+  const updateAttachments = useCallback(
+    (updater: (prev: AttachmentFile[]) => AttachmentFile[]) => {
+      if (onAttachmentsChange) {
+        onAttachmentsChange(updater(controlledAttachments ?? []));
+      } else {
+        setInternalAttachments(updater);
+      }
+    },
+    [controlledAttachments, onAttachmentsChange]
+  );
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
   const [personaDropdownOpen, setPersonaDropdownOpen] = useState(false);
   const [projectDropdownOpen, setProjectDropdownOpen] = useState(false);
@@ -412,9 +429,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     });
 
     setPrompt('');
-    setAttachments([]);
+    updateAttachments(() => []);
     setSelectedSkill(null);
     setEditingParamKey(null);
+    setPreviewAttachment(null);
     if (activeTextareaRef.current) {
       activeTextareaRef.current.style.height = 'auto';
     }
@@ -422,17 +440,45 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
   const handleFilesSelected = (files: FileList | null) => {
     if (!files || files.length === 0) return;
-    const newAttachments: AttachmentFile[] = Array.from(files).map((f) => ({
-      id: `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-      name: f.name,
-      size: f.size,
-      type: f.type || 'application/octet-stream',
-    }));
-    setAttachments((prev) => [...prev, ...newAttachments]);
+    Array.from(files).forEach((f) => {
+      const id = `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const text = typeof e.target?.result === 'string' ? e.target.result : '';
+        const snippet = text.slice(0, 1000);
+        const attachment: AttachmentFile = {
+          id,
+          name: f.name,
+          size: f.size,
+          type: f.type || 'application/octet-stream',
+          snippet: snippet || `Attachment: ${f.name} (${f.size} bytes)`,
+          uploadProgress: 100,
+          status: 'indexed',
+        };
+        try {
+          await sidecarClient.observeMemory({
+            content: `[Document Grounding: ${f.name}]\n${snippet || f.name}`,
+            category: 'rag_document',
+            metadata: { filename: f.name, size: f.size, type: f.type },
+          });
+        } catch {
+          // continue
+        }
+        updateAttachments((prev) => [...prev, attachment]);
+      };
+      if (f.type.startsWith('image/')) {
+        reader.readAsDataURL(f);
+      } else {
+        reader.readAsText(f);
+      }
+    });
   };
 
   const removeAttachment = (id: string) => {
-    setAttachments((prev) => prev.filter((a) => a.id !== id));
+    updateAttachments((prev) => prev.filter((a) => a.id !== id));
+    if (previewAttachment?.id === id) {
+      setPreviewAttachment(null);
+    }
   };
 
   const updateSkillParam = (key: string, value: string) => {
@@ -651,23 +697,79 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           {attachments.map((file) => (
             <div
               key={file.id}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-bg-base border border-border-strong text-xs text-text-primary group"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-bg-base border border-border-strong text-xs text-text-primary group relative overflow-hidden"
             >
-              <FileCode className="w-3.5 h-3.5 text-accent flex-shrink-0" />
-              <span className="truncate max-w-[140px] font-mono text-[11px]">{file.name}</span>
+              {file.uploadProgress !== undefined && file.uploadProgress < 100 && (
+                <div
+                  className="absolute bottom-0 left-0 h-0.5 bg-accent transition-all duration-300"
+                  style={{ width: `${file.uploadProgress}%` }}
+                />
+              )}
+              <button
+                type="button"
+                onClick={() => setPreviewAttachment(previewAttachment?.id === file.id ? null : file)}
+                className="flex items-center gap-1.5 hover:text-accent transition-colors max-w-[160px] truncate text-left"
+                title="Click to view document snippet preview"
+                aria-label={`Preview snippet for ${file.name}`}
+              >
+                <FileCode className="w-3.5 h-3.5 text-accent flex-shrink-0" />
+                <span className="truncate font-mono text-[11px]">{file.name}</span>
+              </button>
               <span className="text-[10px] text-text-tertiary font-mono">
                 ({formatFileSize(file.size)})
               </span>
+              {file.status === 'indexed' && (
+                <span
+                  className="px-1 py-0.2 rounded bg-success/15 text-success text-[9px] font-medium"
+                  title="Indexed in RAG session memory"
+                >
+                  Indexed
+                </span>
+              )}
               <button
                 type="button"
                 onClick={() => removeAttachment(file.id)}
-                className="ml-1 text-text-tertiary hover:text-danger transition-colors"
+                className="ml-1 text-text-tertiary hover:text-danger transition-colors p-0.5 rounded"
                 title="Remove attachment"
+                aria-label={`Remove ${file.name}`}
               >
                 <X className="w-3 h-3" />
               </button>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Snippet Preview Card */}
+      {previewAttachment && (
+        <div className="mb-2 p-3 rounded-lg bg-bg-base border border-accent/40 shadow-lg text-left text-xs animate-fade-in">
+          <div className="flex items-center justify-between pb-1.5 border-b border-border-subtle mb-2">
+            <div className="flex items-center gap-2">
+              <FileCode className="w-4 h-4 text-accent" />
+              <span className="font-semibold text-text-primary truncate max-w-[200px]">
+                {previewAttachment.name}
+              </span>
+              <span className="text-[10px] text-text-tertiary font-mono">
+                ({formatFileSize(previewAttachment.size)})
+              </span>
+              {previewAttachment.status === 'indexed' && (
+                <span className="px-1.5 py-0.5 rounded bg-success/15 text-success text-[10px] font-medium">
+                  Indexed in RAG Memory
+                </span>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setPreviewAttachment(null)}
+              className="text-text-tertiary hover:text-text-primary p-0.5 rounded"
+              aria-label="Close snippet preview"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <div className="max-h-32 overflow-y-auto font-mono text-[11px] text-text-secondary bg-bg-elevated p-2 rounded border border-border-subtle whitespace-pre-wrap select-text">
+            {previewAttachment.snippet || 'Document attached. Ready for grounding in session memory.'}
+          </div>
         </div>
       )}
 

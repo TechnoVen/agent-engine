@@ -510,3 +510,40 @@ def test_task_3_5_session_sidebar_and_search():
     app_content = app_file.read_text()
     assert "activeSessionId" in app_content
     assert "setActiveSessionId" in app_content
+
+
+def test_task_3_6_document_drop_and_rag_ingestion():
+    """Verify Task 3.6 Canvas drag-and-drop target, upload progress bar, multi-file chip attachments, and memory observation."""
+    # 1. Type and client contract
+    types_file = RENDERER_ROOT / "types" / "index.ts"
+    types_content = types_file.read_text()
+    assert "snippet?:" in types_content
+    assert "uploadProgress?:" in types_content
+    assert "ObserveMemoryPayload" in types_content
+    assert "ObservationRecord" in types_content
+
+    client_file = RENDERER_ROOT / "api" / "client.ts"
+    client_content = client_file.read_text()
+    assert "observeMemory" in client_content
+    assert "/v1/memory/observe" in client_content
+    assert "ingestMemory" in client_content
+    assert "/v1/memory/ingest" in client_content
+
+    # 2. ChatInput multi-file chips, progress and snippet preview
+    chat_input_file = RENDERER_ROOT / "components" / "ChatInput.tsx"
+    chat_input_content = chat_input_file.read_text()
+    assert "previewAttachment" in chat_input_content
+    assert "observeMemory" in chat_input_content
+    assert "snippet" in chat_input_content
+    assert "Indexed in RAG Memory" in chat_input_content
+    assert "uploadProgress" in chat_input_content
+
+    # 3. Canvas Drag-and-Drop and Progress Bar in Home.tsx
+    home_file = RENDERER_ROOT / "screens" / "Home.tsx"
+    home_content = home_file.read_text()
+    assert "handleCanvasDragEnter" in home_content
+    assert "handleCanvasDragOver" in home_content
+    assert "handleCanvasDrop" in home_content
+    assert "canvas-drag-overlay" in home_content
+    assert "upload-progress-bar" in home_content
+    assert "canvasAttachments" in home_content

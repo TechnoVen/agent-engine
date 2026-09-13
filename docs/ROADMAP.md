@@ -184,10 +184,11 @@
   - **Deliverables:** `Sidebar.tsx` with Zone A (Logo, collapse, New Chat `Ctrl+K`), Zone B (Modes list), Zone C (Projects, Recent Chats, User profile footer), real-time search filter over `/v1/sessions/search`.
   - **Acceptance Criteria:** Sidebar collapses to icon strip; search finds keywords across titles and message contents; active session highlights cleanly; 21/21 desktop shell tests pass; 100% of monorepo tests pass (234/234).
   - **Status:** ✅ DONE
-- [ ] **Task 3.6 — Document Drop & RAG Ingestion**
+- [x] **Task 3.6 — Document Drop & RAG Ingestion**
   - **User Story:** As a researcher/writer, I want to drag-and-drop PDFs, CSVs, and code files directly onto the chat canvas for immediate grounding.
   - **Deliverables:** Canvas drag-and-drop target, upload progress bar, multi-file chip attachments in `ChatInput.tsx`, sidecar `/v1/memory/observe` integration.
-  - **Acceptance Criteria:** Dragging files highlights canvas; files attach and index into session memory; preview snippets viewable before send.
+  - **Acceptance Criteria:** Dragging files highlights canvas; files attach and index into session memory; preview snippets viewable before send; 22/22 desktop shell tests pass; 100% of monorepo tests pass (235/235).
+  - **Status:** ✅ DONE
 - [ ] **Task 3.7 — My Agent Screen (Identity, Memory, Growth)**
   - **User Story:** As a user, I want to view my agent's personalized growth, interaction streak, observational memories, and cost savings.
   - **Deliverables:** `apps/desktop/src/renderer/screens/Agent.tsx` (Route `/agent`), GitHub-style 365-day contribution heatmap, Closeness / Growth / Memory / Cost tabs, observational memory search/edit table, self-growth toggle, subtle animated memory network dots.

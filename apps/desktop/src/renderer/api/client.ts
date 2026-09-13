@@ -12,6 +12,8 @@ import {
   RiskLevel,
   AgentPersona,
   SessionSearchResult,
+  ObserveMemoryPayload,
+  ObservationRecord,
 } from '../types';
 
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
@@ -96,6 +98,37 @@ class SidecarClient {
       return await res.json();
     } catch {
       return [];
+    }
+  }
+
+  async observeMemory(payload: ObserveMemoryPayload): Promise<ObservationRecord | null> {
+    try {
+      const res = await fetch(`${this.base}/v1/memory/observe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  async ingestMemory(
+    content: string,
+    source: string = 'attachment'
+  ): Promise<{ document_id: string; count: number } | null> {
+    try {
+      const res = await fetch(`${this.base}/v1/memory/ingest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, source }),
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
     }
   }
 
