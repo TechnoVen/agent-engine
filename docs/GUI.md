@@ -770,5 +770,8 @@ Each mode uses the same shell, the same input, the same chat history, the same p
 2. **Observational Ingestion & Progress:** Real-time upload progress tracking with automatic sidecar grounding into ChromaDB vector and observational memory (`/v1/memory/observe`).
 3. **Multi-File Attachment Chips & Snippet Inspection:** Rich chips in universal `ChatInput` with indexed status badges, upload indicators, and one-click snippet previews before dispatch.
 
-
-
+### Task 3.7 — My Agent Screen (Identity, Memory, Growth)
+![Task 3.7 My Agent Screen](screenshots/screen_task_3_7_agent_screen.png)
+1. **Identity & 365-Day Contribution Heatmap:** Personal agent identity banner showing level, experience streak, and GitHub-style 365-day interaction heatmap rendering in <200ms with level grading.
+2. **Four Deep-Insight Tabs:** Structured tabs for Closeness (trust metrics, topic affinities), Growth (capability radars, milestones, skills unlocked), Memory (searchable observational ledger), and Cost (90/9/1 routing savings breakdown).
+3. **Observational Memory Ledger & Self-Growth Toggle:** Live inline memory search, editing, creation, and deletion backed by `/v1/memory/observe` with persistent per-user self-growth toggle and embedded universal chat input.

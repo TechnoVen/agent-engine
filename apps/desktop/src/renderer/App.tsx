@@ -1,16 +1,42 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Layout } from './shell/Layout';
 import { Home } from './screens/Home';
+import { Agent } from './screens/Agent';
 import { Mode, ModelTier, SidecarHealth } from './types';
 import { sidecarClient } from './api/client';
 import { Sparkles } from 'lucide-react';
 
 export const App: React.FC = () => {
-  const [activeMode, setActiveMode] = useState<Mode>('home');
+  const getHashMode = (): Mode => {
+    const raw = window.location.hash.replace('#/', '').replace('#', '');
+    const validModes: Mode[] = [
+      'home', 'agent', 'tasks', 'swarm', 'workflows', 'code', 'deep-research',
+      'docs', 'sheets', 'slides', 'websites', 'design', 'diagrams', 'channels',
+      'skills', 'marketplace', 'cost', 'policies', 'benchmarks', 'settings', 'projects'
+    ];
+    return validModes.includes(raw as Mode) ? (raw as Mode) : 'home';
+  };
+
+  const [activeMode, setActiveModeState] = useState<Mode>(getHashMode);
   const [activeModel, setActiveModel] = useState<ModelTier>('instant');
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>('c1');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [health, setHealth] = useState<SidecarHealth>({ status: 'offline' });
+
+  const setActiveMode = (mode: Mode) => {
+    setActiveModeState(mode);
+    if (window.location.hash !== `#${mode}`) {
+      window.location.hash = `#${mode}`;
+    }
+  };
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      setActiveModeState(getHashMode());
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
 
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -57,6 +83,15 @@ export const App: React.FC = () => {
       case 'home':
         return (
           <Home
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'agent':
+        return (
+          <Agent
             onSelectMode={setActiveMode}
             activeModel={activeModel}
             onSelectModel={setActiveModel}

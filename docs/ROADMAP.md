@@ -189,10 +189,11 @@
   - **Deliverables:** Canvas drag-and-drop target, upload progress bar, multi-file chip attachments in `ChatInput.tsx`, sidecar `/v1/memory/observe` integration.
   - **Acceptance Criteria:** Dragging files highlights canvas; files attach and index into session memory; preview snippets viewable before send; 22/22 desktop shell tests pass; 100% of monorepo tests pass (235/235).
   - **Status:** ✅ DONE
-- [ ] **Task 3.7 — My Agent Screen (Identity, Memory, Growth)**
+- [x] **Task 3.7 — My Agent Screen (Identity, Memory, Growth)**
   - **User Story:** As a user, I want to view my agent's personalized growth, interaction streak, observational memories, and cost savings.
   - **Deliverables:** `apps/desktop/src/renderer/screens/Agent.tsx` (Route `/agent`), GitHub-style 365-day contribution heatmap, Closeness / Growth / Memory / Cost tabs, observational memory search/edit table, self-growth toggle, subtle animated memory network dots.
-  - **Acceptance Criteria:** Heatmap loads in <200ms; memories searchable and editable inline; self-growth toggle persists per-user; stats update real-time.
+  - **Acceptance Criteria:** Heatmap loads in <200ms; memories searchable and editable inline; self-growth toggle persists per-user; stats update real-time; 23/23 desktop shell tests pass; 100% of monorepo tests pass (236/236).
+  - **Status:** ✅ DONE
 - [ ] **Task 3.8 — Scheduled Tasks Screen**
   - **User Story:** As an operator, I want to configure cron-style recurring background agent tasks with off-peak execution and channel notifications.
   - **Deliverables:** `apps/desktop/src/renderer/screens/Tasks.tsx` (Route `/tasks`), plain-English cron builder, task table with status, last run, next run, cost-per-run estimate, create modal ("Manually", "Via chat", "From template").

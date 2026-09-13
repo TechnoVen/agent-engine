@@ -132,6 +132,19 @@ class SidecarClient {
     }
   }
 
+  async queryObservations(query: string, topK = 20): Promise<any[]> {
+    try {
+      const res = await fetch(
+        `${this.base}/v1/memory/observations?query=${encodeURIComponent(query)}&top_k=${topK}`
+      );
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.observations || [];
+    } catch {
+      return [];
+    }
+  }
+
   async getCredentials(service?: string): Promise<CredentialItem[]> {
     try {
       const query = service ? `?service=${encodeURIComponent(service)}` : '';

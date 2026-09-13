@@ -547,3 +547,56 @@ def test_task_3_6_document_drop_and_rag_ingestion():
     assert "canvas-drag-overlay" in home_content
     assert "upload-progress-bar" in home_content
     assert "canvasAttachments" in home_content
+
+
+def test_task_3_7_agent_screen_identity_memory_growth():
+    """Verify Task 3.7 My Agent Screen (Identity, 365-day heatmap, memory ledger, self-growth toggle)."""
+    # 1. Agent screen component existence
+    agent_file = RENDERER_ROOT / "screens" / "Agent.tsx"
+    assert agent_file.exists(), "Agent.tsx must exist"
+    content = agent_file.read_text()
+
+    # 2. Identity and 365-day heatmap
+    assert "Nadir's Agent" in content or "Agent" in content
+    assert "heatmapData" in content
+    assert "364" in content or "365" in content
+    assert "level" in content
+
+    # 3. 4 Tabs: Closeness, Growth, Memory, Cost
+    assert "closeness" in content
+    assert "growth" in content
+    assert "memory" in content
+    assert "cost" in content
+
+    # 4. Observational memory search and inline editing
+    assert "filteredMemories" in content
+    assert "handleStartEdit" in content
+    assert "handleSaveEdit" in content
+    assert "handleDeleteMemory" in content
+    assert "handleCreateMemory" in content
+    assert "Search memory entries" in content or "searchQuery" in content
+
+    # 5. Self-growth toggle with persistent preference
+    assert "selfGrowthEnabled" in content
+    assert "agent-engine-self-growth" in content
+    assert "aria-checked" in content
+    assert "Self-Growth" in content
+
+    # 6. Animated SVG memory network dots
+    assert "<svg" in content
+    assert "network-canvas" in content or "animate-pulse" in content
+
+    # 7. Embedded ChatInput and App.tsx route wiring
+    assert "ChatInput" in content
+    assert 'mode="agent"' in content
+
+    app_file = RENDERER_ROOT / "App.tsx"
+    app_content = app_file.read_text()
+    assert "import { Agent } from './screens/Agent';" in app_content
+    assert "case 'agent':" in app_content
+    assert "<Agent" in app_content
+
+    # 8. Sidecar client memory observations contract
+    client_file = RENDERER_ROOT / "api" / "client.ts"
+    client_content = client_file.read_text()
+    assert "queryObservations" in client_content
