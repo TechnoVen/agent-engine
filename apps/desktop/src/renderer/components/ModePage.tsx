@@ -399,10 +399,15 @@ export const ModePage: React.FC<ModePageProps> = ({
     );
   }, [allCases, activeCategory]);
 
+  const [initialInputText, setInitialInputText] = useState('');
+
   const handleSelectCase = (card: FeaturedCardItem) => {
+    setInitialInputText(card.prompt);
     if (inputRef?.current) {
       inputRef.current.value = card.prompt;
       inputRef.current.focus();
+      const event = new Event('input', { bubbles: true });
+      inputRef.current.dispatchEvent(event);
     }
   };
 
@@ -537,6 +542,7 @@ export const ModePage: React.FC<ModePageProps> = ({
           <ChatInput
             mode={mode}
             model={activeModel}
+            initialValue={initialInputText}
             onSend={(msg) => handleSendMessage(msg)}
             onStop={() => setIsStreaming(false)}
             isStreaming={isStreaming}

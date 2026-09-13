@@ -21,6 +21,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from core.cache import get_semantic_cache
+from core.cases import get_case_manager
 from core.config import get_feature_flags, require_flag, set_flag_override
 from core.context import ContextSpec, MissingContextFieldError, build_context
 from core.eval import EvalSample, ModelEvalReport, ModelEvalSuite, get_golden_dataset
@@ -909,6 +910,80 @@ async def run_pipeline(name: str, req: PipelineRunRequest):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Execution of pipeline '{name}' failed: {e}",
         )
+
+
+class FeaturedCaseInfo(BaseModel):
+    id: str
+    title: str
+    category: str
+    description: str
+    mode: str
+    icon_name: str = "sparkles"
+    est_cost: str = "$0.0010"
+    tags: List[str] = Field(default_factory=list)
+    prompt: str
+    expected_tools: List[str] = Field(default_factory=list)
+    sample_output: str
+
+
+class ModeCasesInfo(BaseModel):
+    mode: str
+    title: str
+    tagline: str
+    badge: str
+    pipeline: str
+    categories: List[str] = Field(default_factory=list)
+    cases: List[FeaturedCaseInfo] = Field(default_factory=list)
+
+
+@v1_router.get("/cases", response_model=List[ModeCasesInfo])
+async def list_curated_cases(
+    query: Optional[str] = Query(None, description="Search term across curated cases"),
+    mode: Optional[str] = Query(None, description="Filter by capability mode"),
+):
+    """List curated featured case templates across capability modes."""
+    manager = get_case_manager()
+    if query:
+        matched = manager.search(query, mode=mode)
+        return [
+            ModeCasesInfo(
+                mode=mode or "search",
+                title=f"Search: '{query}'",
+                tagline=f"Found {len(matched)} curated cases matching '{query}'",
+                badge="Search",
+                pipeline="default",
+                categories=["All"],
+                cases=[
+                    FeaturedCaseInfo(**(c.model_dump() if hasattr(c, "model_dump") else c.dict()))
+                    for c in matched
+                ],
+            )
+        ]
+
+    configs = (
+        [manager.get_mode_config(mode)]
+        if mode and manager.get_mode_config(mode)
+        else manager.list_all_modes()
+    )
+    return [
+        ModeCasesInfo(**(c.model_dump() if hasattr(c, "model_dump") else c.dict()))
+        for c in configs
+        if c
+    ]
+
+
+@v1_router.get("/cases/{mode}", response_model=ModeCasesInfo)
+async def get_curated_mode_cases(mode: str):
+    """Retrieve curated case configuration for a specific capability mode."""
+    manager = get_case_manager()
+    conf = manager.get_mode_config(mode)
+    if not conf:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No curated cases configured for mode '{mode}'.",
+        )
+    dumped = conf.model_dump() if hasattr(conf, "model_dump") else conf.dict()
+    return ModeCasesInfo(**dumped)
 
 
 @v1_router.get("/memory", response_model=MemoryQueryResponse)

@@ -1,0 +1,96 @@
+{
+  "mode": "diagrams",
+  "title": "Diagrams & Architecture",
+  "tagline": "Synthesize clear Mermaid diagrams, sequence flows, C4 models, and topology maps",
+  "badge": "Diagram Engine",
+  "pipeline": "summarize",
+  "categories": [
+    "All",
+    "System Architecture",
+    "Sequence Flows",
+    "Data Pipelines",
+    "Cloud Topology"
+  ],
+  "cases": [
+    {
+      "id": "diagrams-1",
+      "title": "Sidecar Process Supervision Sequence Diagram",
+      "category": "Sequence Flows",
+      "description": "Visualize Tauri Rust supervisor, SHA-256 pre-check, and Python FastAPI heartbeat handshake.",
+      "mode": "diagrams",
+      "icon_name": "network",
+      "est_cost": "$0.0010 (Small Model)",
+      "tags": [
+        "Mermaid",
+        "Sequence",
+        "Supervisor"
+      ],
+      "prompt": "Generate a Mermaid sequence diagram showing Tauri Rust shell spawning the Python sidecar, polling /healthz, and graceful SIGTERM shutdown.",
+      "expected_tools": [
+        "mermaid_linter",
+        "diagram_synthesizer"
+      ],
+      "sample_output": "```mermaid\nsequenceDiagram\n  autonumber\n  participant T as Tauri Rust Shell\n  participant S as Python Sidecar\n  T->>S: Spawn child process (binaries/agent-engine-sidecar)\n  loop Health Check\n    T->>S: GET /healthz\n    S-->>T: 200 OK (status: live)\n  end\n  T->>S: SIGTERM on app close\n  S-->>T: Exit 0 (graceful cleanup)\n```"
+    },
+    {
+      "id": "diagrams-2",
+      "title": "C4 Container Architecture Map",
+      "category": "System Architecture",
+      "description": "Document system boundaries, desktop frontend, local sidecar, and external model provider APIs.",
+      "mode": "diagrams",
+      "icon_name": "network",
+      "est_cost": "$0.0015 (Mid Model)",
+      "tags": [
+        "C4",
+        "Architecture",
+        "Mermaid"
+      ],
+      "prompt": "Create a C4 container diagram in Mermaid detailing the Agent Engine desktop client, local databases, and external LLM endpoints.",
+      "expected_tools": [
+        "c4_modeler",
+        "mermaid_linter"
+      ],
+      "sample_output": "```mermaid\ngraph TD\n  User((User)) -->|Interacts| UI[Tauri Desktop App]\n  UI -->|Local HTTP/SSE| API[FastAPI Sidecar]\n  API -->|Read/Write| DB[(SQLite / ChromaDB)]\n  API -->|Outbound HTTPS| LLM[Frontier Providers]\n```"
+    },
+    {
+      "id": "diagrams-3",
+      "title": "Law 1: 90/9/1 Execution Router Flow",
+      "category": "Data Pipelines",
+      "description": "Diagram step classification through Code AST, Semantic Cache, Small Model, and Frontier Escalation.",
+      "mode": "diagrams",
+      "icon_name": "network",
+      "est_cost": "$0.0012 (Small Model)",
+      "tags": [
+        "Router",
+        "90/9/1",
+        "Flowchart"
+      ],
+      "prompt": "Draw a flowchart illustrating how incoming pipeline steps are routed across CODE (90%), MID (9%), and FRONTIER (1%) tiers.",
+      "expected_tools": [
+        "mermaid_linter",
+        "router_flow_builder"
+      ],
+      "sample_output": "```mermaid\nflowchart TD\n  Start[Step Input] --> Cache{Cache Hit?}\n  Cache -->|Yes| C1[CACHE Tier: $0]\n  Cache -->|No| Code{Deterministic AST?}\n  Code -->|Yes| C2[CODE Tier: $0]\n  Code -->|No| Eval{Complexity Check}\n  Eval -->|Routine| S1[SMALL / MID Tier: 9%]\n  Eval -->|Complex| F1[FRONTIER Tier: <= 1%]\n```"
+    },
+    {
+      "id": "diagrams-4",
+      "title": "Offline-First Data Sync & Conflict Topology",
+      "category": "Cloud Topology",
+      "description": "Model local SQLite transactions, CRDT vector clocks, and optional cloud backup synchronization.",
+      "mode": "diagrams",
+      "icon_name": "network",
+      "est_cost": "$0.0018 (Mid Model)",
+      "tags": [
+        "CRDT",
+        "Sync",
+        "Topology"
+      ],
+      "prompt": "Model an offline-first data sync topology between desktop local SQLite and remote PostgreSQL using conflict-free merge rules.",
+      "expected_tools": [
+        "topology_mapper",
+        "mermaid_linter"
+      ],
+      "sample_output": "Mermaid diagram generated illustrating local writes to WAL log and monotonic vector clock synchronization with cloud replicas."
+    }
+  ]
+}

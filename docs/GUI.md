@@ -794,5 +794,12 @@ Each mode uses the same shell, the same input, the same chat history, the same p
 2. **FeaturedGrid Case Templates:** Responsive card grid showcasing real-world problem templates with category filters, estimated cost per run, icon badges, and one-click prompt injection.
 3. **Persistent Chat & Zero-Duplication Reusability:** Embedded hardened `ChatInput` and conversation history preserved across mode switches with instant "New Session" reset and URL hash routing.
 
+### Task 3.11 — Featured Cases Content Curation
+![Task 3.11 Featured Cases Content Curation](screenshots/screen_task_3_11_featured_cases.png)
+1. **32 Production-Curated Templates:** Declarative case configurations across all 8 capability modes (`configs/cases/`) detailing real-world problems, realistic prompts, expected tool chains, and formatted sample outputs.
+2. **Dedicated Mode Architecture:** Modular screen components in `apps/desktop/src/renderer/screens/Modes/` wrapping `ModePage` with mode-specific category chips, cost estimates, and tool badges.
+3. **One-Click Frictionless Prompt Injection:** Clicking any featured card dynamically populates the hardened `ChatInput` with one-click runnable prompts and triggers input events for immediate execution.
+
+
 
 

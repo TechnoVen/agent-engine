@@ -3,7 +3,16 @@ import { Layout } from './shell/Layout';
 import { Home } from './screens/Home';
 import { Agent } from './screens/Agent';
 import { Tasks } from './screens/Tasks';
-import { ModePage } from './components/ModePage';
+import {
+  CodeMode,
+  ResearchMode,
+  DocsMode,
+  SheetsMode,
+  SlidesMode,
+  WebsitesMode,
+  DesignMode,
+  DiagramsMode,
+} from './screens/Modes';
 import { Mode, ModelTier, SidecarHealth } from './types';
 import { sidecarClient } from './api/client';
 import { Sparkles } from 'lucide-react';
@@ -110,16 +119,71 @@ export const App: React.FC = () => {
           />
         );
       case 'code':
+        return (
+          <CodeMode
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
       case 'deep-research':
+        return (
+          <ResearchMode
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
       case 'docs':
+        return (
+          <DocsMode
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
       case 'sheets':
+        return (
+          <SheetsMode
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
       case 'slides':
+        return (
+          <SlidesMode
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
       case 'websites':
+        return (
+          <WebsitesMode
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
       case 'design':
+        return (
+          <DesignMode
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
       case 'diagrams':
         return (
-          <ModePage
-            mode={activeMode}
+          <DiagramsMode
             onSelectMode={setActiveMode}
             activeModel={activeModel}
             onSelectModel={setActiveModel}

@@ -1,0 +1,97 @@
+{
+  "mode": "slides",
+  "title": "Presentation Slides",
+  "tagline": "Transform unstructured briefs into presentation structures, speaker notes, and narratives",
+  "badge": "Slide Engine",
+  "pipeline": "summarize",
+  "categories": [
+    "All",
+    "Pitch Decks",
+    "Technical Reviews",
+    "Executive Updates",
+    "Keynotes"
+  ],
+  "cases": [
+    {
+      "id": "slides-1",
+      "title": "Seed-Round Pitch Deck Narrative (10 Slides)",
+      "category": "Pitch Decks",
+      "description": "Craft Sequoia-style pitch deck outline with problem statement, secret sauce, business model, and ask.",
+      "mode": "slides",
+      "icon_name": "presentation",
+      "est_cost": "$0.0024 (Mid Model)",
+      "tags": [
+        "PitchDeck",
+        "Venture",
+        "Sequoia"
+      ],
+      "prompt": "Generate a 10-slide venture pitch deck outline for an enterprise local-first AI engine, including slide titles, visual layout, and key bullets.",
+      "expected_tools": [
+        "slide_narrative_planner",
+        "layout_optimizer",
+        "speaker_note_generator"
+      ],
+      "sample_output": "## Slide 1: Title & Hook\n- **Headline:** The Local-First Sovereign AI Engine\n- **Visual:** Minimal dark theme with glowing local node network\n- **Speaker Notes:** Introduce the massive enterprise shift from cloud API leaks to zero-trust on-prem compute."
+    },
+    {
+      "id": "slides-2",
+      "title": "Quarterly Business Review (QBR)",
+      "category": "Executive Updates",
+      "description": "Structure an executive review slide deck highlighting OKRs, financial milestones, and strategic bets.",
+      "mode": "slides",
+      "icon_name": "presentation",
+      "est_cost": "$0.0020 (Mid Model)",
+      "tags": [
+        "QBR",
+        "Executive",
+        "OKRs"
+      ],
+      "prompt": "Draft a 6-slide QBR presentation reviewing product engineering velocity, cost reduction achievements, and next quarter OKRs.",
+      "expected_tools": [
+        "slide_narrative_planner",
+        "metric_formatter"
+      ],
+      "sample_output": "QBR presentation structure generated with 6 slides, data tables for sprint velocity, and bulleted strategic priorities."
+    },
+    {
+      "id": "slides-3",
+      "title": "System Architecture Deep-Dive Deck",
+      "category": "Technical Reviews",
+      "description": "Technical slide walkthrough detailing microservices, IPC message protocols, and failover mechanics.",
+      "mode": "slides",
+      "icon_name": "presentation",
+      "est_cost": "$0.0018 (Mid Model)",
+      "tags": [
+        "Architecture",
+        "DeepDive",
+        "Engineering"
+      ],
+      "prompt": "Outline a technical architecture presentation for staff engineers explaining our Rust/Tauri IPC protocol and local sidecar supervision.",
+      "expected_tools": [
+        "slide_narrative_planner",
+        "diagram_embedder"
+      ],
+      "sample_output": "Technical slide deck outline generated with clear diagrams, IPC protocol sequencing, and security boundary guarantees."
+    },
+    {
+      "id": "slides-4",
+      "title": "Developer Conference Keynote",
+      "category": "Keynotes",
+      "description": "Engaging, high-impact keynote narrative with live demo cues and audience takeaway hooks.",
+      "mode": "slides",
+      "icon_name": "presentation",
+      "est_cost": "$0.0028 (Frontier Model)",
+      "tags": [
+        "Keynote",
+        "Conference",
+        "Inspiration"
+      ],
+      "prompt": "Write a 15-minute developer conference keynote structure on 'The Death of Dumb Cloud APIs: Why Local-First AI Wins'.",
+      "expected_tools": [
+        "keynote_scriptwriter",
+        "timing_estimator"
+      ],
+      "sample_output": "Keynote script generated with timing marks, punchy opening hook, live terminal demo cues, and memorable conclusion."
+    }
+  ]
+}

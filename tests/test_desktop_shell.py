@@ -746,8 +746,128 @@ def test_task_3_10_mode_landing_page_template():
     assert "<FeaturedGrid" in mode_page_content
     assert "<Message" in mode_page_content
 
-    # Wire into App.tsx
+    # Wire into App.tsx (via ModePage or dedicated screens/Modes)
     app_content = (RENDERER_ROOT / "App.tsx").read_text()
-    assert "ModePage" in app_content
+    assert "ModePage" in app_content or "screens/Modes" in app_content
     for mode_name in expected_modes:
         assert f"case '{mode_name}':" in app_content or f"'{mode_name}'" in app_content
+
+
+def test_task_3_11_featured_cases_content_curation():
+    """Verify Task 3.11 Featured Cases Content Curation across all 8 capability modes."""
+    import json
+    from core.cases import get_case_manager, load_mode_cases, list_all_mode_cases
+    from fastapi.testclient import TestClient
+    from services.python.server.api import app
+
+    cases_dir = REPO_ROOT / "configs" / "cases"
+    assert cases_dir.exists(), "configs/cases/ directory must exist"
+
+    expected_case_files = [
+        "code.json",
+        "deep_research.json",
+        "docs.json",
+        "sheets.json",
+        "slides.json",
+        "websites.json",
+        "design.json",
+        "diagrams.json",
+    ]
+
+    # 1. Validate all 8 JSON files in configs/cases/
+    total_cases = 0
+    for filename in expected_case_files:
+        json_path = cases_dir / filename
+        assert json_path.exists(), f"Missing curated case file: {filename}"
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        assert "mode" in data
+        assert "title" in data
+        assert "tagline" in data
+        assert "badge" in data
+        assert "pipeline" in data
+        assert "categories" in data and len(data["categories"]) >= 3
+        assert "cases" in data and len(data["cases"]) >= 4
+
+        for c in data["cases"]:
+            total_cases += 1
+            assert "id" in c
+            assert "title" in c
+            assert "category" in c
+            assert "description" in c
+            assert "prompt" in c and len(c["prompt"]) > 20
+            assert "expected_tools" in c and len(c["expected_tools"]) >= 2
+            assert "sample_output" in c and len(c["sample_output"]) > 10
+            assert "est_cost" in c
+
+    assert total_cases >= 32, f"Expected at least 32 total curated cases, got {total_cases}"
+
+    # 2. Validate desktop screens in apps/desktop/src/renderer/screens/Modes/
+    modes_screen_dir = RENDERER_ROOT / "screens" / "Modes"
+    assert modes_screen_dir.exists(), "screens/Modes directory must exist"
+
+    expected_screen_files = [
+        "modeCases.ts",
+        "CodeMode.tsx",
+        "ResearchMode.tsx",
+        "DocsMode.tsx",
+        "SheetsMode.tsx",
+        "SlidesMode.tsx",
+        "WebsitesMode.tsx",
+        "DesignMode.tsx",
+        "DiagramsMode.tsx",
+        "index.ts",
+    ]
+    for filename in expected_screen_files:
+        p = modes_screen_dir / filename
+        assert p.exists(), f"Missing mode screen deliverable: {filename}"
+        content = p.read_text()
+        if filename.endswith("Mode.tsx"):
+            assert "ModePage" in content
+            assert "customCases" in content
+
+    # 3. Validate one-click prompt population and initialValue wiring in ModePage and ChatInput
+    mode_page_content = (RENDERER_ROOT / "components" / "ModePage.tsx").read_text()
+    assert "handleSelectCase" in mode_page_content
+    assert "initialInputText" in mode_page_content
+    assert "initialValue={initialInputText}" in mode_page_content
+
+    chat_input_content = (RENDERER_ROOT / "components" / "ChatInput.tsx").read_text()
+    assert "initialValue" in chat_input_content
+    assert "setPrompt(initialValue)" in chat_input_content
+
+    # 4. Validate Python core/cases.py loader, CaseManager, and search
+    manager = get_case_manager()
+    all_modes = list_all_mode_cases()
+    assert len(all_modes) == 8
+
+    code_conf = load_mode_cases("code")
+    assert code_conf is not None
+    assert code_conf.title == "Code Studio"
+    assert len(code_conf.cases) >= 4
+
+    # Search functionality
+    search_results = manager.search("refactor")
+    assert len(search_results) >= 1
+    assert any(
+        "refactor" in c.title.lower() or "refactor" in c.prompt.lower() for c in search_results
+    )
+
+    # Specific case lookup
+    case_code_1 = manager.get_case("code-1")
+    assert case_code_1 is not None
+    assert "AST Refactor" in case_code_1.title
+
+    # 5. Validate FastAPI sidecar API endpoints GET /v1/cases and GET /v1/cases/{mode}
+    client = TestClient(app)
+    resp = client.get("/v1/cases")
+    assert resp.status_code == 200
+    cases_data = resp.json()
+    assert len(cases_data) >= 8
+
+    resp_mode = client.get("/v1/cases/deep-research")
+    assert resp_mode.status_code == 200
+    mode_payload = resp_mode.json()
+    assert mode_payload["mode"] == "deep-research"
+    assert len(mode_payload["cases"]) >= 4

@@ -209,10 +209,11 @@
   - **Deliverables:** `apps/desktop/src/renderer/components/ModePage.tsx`, reusable header with tagline, embedded `ChatInput`, category filter tabs, `FeaturedGrid.tsx` for example cards.
   - **Acceptance Criteria:** Shared across all 8 modes (`/modes/{mode}`); switching modes preserves chat history; loads mode-specific skills automatically; 26/26 desktop shell tests pass; 100% of monorepo tests pass (239/239).
   - **Status:** ✅ DONE
-- [ ] **Task 3.11 — Featured Cases Content Curation**
+- [x] **Task 3.11 — Featured Cases Content Curation**
   - **User Story:** As a new user, I want inspirational, one-click prompts for Code, Deep Research, Docs, Sheets, Slides, Websites, Design, and Diagrams.
   - **Deliverables:** Curated case templates in `configs/cases/` and `apps/desktop/src/renderer/screens/Modes/` covering all 8 modes with realistic prompts, expected tool chains, and sample outputs.
-  - **Acceptance Criteria:** Clicking any featured card populates `ChatInput` with one-click runnable prompt; teaches features friction-free.
+  - **Acceptance Criteria:** Clicking any featured card populates `ChatInput` with one-click runnable prompt; teaches features friction-free; 27/27 desktop shell tests pass; 100% of monorepo tests pass (240/240).
+  - **Status:** ✅ DONE
 
 ---
 
