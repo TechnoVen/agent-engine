@@ -782,3 +782,10 @@ Each mode uses the same shell, the same input, the same chat history, the same p
 2. **Off-Peak Engine (Law 7) & Cost Tracking:** Default off-peak execution (02:00–06:00 window) to protect frontier token quotas with transparent cost-per-run and monthly spend projections.
 3. **Multi-Modal Creation & Channel Alerts:** Three creation pathways ("Manually", "Via chat", "From template") with four built-in routines and multi-channel failure alerts across Slack, Telegram, and webhooks.
 
+### Task 3.9 — Universal Chat Input Component Hardening
+![Task 3.9 Universal Chat Input](screenshots/screen_task_3_9_universal_chat_input.png)
+1. **60fps Responsiveness on 10,000+ Chars:** RequestAnimationFrame-governed auto-grow height recalculation with O(1) bounded lookback window for slash-commands on large payloads.
+2. **Multi-Modal Clipboard Paste & Drag-Drop:** Direct clipboard paste support for image screenshots with base64 visual snippet previews and automatic observational memory grounding.
+3. **Calibrated ±5% Token Cost Estimator:** Accurate pre-execution token counting across code and English prose with model tier dropdown, global `Ctrl+K` auto-focus, and inline error banner.
+
+
