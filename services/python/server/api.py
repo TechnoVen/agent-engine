@@ -15,7 +15,7 @@ if PROJECT_ROOT not in sys.path:
 # Ensure numpy pre-import before dspy lazy import
 import numpy  # noqa: F401
 import psutil
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -50,6 +50,31 @@ from core.telemetry import BudgetConfig, get_cost_tracker
 from core.templates import TemplateManager
 from server.watcher import apply_staged_patch, get_staged_patches, reject_staged_patch
 
+START_TIME = time.time()
+
+
+def verify_ipc_token(request: Request) -> bool:
+    """Verify IPC token when AGENT_ENGINE_IPC_TOKEN is configured in the environment."""
+    expected_token = os.environ.get("AGENT_ENGINE_IPC_TOKEN")
+    if not expected_token:
+        return True
+
+    auth_header = request.headers.get("Authorization", "")
+    token = None
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+    elif "X-IPC-Token" in request.headers:
+        token = request.headers.get("X-IPC-Token")
+
+    if not token or token != expected_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized: invalid or missing IPC token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return True
+
+
 # Initialize FastAPI application
 app = FastAPI(
     title="Agent Engine Local API",
@@ -61,9 +86,24 @@ app = FastAPI(
 )
 
 # Configure CORS for local desktop UI, Tauri shell, and web development
+ALLOWED_ORIGINS = [
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+custom_origins = os.environ.get("AGENT_ENGINE_ALLOWED_ORIGINS")
+if custom_origins:
+    ALLOWED_ORIGINS.extend([o.strip() for o in custom_origins.split(",") if o.strip()])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -93,6 +133,53 @@ def broadcast_event(event_data: Dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 # Pydantic Schemas matching packages/shared-schema/openapi.yaml
 # ---------------------------------------------------------------------------
+
+
+class SidecarHealthResponse(BaseModel):
+    status: str = "healthy"
+    version: str = "0.1.0"
+    engine: str = "Agent Engine"
+    uptime_seconds: float = 0.0
+    timestamp: float = Field(default_factory=time.time)
+
+
+class ScheduledTaskResponse(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    cron: str
+    cron_human: str = ""
+    agent_persona: str = "Senior Engineer"
+    model: str = "instant"
+    status: str = "active"
+    last_run: Optional[str] = None
+    next_run: Optional[str] = None
+    cost_per_run: float = 0.0012
+    monthly_estimate: float = 0.036
+    is_off_peak: bool = True
+    notification_channel: str = "slack"
+    prompt: str
+    created_at: str
+
+
+class ScheduledTaskListResponse(BaseModel):
+    tasks: List[ScheduledTaskResponse]
+
+
+class ScheduledTaskCreateRequest(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    cron: str
+    cron_human: Optional[str] = ""
+    agent_persona: Optional[str] = "Senior Engineer"
+    model: Optional[str] = "instant"
+    is_off_peak: Optional[bool] = True
+    notification_channel: Optional[str] = "slack"
+    prompt: str
+
+
+class ScheduledTaskToggleRequest(BaseModel):
+    status: str
 
 
 class ChatRequest(BaseModel):
@@ -714,6 +801,19 @@ class UpdateCheckResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+@v1_router.get("/health", response_model=SidecarHealthResponse)
+async def get_sidecar_health():
+    """Canonical health and status endpoint matching Tauri shell and client.ts expectations."""
+    uptime = time.time() - START_TIME
+    return SidecarHealthResponse(
+        status="healthy",
+        version="0.1.0",
+        engine="Agent Engine",
+        uptime_seconds=round(uptime, 2),
+        timestamp=time.time(),
+    )
+
+
 @v1_router.post("/chat/completions", response_model=None)
 async def chat_completions(req: ChatRequest):
     """Execute a chat completion. Supports direct JSON response or streaming SSE tokens."""
@@ -997,6 +1097,7 @@ async def query_memory(
 
 
 @v1_router.post("/memory", response_model=IngestMemoryResponse)
+@v1_router.post("/memory/ingest", response_model=IngestMemoryResponse)
 async def ingest_memory(req: IngestMemoryRequest):
     """Index text content into ChromaDB vector memory."""
     now_iso = datetime.datetime.now().isoformat()
@@ -1063,6 +1164,64 @@ async def query_observations(
     return ObservationQueryResponse(query=query, observations=items)
 
 
+# --- Scheduled Tasks Endpoints ---
+
+
+@v1_router.get("/tasks", response_model=ScheduledTaskListResponse)
+async def list_scheduled_tasks():
+    """List all scheduled recurring agent tasks."""
+    backend = get_storage_backend()
+    tasks = backend.list_scheduled_tasks()
+    return ScheduledTaskListResponse(tasks=[ScheduledTaskResponse(**t) for t in tasks])
+
+
+@v1_router.post("/tasks", response_model=ScheduledTaskResponse)
+async def create_scheduled_task_endpoint(req: ScheduledTaskCreateRequest, request: Request):
+    """Create and persist a new scheduled task."""
+    verify_ipc_token(request)
+    backend = get_storage_backend()
+    task_data = req.model_dump()
+    created = backend.create_scheduled_task(task_data)
+    return ScheduledTaskResponse(**created)
+
+
+@v1_router.post("/tasks/{task_id}/toggle", response_model=ScheduledTaskResponse)
+async def toggle_scheduled_task_endpoint(
+    task_id: str, req: ScheduledTaskToggleRequest, request: Request
+):
+    """Toggle a scheduled task status (active/paused)."""
+    verify_ipc_token(request)
+    backend = get_storage_backend()
+    updated = backend.update_scheduled_task_status(task_id, req.status)
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    return ScheduledTaskResponse(**updated)
+
+
+@v1_router.post("/tasks/{task_id}/run")
+async def trigger_scheduled_task_endpoint(task_id: str, request: Request):
+    """Trigger an immediate execution of a scheduled task."""
+    verify_ipc_token(request)
+    backend = get_storage_backend()
+    task = backend.get_scheduled_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    now_str = datetime.datetime.now().strftime("%b %d, %I:%M %p")
+    backend.update_scheduled_task_status(task_id, task.get("status", "active"))
+    return {"status": "triggered", "task_id": task_id, "last_run": now_str}
+
+
+@v1_router.delete("/tasks/{task_id}")
+async def delete_scheduled_task_endpoint(task_id: str, request: Request):
+    """Delete a scheduled task."""
+    verify_ipc_token(request)
+    backend = get_storage_backend()
+    deleted = backend.delete_scheduled_task(task_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+    return {"status": "deleted", "task_id": task_id}
+
+
 @v1_router.get("/patches", response_model=List[PatchInfo])
 async def list_patches():
     """List all pending staged patches from the Sentry database."""
@@ -1082,20 +1241,22 @@ async def list_patches():
 
 
 @v1_router.post("/patches/{patch_id}/apply", response_model=ActionResult)
-async def apply_patch(patch_id: int):
+async def apply_patch(patch_id: int, request: Request):
     """Apply a staged patch directly to the filesystem."""
+    verify_ipc_token(request)
     success = apply_staged_patch(patch_id)
     if not success:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Patch #{patch_id} not found or already applied.",
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Patch #{patch_id} could not be applied: not found, already applied, or target file has conflicting modifications on disk.",
         )
     return ActionResult(success=True, message=f"Successfully applied patch #{patch_id}")
 
 
 @v1_router.post("/patches/{patch_id}/reject", response_model=ActionResult)
-async def reject_patch(patch_id: int):
+async def reject_patch(patch_id: int, request: Request):
     """Reject and dismiss a staged patch in SQLite."""
+    verify_ipc_token(request)
     success = reject_staged_patch(patch_id)
     if not success:
         raise HTTPException(
@@ -1320,8 +1481,9 @@ async def get_safety_audit_logs(
 
 
 @v1_router.post("/safety/approval", response_model=AuditLogInfo)
-async def submit_safety_approval(req: ApprovalDecisionRequest):
+async def submit_safety_approval(req: ApprovalDecisionRequest, request: Request):
     """Submit human operator approval, rejection, or edit decision for a high-risk tool call."""
+    verify_ipc_token(request)
     engine = get_policy_engine()
     final_args = (
         req.modified_args if req.decision == "edit" and req.modified_args else req.tool_args
@@ -1855,8 +2017,9 @@ async def list_credentials_endpoint(
     response_model=CredentialInfo,
     status_code=status.HTTP_201_CREATED,
 )
-async def set_credential_endpoint(req: SetCredentialRequest):
+async def set_credential_endpoint(req: SetCredentialRequest, request: Request):
     """Store a credential in the secure backend (OS Keychain with AES-256-GCM Vault fallback)."""
+    verify_ipc_token(request)
     if not req.key.strip():
         raise HTTPException(status_code=400, detail="Credential key cannot be empty")
     if not req.value.strip():
@@ -1878,9 +2041,13 @@ async def set_credential_endpoint(req: SetCredentialRequest):
 async def get_credential_endpoint(
     service: str,
     key: str,
+    request: Request,
     reveal: bool = Query(False, description="Whether to reveal the plaintext secret value"),
 ):
     """Retrieve a stored credential. Masked by default unless reveal=true is explicitly set."""
+    if reveal:
+        verify_ipc_token(request)
+
     mgr = get_credential_manager()
     val = mgr.get_credential(service, key)
     if val is None:
@@ -1900,8 +2067,9 @@ async def get_credential_endpoint(
 
 
 @v1_router.delete("/credentials/{service}/{key}", response_model=ActionResult)
-async def delete_credential_endpoint(service: str, key: str):
+async def delete_credential_endpoint(service: str, key: str, request: Request):
     """Delete a stored credential from secure backends."""
+    verify_ipc_token(request)
     mgr = get_credential_manager()
     deleted = mgr.delete_credential(service, key)
     if not deleted:
@@ -1968,7 +2136,14 @@ app.include_router(v1_router)
 @app.get("/healthz")
 async def healthz():
     """Liveness probe for Tauri shell and process supervisor."""
-    return {"status": "ok", "service": "agent-engine-sidecar"}
+    uptime = time.time() - START_TIME
+    return {
+        "status": "ok",
+        "service": "agent-engine-sidecar",
+        "version": "0.1.0",
+        "engine": "Agent Engine",
+        "uptime_seconds": round(uptime, 2),
+    }
 
 
 def main(argv: Optional[List[str]] = None):

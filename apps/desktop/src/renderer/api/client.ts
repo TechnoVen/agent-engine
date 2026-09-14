@@ -72,7 +72,7 @@ class SidecarClient {
       const res = await fetch(`${this.base}/v1/pipelines`);
       if (!res.ok) return [];
       const data = await res.json();
-      return data.pipelines || [];
+      return Array.isArray(data) ? data : (data.pipelines || []);
     } catch {
       return [];
     }
@@ -83,7 +83,7 @@ class SidecarClient {
       const res = await fetch(`${this.base}/v1/sessions?limit=${limit}`);
       if (!res.ok) return [];
       const data = await res.json();
-      return data.sessions || [];
+      return Array.isArray(data) ? data : (data.sessions || []);
     } catch {
       return [];
     }
@@ -390,6 +390,7 @@ class SidecarClient {
       const res = await fetch(`${this.base}/v1/tasks`);
       if (res.ok) {
         const data = await res.json();
+        if (Array.isArray(data)) return data;
         if (Array.isArray(data.tasks)) return data.tasks;
       }
     } catch {
@@ -434,11 +435,15 @@ class SidecarClient {
   async toggleScheduledTask(id: string, currentStatus: string): Promise<string> {
     const nextStatus = currentStatus === 'active' ? 'paused' : 'active';
     try {
-      await fetch(`${this.base}/v1/tasks/${id}/toggle`, {
+      const res = await fetch(`${this.base}/v1/tasks/${id}/toggle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: nextStatus }),
       });
+      if (res.ok) {
+        const updated = await res.json();
+        return updated.status || nextStatus;
+      }
     } catch {
       // dev fallback
     }
@@ -452,7 +457,7 @@ class SidecarClient {
       });
       return res.ok;
     } catch {
-      return true;
+      return false;
     }
   }
 
@@ -463,7 +468,7 @@ class SidecarClient {
       });
       return res.ok;
     } catch {
-      return true;
+      return false;
     }
   }
 }

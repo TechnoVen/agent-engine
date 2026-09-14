@@ -29,8 +29,8 @@ bootstrap:
 	@if [ ! -d ".venv" ]; then \
 		$(UV) venv .venv; \
 	fi
-	@echo "==> Checking dependencies via uv pip..."
-	@$(UV) pip list --python $(PYTHON) > /dev/null 2>&1 || true
+	@echo "==> Syncing dependencies from lockfile via uv sync..."
+	@$(UV) sync --frozen || $(UV) pip install -e .
 	@echo "==> Checking Node / pnpm status..."
 	@which pnpm > /dev/null 2>&1 && echo "pnpm is available: $$(pnpm --version)" || echo "[INFO] pnpm is not installed in current environment; JS packages will build when pnpm is available."
 	@echo "==> Checking Rust / Cargo status..."
@@ -46,11 +46,23 @@ test:
 
 lint:
 	@echo "==> Running ruff lint checks..."
-	@which $(RUFF) > /dev/null 2>&1 && $(RUFF) check . || $(PYTHON) -m ruff check . || echo "[WARN] ruff not found, skipping lint"
+	@if [ -x "$(RUFF)" ]; then \
+		$(RUFF) check . && $(RUFF) format --check .; \
+	elif which ruff > /dev/null 2>&1; then \
+		ruff check . && ruff format --check .; \
+	else \
+		$(PYTHON) -m ruff check . && $(PYTHON) -m ruff format --check .; \
+	fi
 
 format:
 	@echo "==> Running ruff formatting..."
-	@which $(RUFF) > /dev/null 2>&1 && $(RUFF) format . && $(RUFF) check --fix . || echo "[WARN] ruff not found, skipping format"
+	@if [ -x "$(RUFF)" ]; then \
+		$(RUFF) format . && $(RUFF) check --fix .; \
+	elif which ruff > /dev/null 2>&1; then \
+		ruff format . && ruff check --fix .; \
+	else \
+		$(PYTHON) -m ruff format . && $(PYTHON) -m ruff check --fix .; \
+	fi
 
 clean:
 	@echo "==> Cleaning cache and temporary files..."

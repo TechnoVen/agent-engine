@@ -438,6 +438,27 @@ class StorageBackend(ABC):
         """Retrieve recent safety audit logs."""
         pass
 
+    # --- 8. SCHEDULED TASKS ---
+    def create_scheduled_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        """Create and persist a scheduled task."""
+        return task
+
+    def get_scheduled_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Get a scheduled task by ID."""
+        return None
+
+    def list_scheduled_tasks(self) -> List[Dict[str, Any]]:
+        """List all scheduled tasks."""
+        return []
+
+    def update_scheduled_task_status(self, task_id: str, status: str) -> Optional[Dict[str, Any]]:
+        """Update the status of a scheduled task."""
+        return None
+
+    def delete_scheduled_task(self, task_id: str) -> bool:
+        """Delete a scheduled task by ID."""
+        return False
+
 
 # Backward-compatible and semantic alias
 StorageRepository = StorageBackend

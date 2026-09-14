@@ -297,8 +297,20 @@ class PostgresBackend(StorageBackend):
 
             file_path = row._mapping["file_path"]
             patched_code = row._mapping["patched_code"]
+            original_code = row._mapping["original_code"]
 
             if file_path and patched_code is not None:
+                # Stale patch verification (remediates F05):
+                # Prevent destroying intervening edits if file content has changed on disk
+                if os.path.exists(file_path) and original_code is not None:
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            current_content = f.read()
+                        if current_content != original_code:
+                            return False
+                    except Exception:
+                        return False
+
                 os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(patched_code)

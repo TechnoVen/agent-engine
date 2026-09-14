@@ -219,29 +219,34 @@
 
 ## Phase 4 — Control Dashboard (Milestone M3)
 
-> **Architectural Decision — Streamline to ONE:** Ship the Tauri shell as the **only user-facing dashboard**. Demote Streamlit to a hidden developer tool (`tools/dev_dashboard.py`, `make dev-dashboard`) never shipped to end users. All control operations (projects, approvals, telemetry, cost, settings) live natively in the desktop shell.
+> **Architectural Decision — Streamline to ONE:** Ship the Tauri shell as the **only user-facing dashboard**. Demote Streamlit to a hidden developer tool (`tools/dev_dashboard.py`, `make dev-dashboard`) never shipped to end users. All control operations (projects, approvals, telemetry, cost, settings) live natively in the desktop shell. Aligned with `docs/PROJECT_REVIEW_2026-09-14.md` to remediate findings F01–F14.
 
+- [x] **Task 4.0 — Foundation Hardening & Contract Alignment (P1 Remediation: F01, F02, F04, F05, F09, F12)**
+  - **User Story:** As an operator and developer, I want all core contracts aligned between Tauri desktop and Python sidecar, IPC authentication and CORS restricted, startup deadlocks eliminated, scheduled tasks persisted, and stale patch overwrites blocked, so that the platform foundation is safe, reliable, and trustworthy.
+  - **Deliverables:** Fix native supervisor lock order deadlock in `apps/desktop/src-tauri/src/sidecar.rs` (F02); add canonical `GET /v1/health` and `POST /v1/memory/ingest` routes in `services/python/server/api.py` and flexible array/envelope parsing in `apps/desktop/src/renderer/api/client.ts` (F04); implement persistent scheduled tasks table in `core/storage/sqlite.py` and real CRUD routes in `api.py` (F09); enforce IPC token authentication on sensitive routes, restrict CORS, and protect secret reveals (F01); prevent stale patch overwrites via disk content verification in `core/storage/sqlite.py` and `postgres.py` (F05); fix `Makefile` lint recipe exit code propagation (F12); and add test suite `tests/test_task_4_0_hardening.py`.
+  - **Acceptance Criteria:** Supervisor acquires locks without deadlock; `/v1/health` returns `SidecarHealth`; `/v1/memory/ingest` succeeds; `/v1/tasks` supports full CRUD and persists across reboots; unauthorized IPC requests receive 401; unauthenticated `reveal=true` fails; stale patches are rejected with error and leave disk files intact; `make lint` fails when lint errors exist; test count strictly increases (240 → 247).
+  - **Status:** ✅ DONE
 - [ ] **Task 4.1 — Projects & Workspaces (Organiser)**
   - **User Story:** As a user, I want dedicated workspaces that group threads, persistent instructions, attached files, active agent adapters, and scoped policies.
   - **Deliverables:** `apps/desktop/src/renderer/screens/Projects.tsx` (Route `/projects`), `ProjectDetail.tsx` with thread list and right inspector (Instructions, Files, Agents, Scoped Policy, Scoped Cost), Centered Create Project modal with icon carousel.
   - **Acceptance Criteria:** Project scopes conversation context and file attachments; instructions injected into prompt prefix; thread list loads instantly.
-- [ ] **Task 4.2 — Provider Setup Panel**
+- [ ] **Task 4.2 — Provider Setup Panel & Keychain Storage**
   - **User Story:** As an operator, I want to configure LLM providers and test API connectivity with keychain-backed credential storage.
-  - **Deliverables:** Provider configuration cards in `Settings.tsx` (OpenAI, Anthropic, Google Gemini, Ollama, vLLM, Custom OpenAI-compatible), keychain integration, 1-click connection test button.
+  - **Deliverables:** Provider configuration cards in `Settings.tsx` (OpenAI, Anthropic, Google Gemini, Ollama, vLLM, Custom OpenAI-compatible), OS keychain integration, 1-click connection test button.
   - **Acceptance Criteria:** Credentials securely stored in OS keychain; latency and status badge rendered in real-time.
-- [ ] **Task 4.3 — Agent Status Panel**
-  - **User Story:** As an operator, I want to see which agents and adapters are active, idle, or encountering errors.
-  - **Deliverables:** Agent status grid, health indicators, active sessions count, model bindings, and circuit breaker status.
-  - **Acceptance Criteria:** Real-time polling via `/v1/pipelines` and `/v1/adapters`; shows degraded or tripped circuit breakers.
-- [ ] **Task 4.4 — Approval Queue**
-  - **User Story:** As a security auditor, I want a centralized queue of pending high-risk tool calls across all sessions.
-  - **Deliverables:** Centralized queue view in `screens/Policies.tsx` (`/policies`), risk score badges, diff viewers, batch approve/reject actions.
-  - **Acceptance Criteria:** Pending calls resolve in <500ms upon approval; rejections return explicit reason to waiting agent.
-- [ ] **Task 4.5 — Cost Dashboard (React Native in Desktop Shell)**
-  - **User Story:** As P2, I want to view monthly spend, 90/9/1 tier splits, and budget ceilings directly in my desktop app.
-  - **Deliverables:** `apps/desktop/src/renderer/screens/Cost.tsx` (Route `/cost`), Recharts donut (90/9/1 CODE/CACHE/SMALL/MID/FRONTIER), cost-per-task bar chart, cache hit rate line chart, distillation candidate list (>10k calls/mo) with 1-click distill trigger, budget ceiling inputs.
-  - **Acceptance Criteria:** Numbers match `/v1/telemetry/cost`; alerts trigger warning at 80% and block/alert at 100%; CSV/JSON export works.
-- [ ] **Task 4.6 — Policy Editor & Audit Log**
+- [ ] **Task 4.3 — End-to-End Real Execution Engine (P1 Remediation: F03)**
+  - **User Story:** As a user, I want the conversation canvas to execute real DSPy pipelines and local/remote providers rather than canned simulations, with real streaming, cancellation, and session persistence.
+  - **Deliverables:** Connect `Home.tsx` and `ModePage.tsx` to real backend `/v1/chat/completions` or `/v1/pipelines/{name}/run` streaming endpoints; real server-sent event token streaming; cancellation signal propagation; remove mock `requestAnimationFrame` simulated text; persisted session resumption on reload; honest error handling on provider failure.
+  - **Acceptance Criteria:** User prompts reach provider and real streamed tokens appear; abort button stops execution; conversation survives browser/app reload; provider failure renders honest error state instead of canned success narrative.
+- [ ] **Task 4.4 — Mandatory Approval Queue & Safety Execution Boundary (P1 Remediation: F06)**
+  - **User Story:** As a security auditor, I want a centralized queue of pending high-risk tool calls across all sessions, with fail-closed evaluation and single-use operation-bound execution tokens.
+  - **Deliverables:** Centralized queue view in `screens/Policies.tsx` (`/policies`), risk score badges, diff viewers, batch approve/reject actions; server-side pending operation registry with 60s expiration and cryptographic argument binding; fail-closed safety policy evaluation (`decision: 'deny'` on errors).
+  - **Acceptance Criteria:** High-risk actions cannot execute without single-use approval token; denied/expired actions never execute; pending calls resolve in <500ms upon approval; rejections return explicit reason to waiting agent.
+- [ ] **Task 4.5 — Cost Dashboard (Merged 4.5 & 4.9; React in Desktop Shell)**
+  - **User Story:** As P2, I want to view monthly spend, 90/9/1 tier splits, and budget ceilings directly in my desktop app (replacing Streamlit Tab 5).
+  - **Deliverables:** `apps/desktop/src/renderer/screens/Cost.tsx` (Route `/cost`), Recharts donut (90/9/1 CODE/CACHE/SMALL/MID/FRONTIER), cost-per-task bar chart, cache hit rate line chart, distillation candidate list (>10k calls/mo) with 1-click distill trigger, budget ceiling inputs, CSV/JSON telemetry export.
+  - **Acceptance Criteria:** Numbers match `/v1/telemetry/cost`; alerts trigger warning at 80% and block/alert at 100%; CSV/JSON export works; fully replaces Streamlit Tab 5 with full feature parity.
+- [ ] **Task 4.6 — Policy Editor & Immutable Audit Log**
   - **User Story:** As P4, I want to edit YAML guardrail policies with a test playground and browse immutable audit logs.
   - **Deliverables:** Monaco YAML editor in `screens/Policies.tsx`, rule dry-run playground, paginated audit log table with filter by risk level and tool name.
   - **Acceptance Criteria:** Validates YAML syntax before save; hot-reloads policies without restarting sidecar; audit logs exportable as CSV/JSON.
@@ -249,18 +254,14 @@
   - **User Story:** As a local model user, I want to see VRAM, RAM, CPU, and tokens/sec for local runtimes (Ollama/llama.cpp).
   - **Deliverables:** Local telemetry widget in `Settings.tsx` and status bar, VRAM gauge, generation speed gauge, GPU model detection.
   - **Acceptance Criteria:** Updates every 2 seconds when local models run; warns when VRAM reaches 95%.
-- [ ] **Task 4.8 — Settings Screen**
+- [ ] **Task 4.8 — Settings Screen & Diagnostics Export**
   - **User Story:** As a user, I want a single settings page to control Providers, Models, Local Runtime, Adapters, Channels, Storage, Security, Appearance, and Diagnostics.
   - **Deliverables:** `apps/desktop/src/renderer/screens/Settings.tsx` (Route `/settings`), tabbed configuration layout, diagnostics bundle export (`.zip`).
   - **Acceptance Criteria:** Settings persist to local encrypted config; diagnostics export includes redacted logs, schema versions, and system info.
-- [ ] **Task 4.9 — Cost Dashboard Migration to React (Replaces Streamlit Tab 5)**
-  - **User Story:** As an enterprise user, I want the cost dashboard built directly into the desktop app rather than opening a browser tab.
-  - **Deliverables:** React component `apps/desktop/src/renderer/screens/Cost.tsx` connected to `/v1/telemetry/cost`, matching Streamlit Tab 5 functionality.
-  - **Acceptance Criteria:** Replaces Streamlit Tab 5 with full feature parity, responsive Recharts charts, and budget ceiling management.
-- [ ] **Task 4.10 — Streamlit Demotion to Developer Tool**
-  - **User Story:** As a maintainer, I want Streamlit reserved purely for internal development and CI benchmarks, cleanly removed from user packaging.
-  - **Deliverables:** Move `server/dashboard.py` to `tools/dev_dashboard.py`, add developer warning banner ("Developer tool — not for end users"), update `Makefile` target `make dev-dashboard`, remove port 8501 references from user-facing docs, update `start_studio.sh`.
-  - **Acceptance Criteria:** Production builds contain zero Streamlit code; `make dev-dashboard` launches internal tool for debugging; user guides reference only desktop app.
+- [ ] **Task 4.9 — Streamlit Demotion to Developer Tool & Process Lifecycle (P1/P2 Remediation: F07, F14)**
+  - **User Story:** As a maintainer, I want Streamlit reserved purely for internal development and CI benchmarks, cleanly removed from user packaging, with reliable launcher process lifecycle cleanup.
+  - **Deliverables:** Move `server/dashboard.py` to `tools/dev_dashboard.py`, add developer warning banner ("Developer tool — not for end users"), update `Makefile` target `make dev-dashboard`, remove port 8501 references from user-facing docs; fix `start_studio.sh` signal trap installation and eliminate foreground `exec` replacement.
+  - **Acceptance Criteria:** Production builds contain zero Streamlit code; `make dev-dashboard` launches internal tool for debugging; closing `start_studio.sh` cleans up child processes cleanly.
 
 ---
 

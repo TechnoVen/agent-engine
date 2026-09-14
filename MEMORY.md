@@ -25,26 +25,34 @@
   - **Task 3.11:** Featured Cases Content Curation (32 curated templates in `configs/cases/`, dedicated mode screens in `apps/desktop/src/renderer/screens/Modes/`, one-click prompt injection, `core/cases.py` loader & search, FastAPI `/v1/cases` endpoints)
 
 ### Current Test Count
-- **Monorepo Tests:** `240 passed` (strictly increasing with every completed task).
+- **Monorepo Tests:** `247 passed` (strictly increasing with every completed task).
 - **Desktop Build:** `pnpm --filter @agent-engine/desktop build` passes with 0 TypeScript errors.
 - **Cargo Check:** `cargo check` in `apps/desktop/src-tauri` passes cleanly.
 
 ---
 
-## 2. Next Scope for Tomorrow: Phase 4 — Control Dashboard (Milestone M3)
+## 2. Active Scope: Phase 4 — Control Dashboard (Milestone M3)
 
-When resuming, start immediately at **Task 4.1 (Projects & Workspaces)** in numerical order:
-1. **Task 4.1 — Projects & Workspaces (Organiser)**
-   - Deliverables: `apps/desktop/src/renderer/screens/Projects.tsx` (Route `/projects`), `ProjectDetail.tsx` with thread list and right inspector (Instructions, Files, Agents, Scoped Policy, Scoped Cost), Centered Create Project modal with icon carousel.
-   - Acceptance Criteria: Project scopes conversation context and file attachments; instructions injected into prompt prefix; thread list loads instantly.
-2. **Task 4.2 — Provider Setup Panel**
-   - Provider cards in `Settings.tsx` (OpenAI, Anthropic, Gemini, Ollama, vLLM, Custom OpenAI-compatible), keychain integration, 1-click connection test.
-3. **Task 4.3 — Policy Editor & Safe-Defaults Configuration**
-4. **Task 4.4 — Execution Telemetry & Cost Dashboard**
-5. **Task 4.5 — Multi-Channel Team Bridge (Slack, Teams, Discord, Mattermost)** *(Note: merged with 4.9 per roadmap fix; ignore "React Native" typo in title, target is Tauri + React 18 shell)*
-6. **Task 4.6 — Observational Memory Visualiser**
-7. **Task 4.7 — Local Evaluator & Benchmark Runner**
-8. **Task 4.8 — Auto-Updater Channel Selector & Status**
+Aligned with `docs/PROJECT_REVIEW_2026-09-14.md` to remediate findings F01–F14:
+1. **Task 4.0 — Foundation Hardening & Contract Alignment:** ✅ Complete (Remediated F01, F02, F04, F05, F09, F12; 247/247 tests green)
+2. **Task 4.1 — Projects & Workspaces (Organiser) (⏳ NEXT)**
+   - `apps/desktop/src/renderer/screens/Projects.tsx`, `ProjectDetail.tsx`, Create Project modal, context & file scoping.
+3. **Task 4.2 — Provider Setup Panel & Keychain Storage**
+   - Provider cards in `Settings.tsx`, OS keychain integration, 1-click connection test.
+4. **Task 4.3 — End-to-End Real Execution Engine (F03)**
+   - Connect Home & ModePage to real DSPy/provider execution, real streaming SSE, cancellation, session persistence.
+5. **Task 4.4 — Mandatory Approval Queue & Safety Execution Boundary (F06)**
+   - Centralized queue in `screens/Policies.tsx`, fail-closed evaluation, operation-bound execution tokens with 60s expiry.
+6. **Task 4.5 — Cost Dashboard (Merged 4.5 & 4.9; React in Desktop Shell)**
+   - `screens/Cost.tsx`, Recharts 90/9/1 donut, spend metrics, budget ceilings, CSV export.
+7. **Task 4.6 — Policy Editor & Immutable Audit Log**
+   - YAML editor with validation, dry-run playground, paginated audit log table.
+8. **Task 4.7 — Hardware Telemetry Panel**
+   - VRAM/RAM/CPU gauges, 95% VRAM warning threshold.
+9. **Task 4.8 — Settings Screen & Diagnostics Export**
+   - Tabbed settings, encrypted local config, `.zip` diagnostics bundle export.
+10. **Task 4.9 — Streamlit Demotion to Developer Tool & Process Lifecycle (F07, F14)**
+    - Demote Streamlit to `tools/dev_dashboard.py`, fix `start_studio.sh` traps.
 
 ---
 

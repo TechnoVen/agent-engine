@@ -227,42 +227,52 @@ impl SidecarSupervisor {
 
     /// Start the bundled sidecar process with health polling.
     pub async fn start(&self) -> Result<SidecarStatus, String> {
-        let mut child_guard = self.child.lock().await;
-
-        // If child is already running, check its health
-        if self.is_running() && child_guard.is_some() {
-            return Ok(self.check_health().await);
-        }
-
         let binary_path = Self::locate_sidecar_binary()
             .ok_or_else(|| "Could not locate sidecar binary in binaries/ directory".to_string())?;
 
         // Zero-Trust binary integrity verification (ADR-008)
         self.verify_binary_integrity(&binary_path)?;
 
-        let mut cmd = tokio::process::Command::new(&binary_path);
-        cmd.arg("--port")
-            .arg(self.port.to_string())
-            .arg("--host")
-            .arg("127.0.0.1");
+        {
+            let mut child_guard = self.child.lock().await;
 
-        // Forward environment
-        cmd.env("PORT", self.port.to_string());
-        cmd.env("AGENT_ENGINE_PORT", self.port.to_string());
+            // If child is already running, check its health without holding child lock
+            if self.is_running() && child_guard.is_some() {
+                drop(child_guard);
+                return Ok(self.check_health().await);
+            }
 
-        let spawned = cmd
-            .spawn()
-            .map_err(|e| format!("Failed to spawn sidecar process: {e}"))?;
+            let mut cmd = tokio::process::Command::new(&binary_path);
+            cmd.arg("--port")
+                .arg(self.port.to_string())
+                .arg("--host")
+                .arg("127.0.0.1");
 
-        if let Some(id) = spawned.id() {
-            self.pid.store(id, Ordering::SeqCst);
+            // Forward environment and IPC token if present
+            cmd.env("PORT", self.port.to_string());
+            cmd.env("AGENT_ENGINE_PORT", self.port.to_string());
+            if let Ok(token) = std::env::var("AGENT_ENGINE_IPC_TOKEN") {
+                cmd.arg("--token").arg(&token);
+                cmd.env("AGENT_ENGINE_IPC_TOKEN", &token);
+            }
+
+            let spawned = cmd
+                .spawn()
+                .map_err(|e| format!("Failed to spawn sidecar process: {e}"))?;
+
+            if let Some(id) = spawned.id() {
+                self.pid.store(id, Ordering::SeqCst);
+            }
+
+            *child_guard = Some(spawned);
         }
 
-        *child_guard = Some(spawned);
-        let mut path_guard = self.resolved_path.lock().await;
-        *path_guard = Some(binary_path);
+        {
+            let mut path_guard = self.resolved_path.lock().await;
+            *path_guard = Some(binary_path);
+        }
 
-        // Poll health endpoint with backoff (up to 5 seconds)
+        // Poll health endpoint with backoff (up to 5 seconds) without holding locks
         for _ in 0..10 {
             tokio::time::sleep(Duration::from_millis(500)).await;
             let status = self.check_health().await;

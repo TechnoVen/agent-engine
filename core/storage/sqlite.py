@@ -8,6 +8,7 @@ import json
 import os
 import sqlite3
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -141,6 +142,26 @@ class SQLiteBackend(StorageBackend):
                     );
                     CREATE INDEX IF NOT EXISTS idx_audit_logs_decision ON audit_logs(decision);
                     CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp);
+
+                    CREATE TABLE IF NOT EXISTS scheduled_tasks (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        description TEXT NOT NULL DEFAULT '',
+                        cron TEXT NOT NULL,
+                        cron_human TEXT NOT NULL DEFAULT '',
+                        agent_persona TEXT NOT NULL DEFAULT 'Senior Engineer',
+                        model TEXT NOT NULL DEFAULT 'instant',
+                        status TEXT NOT NULL DEFAULT 'active',
+                        last_run TEXT,
+                        next_run TEXT,
+                        cost_per_run REAL NOT NULL DEFAULT 0.0012,
+                        monthly_estimate REAL NOT NULL DEFAULT 0.036,
+                        is_off_peak INTEGER NOT NULL DEFAULT 1,
+                        notification_channel TEXT NOT NULL DEFAULT 'slack',
+                        prompt TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_status ON scheduled_tasks(status);
                 """)
                 conn.commit()
 
@@ -268,8 +289,20 @@ class SQLiteBackend(StorageBackend):
 
                 file_path = row["file_path"]
                 patched_code = row["patched_code"]
+                original_code = row["original_code"]
 
                 if file_path and patched_code is not None:
+                    # Stale patch verification (remediates F05):
+                    # Prevent destroying intervening edits if file content has changed on disk
+                    if os.path.exists(file_path) and original_code is not None:
+                        try:
+                            with open(file_path, "r", encoding="utf-8") as f:
+                                current_content = f.read()
+                            if current_content != original_code:
+                                return False
+                        except Exception:
+                            return False
+
                     os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
                     with open(file_path, "w", encoding="utf-8") as f:
                         f.write(patched_code)
@@ -1058,6 +1091,201 @@ class SQLiteBackend(StorageBackend):
                     data["tool_args"] = json.loads(data.get("tool_args") or "{}")
                     results.append(data)
                 return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    # --- 8. SCHEDULED TASKS PERSISTENCE ---
+
+    def create_scheduled_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                task_id = task.get("id") or f"task-{int(time.time() * 1000)}"
+                created_at = task.get("created_at") or datetime.now(timezone.utc).isoformat()
+                cursor.execute(
+                    """
+                    INSERT INTO scheduled_tasks (
+                        id, name, description, cron, cron_human, agent_persona,
+                        model, status, last_run, next_run, cost_per_run,
+                        monthly_estimate, is_off_peak, notification_channel,
+                        prompt, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        task_id,
+                        task["name"],
+                        task.get("description", ""),
+                        task["cron"],
+                        task.get("cron_human", task["cron"]),
+                        task.get("agent_persona", "Senior Engineer"),
+                        task.get("model", "instant"),
+                        task.get("status", "active"),
+                        task.get("last_run"),
+                        task.get("next_run", "Tonight, 02:00 AM (Off-peak)"),
+                        float(task.get("cost_per_run", 0.0012)),
+                        float(task.get("monthly_estimate", 0.036)),
+                        1 if task.get("is_off_peak", True) else 0,
+                        task.get("notification_channel", "slack"),
+                        task["prompt"],
+                        created_at,
+                    ),
+                )
+                conn.commit()
+                res = self.get_scheduled_task(task_id)
+                return res if res is not None else task
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_scheduled_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM scheduled_tasks WHERE id = ?", (task_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                d = dict(row)
+                d["is_off_peak"] = bool(d.get("is_off_peak", 1))
+                return d
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_scheduled_tasks(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM scheduled_tasks ORDER BY created_at ASC")
+                rows = cursor.fetchall()
+                if not rows:
+                    # Seed default tasks if table is empty
+                    default_tasks = [
+                        {
+                            "id": "task-1",
+                            "name": "Daily Inbox Digest",
+                            "description": "Summarizes critical emails, mentions, and urgent unread threads at 8 AM.",
+                            "cron": "0 8 * * *",
+                            "cron_human": "Every day at 8:00 AM",
+                            "agent_persona": "Executive Drafter",
+                            "model": "instant",
+                            "status": "active",
+                            "last_run": "Today, 08:00 AM",
+                            "next_run": "Tomorrow, 08:00 AM",
+                            "cost_per_run": 0.0008,
+                            "monthly_estimate": 0.024,
+                            "is_off_peak": False,
+                            "notification_channel": "slack",
+                            "prompt": "Summarize all high-priority unread emails and draft responses for urgent items.",
+                            "created_at": "2026-03-01",
+                        },
+                        {
+                            "id": "task-2",
+                            "name": "Weekly Expense & Spend Audit",
+                            "description": "Generates weekly financial reconciliation and token budget usage Sunday at 6 PM.",
+                            "cron": "0 18 * * 0",
+                            "cron_human": "Every Sunday at 6:00 PM",
+                            "agent_persona": "Deep Researcher",
+                            "model": "instant",
+                            "status": "active",
+                            "last_run": "Sun, Mar 8, 06:00 PM",
+                            "next_run": "Sun, Mar 15, 06:00 PM",
+                            "cost_per_run": 0.0025,
+                            "monthly_estimate": 0.010,
+                            "is_off_peak": False,
+                            "notification_channel": "slack",
+                            "prompt": "Compile weekly expenditure report and verify zero 90/9/1 budget breaches.",
+                            "created_at": "2026-03-02",
+                        },
+                        {
+                            "id": "task-3",
+                            "name": "Off-Peak Security & AST Audit",
+                            "description": "Runs zero-trust safety checks, AST sanitization, and dependency vulnerabilities overnight.",
+                            "cron": "0 2 * * *",
+                            "cron_human": "Every day at 2:00 AM (Off-peak)",
+                            "agent_persona": "Security Auditor",
+                            "model": "reasoning",
+                            "status": "active",
+                            "last_run": "Today, 02:00 AM",
+                            "next_run": "Tomorrow, 02:00 AM (Off-peak)",
+                            "cost_per_run": 0.0064,
+                            "monthly_estimate": 0.192,
+                            "is_off_peak": True,
+                            "notification_channel": "webhook",
+                            "prompt": "Inspect AST diffs, detect dangerous shell patterns, and review staged patches.",
+                            "created_at": "2026-03-05",
+                        },
+                    ]
+                    for t in default_tasks:
+                        cursor.execute(
+                            """
+                            INSERT OR IGNORE INTO scheduled_tasks (
+                                id, name, description, cron, cron_human, agent_persona,
+                                model, status, last_run, next_run, cost_per_run,
+                                monthly_estimate, is_off_peak, notification_channel,
+                                prompt, created_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                t["id"],
+                                t["name"],
+                                t["description"],
+                                t["cron"],
+                                t["cron_human"],
+                                t["agent_persona"],
+                                t["model"],
+                                t["status"],
+                                t.get("last_run"),
+                                t.get("next_run"),
+                                t["cost_per_run"],
+                                t["monthly_estimate"],
+                                1 if t["is_off_peak"] else 0,
+                                t["notification_channel"],
+                                t["prompt"],
+                                t["created_at"],
+                            ),
+                        )
+                    conn.commit()
+                    cursor.execute("SELECT * FROM scheduled_tasks ORDER BY created_at ASC")
+                    rows = cursor.fetchall()
+
+                result = []
+                for row in rows:
+                    d = dict(row)
+                    d["is_off_peak"] = bool(d.get("is_off_peak", 1))
+                    result.append(d)
+                return result
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def update_scheduled_task_status(self, task_id: str, status: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE scheduled_tasks SET status = ? WHERE id = ?",
+                    (status, task_id),
+                )
+                conn.commit()
+                return self.get_scheduled_task(task_id)
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def delete_scheduled_task(self, task_id: str) -> bool:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM scheduled_tasks WHERE id = ?", (task_id,))
+                conn.commit()
+                return cursor.rowcount > 0
             finally:
                 if not self._is_memory:
                     conn.close()
