@@ -58,3 +58,6 @@ target/
 **/src-tauri/keys/
 apps/desktop/src-tauri/keys/
 
+
+# Machine-generated local configuration
+generated/

@@ -157,7 +157,7 @@
 
 ## Phase 3 — Kimi-Style Conversational GUI (Milestone M2)
 
-> **Architectural Standard:** Implements the Kimi-inspired unified shell with mode-based navigation (`apps/desktop/src/renderer/`). Universal `ChatInput.tsx` reusable component across all screens, 3-zone sidebar (Global Actions, Mode Navigation, Context), rich empty states with featured inspiration cases for all 8 modes, inline approvals, and pre-execution cost estimates. See full specification in [`docs/GUI.md`](file:///home/nadir/agent_engine/docs/GUI.md).
+> **Architectural Standard:** Implements the Kimi-inspired unified shell with mode-based navigation (`apps/desktop/src/renderer/`). Universal `ChatInput.tsx` reusable component across all screens, 3-zone sidebar (Global Actions, Mode Navigation, Context), rich empty states with featured inspiration cases for all 8 modes, inline approvals, and pre-execution cost estimates. See full specification in [`docs/GUI.md`](GUI.md).
 
 - [x] **Task 3.1 — Chat Shell & Home Mode**
   - **User Story:** As a user, I want a clean, responsive chat canvas with universal input and inspiration chips so I can immediately collaborate with my agent.
@@ -428,7 +428,7 @@ Every task and PR must satisfy:
 ## Definition of Done (GUI Task Standards)
 
 Every GUI task and PR in `apps/desktop/src/renderer/` must satisfy:
-- [ ] Screen implemented at the correct route matching [`docs/GUI.md`](file:///home/nadir/agent_engine/docs/GUI.md).
+- [ ] Screen implemented at the correct route matching [`docs/GUI.md`](GUI.md).
 - [ ] Strict adherence to design system tokens (`--bg-base`, `--border-subtle`, `--accent`, etc.).
 - [ ] Reuses `ChatInput.tsx`, `Message.tsx`, `Sidebar.tsx`, `ApprovalCard.tsx` (zero component duplication).
 - [ ] Loading, empty, error, and populated states all implemented.
@@ -437,7 +437,7 @@ Every GUI task and PR in `apps/desktop/src/renderer/` must satisfy:
 - [ ] Playwright E2E test passes.
 - [ ] Cost estimate shown before any model call is dispatched.
 - [ ] Approval card shown inline for dangerous or high-risk actions.
-- [ ] Screenshot added to [`docs/GUI.md`](file:///home/nadir/agent_engine/docs/GUI.md) with 3-line description.
+- [ ] Screenshot added to [`docs/GUI.md`](GUI.md) with 3-line description.
 - [ ] No console errors or warnings.
 - [ ] Cross-platform desktop build passes (Win / macOS / Linux).
 

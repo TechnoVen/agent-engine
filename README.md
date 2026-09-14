@@ -209,9 +209,9 @@ Exposed MCP Tools:
 
 ## 📡 Local API Contract
 
-The communication contract between the desktop shell and the Python sidecar is defined under [`packages/shared-schema/`](file:///home/nadir/agent_engine/packages/shared-schema):
-- [`packages/shared-schema/openapi.yaml`](file:///home/nadir/agent_engine/packages/shared-schema/openapi.yaml): OpenAPI 3.1.0 specification for `/v1/...` REST endpoints.
-- [`packages/shared-schema/events.schema.json`](file:///home/nadir/agent_engine/packages/shared-schema/events.schema.json): Schema for streaming SSE events (`token`, `tool_call`, `approval_request`, `patch_staged`, `cost_update`, `agent_status`).
+The communication contract between the desktop shell and the Python sidecar is defined under [`packages/shared-schema/`](packages/shared-schema):
+- [`packages/shared-schema/openapi.yaml`](packages/shared-schema/openapi.yaml): OpenAPI 3.1.0 specification for `/v1/...` REST endpoints.
+- [`packages/shared-schema/events.schema.json`](packages/shared-schema/events.schema.json): Schema for streaming SSE events (`token`, `tool_call`, `approval_request`, `patch_staged`, `cost_update`, `agent_status`).
 
 ---
 
@@ -242,8 +242,8 @@ Key environment variables (`.env`):
 
 ## 🗺️ Implementation Roadmap
 
-Track progress across all milestones and phases in [`docs/ROADMAP.md`](file:///home/nadir/agent_engine/docs/ROADMAP.md).  
-Architectural conflict resolutions and guidelines are documented in [`docs/ADR/README.md`](file:///home/nadir/agent_engine/docs/ADR/README.md).
+Track progress across all milestones and phases in [`docs/ROADMAP.md`](docs/ROADMAP.md).  
+Architectural conflict resolutions and guidelines are documented in [`docs/ADR/README.md`](docs/ADR/README.md).
 
 ---
 

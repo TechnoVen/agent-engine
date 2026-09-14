@@ -49,7 +49,7 @@ function detectDangerousToolCall(
       toolName: 'bash_exec',
       toolArgs: {
         command: cmd,
-        cwd: '/home/nadir/agent_engine',
+        cwd: '.',
         danger_flag: true,
       },
       riskLevel: 'critical',
@@ -60,7 +60,7 @@ function detectDangerousToolCall(
         type: 'command',
         target: cmd,
         contextInfo: {
-          cwd: '/home/nadir/agent_engine',
+          cwd: '.',
           user: 'operator',
           safetyPolicy: 'destructive_fs_rm_all',
         },
@@ -85,7 +85,7 @@ function detectDangerousToolCall(
       toolName: 'bash_exec',
       toolArgs: {
         command: promptText,
-        cwd: '/home/nadir/agent_engine',
+        cwd: '.',
         requires_elevation: true,
       },
       riskLevel: 'high',
@@ -96,7 +96,7 @@ function detectDangerousToolCall(
         type: 'command',
         target: promptText,
         contextInfo: {
-          cwd: '/home/nadir/agent_engine',
+          cwd: '.',
           user: 'root (sudo)',
           policyId: 'dangerous_system_change',
         },
