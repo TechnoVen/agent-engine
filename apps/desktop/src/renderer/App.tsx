@@ -5,6 +5,7 @@ import { Agent } from './screens/Agent';
 import { Tasks } from './screens/Tasks';
 import { Projects } from './screens/Projects';
 import { Settings } from './screens/Settings';
+import { Policies } from './screens/Policies';
 import {
   CodeMode,
   ResearchMode,
@@ -206,6 +207,15 @@ export const App: React.FC = () => {
       case 'settings':
         return (
           <Settings
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'policies':
+        return (
+          <Policies
             onSelectMode={setActiveMode}
             activeModel={activeModel}
             onSelectModel={setActiveModel}

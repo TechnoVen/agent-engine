@@ -1081,3 +1081,236 @@ def test_task_4_3_real_execution_and_session_persistence():
     assert "token" in stream_text
     assert "cost_update" in stream_text
     assert "done" in stream_text
+
+
+def test_task_4_4_mandatory_approval_queue_and_safety_boundary():
+    """
+    Verify Task 4.4 Mandatory Approval Queue and Safety Execution Boundary (P1 Remediation: F06).
+    Enforces Law 3: Zero-Trust security boundary with fail-closed evaluation.
+    """
+    import time
+    from fastapi.testclient import TestClient
+    from services.python.server.api import app
+    from core.safety import get_pending_registry
+
+    client = TestClient(app)
+    registry = get_pending_registry()
+
+    # 1. Desktop UI & Client Fail-Closed Code Verification
+    client_ts = (RENDERER_ROOT / "api" / "client.ts").read_text()
+    assert "evaluateToolSafety" in client_ts
+    assert "listPendingOperations" in client_ts
+    assert "approveOperation" in client_ts
+    assert "rejectOperation" in client_ts
+    assert "batchOperations" in client_ts
+    assert "verifyExecution" in client_ts
+    assert "listSafetyPolicies" in client_ts
+
+    # Verify F06 remediation: evaluateToolSafety must FAIL CLOSED (decision: 'deny') on HTTP error or network catch
+    assert "decision: 'deny'" in client_ts
+    assert "risk_level: 'critical'" in client_ts
+    assert "fail-closed" in client_ts
+
+    policies_screen = RENDERER_ROOT / "screens" / "Policies.tsx"
+    assert policies_screen.exists(), "Policies.tsx must exist"
+    screen_content = policies_screen.read_text()
+    assert "Policies & Approvals" in screen_content
+    assert "Zero-Trust" in screen_content
+    assert "Approval Queue" in screen_content
+    assert "Active Policies" in screen_content
+    assert "Audit Trail" in screen_content
+    assert "handleBatchAction" in screen_content
+    assert "handleApprove" in screen_content
+
+    app_ts = (RENDERER_ROOT / "App.tsx").read_text()
+    assert "case 'policies':" in app_ts
+    assert "<Policies" in app_ts
+
+    # 2. Server-Side Safety Evaluation with Auto-Registration & Fail-Closed Behavior
+    resp_eval = client.post(
+        "/v1/safety/evaluate",
+        json={
+            "tool_name": "bash:execute",
+            "tool_args": {"command": "rm -rf /"},
+            "session_id": "sess_audit_test",
+        },
+    )
+    assert resp_eval.status_code == 200
+    eval_data = resp_eval.json()
+    assert eval_data["decision"] in ("block", "deny", "stage")
+    assert eval_data["risk_level"] in ("high", "critical")
+    assert eval_data["operation_id"] is not None
+    auto_op_id = eval_data["operation_id"]
+
+    # Verify auto-registered operation is present in operations endpoint
+    resp_get_auto = client.get(f"/v1/safety/operations/{auto_op_id}")
+    assert resp_get_auto.status_code == 200
+    assert resp_get_auto.json()["operation_id"] == auto_op_id
+    assert resp_get_auto.json()["tool_name"] == "bash:execute"
+
+    # 3. Registration, Cryptographic Argument Binding, and 60s Expiration
+    high_risk_args = {"query": "DROP TABLE users;", "database": "production"}
+    resp_reg = client.post(
+        "/v1/safety/operations",
+        json={
+            "tool_name": "sql:execute",
+            "tool_args": high_risk_args,
+            "risk_level": "critical",
+            "risk_score": 0.95,
+            "reason": "Destructive DROP TABLE query detected",
+            "ttl_seconds": 60.0,
+        },
+    )
+    assert resp_reg.status_code == 200
+    reg_op = resp_reg.json()
+    op_id = reg_op["operation_id"]
+    assert reg_op["status"] == "pending"
+    assert reg_op["args_hash"] == registry.compute_args_hash(high_risk_args)
+    assert reg_op["expires_at"] > time.time()
+
+    # Test Expiration (>60s window enforcement)
+    resp_exp = client.post(
+        "/v1/safety/operations",
+        json={
+            "tool_name": "bash:execute",
+            "tool_args": {"cmd": "test"},
+            "ttl_seconds": 0.05,
+        },
+    )
+    exp_op_id = resp_exp.json()["operation_id"]
+    time.sleep(0.1)  # wait for expiration
+    resp_approve_exp = client.post(
+        f"/v1/safety/operations/{exp_op_id}/approve",
+        headers={"X-IPC-Token": "ipc_secret_test_token"},
+        json={"actor": "admin"},
+    )
+    assert resp_approve_exp.status_code == 410  # 410 Gone on expired
+
+    # 4. Approval & Single-Use Execution Token Issuance
+    resp_approve = client.post(
+        f"/v1/safety/operations/{op_id}/approve",
+        headers={"X-IPC-Token": "ipc_secret_test_token"},
+        json={"actor": "security_admin"},
+    )
+    assert resp_approve.status_code == 200
+    approved_data = resp_approve.json()
+    assert approved_data["status"] == "approved"
+    assert approved_data["actor"] == "security_admin"
+    token = approved_data["approval_token"]
+    assert token is not None
+    assert token.startswith("tok_")
+
+    # 5. Token Verification & Fail-Closed Boundary (Single-Use, Anti-Replay, Anti-Tamper)
+    # 5a. Tampered arguments fail closed
+    resp_verify_tamper = client.post(
+        "/v1/safety/verify-execution",
+        headers={"X-IPC-Token": "ipc_secret_test_token"},
+        json={
+            "approval_token": token,
+            "tool_name": "sql:execute",
+            "tool_args": {"query": "DROP TABLE other_table;"},  # Tampered!
+        },
+    )
+    assert resp_verify_tamper.status_code == 403
+    assert "Cryptographic argument verification failed" in resp_verify_tamper.json()["detail"]
+
+    # 5b. Mismatched tool name fails closed
+    resp_verify_tool_tamper = client.post(
+        "/v1/safety/verify-execution",
+        headers={"X-IPC-Token": "ipc_secret_test_token"},
+        json={
+            "approval_token": token,
+            "tool_name": "bash:execute",  # Wrong tool!
+            "tool_args": high_risk_args,
+        },
+    )
+    assert resp_verify_tool_tamper.status_code == 403
+    assert "Tool name mismatch" in resp_verify_tool_tamper.json()["detail"]
+
+    # 5c. Valid execution consumes and burns the token
+    resp_verify_valid = client.post(
+        "/v1/safety/verify-execution",
+        headers={"X-IPC-Token": "ipc_secret_test_token"},
+        json={
+            "approval_token": token,
+            "tool_name": "sql:execute",
+            "tool_args": high_risk_args,
+        },
+    )
+    assert resp_verify_valid.status_code == 200
+    assert resp_verify_valid.json()["authorized"] is True
+
+    # 5d. Replay attack: second call with same token MUST fail closed
+    resp_verify_replay = client.post(
+        "/v1/safety/verify-execution",
+        headers={"X-IPC-Token": "ipc_secret_test_token"},
+        json={
+            "approval_token": token,
+            "tool_name": "sql:execute",
+            "tool_args": high_risk_args,
+        },
+    )
+    assert resp_verify_replay.status_code == 403
+    assert "replay attack detected" in resp_verify_replay.json()["detail"]
+
+    # 6. Rejection with Explicit Reason
+    resp_reject_reg = client.post(
+        "/v1/safety/operations",
+        json={
+            "tool_name": "filesystem:delete",
+            "tool_args": {"path": "/etc/passwd"},
+        },
+    )
+    rej_op_id = resp_reject_reg.json()["operation_id"]
+    resp_reject = client.post(
+        f"/v1/safety/operations/{rej_op_id}/reject",
+        headers={"X-IPC-Token": "ipc_secret_test_token"},
+        json={"actor": "operator", "reason": "Destructive system directory target forbidden"},
+    )
+    assert resp_reject.status_code == 200
+    assert resp_reject.json()["status"] == "rejected"
+    assert resp_reject.json()["decision_reason"] == "Destructive system directory target forbidden"
+
+    # 7. Batch Operations
+    op_b1 = client.post(
+        "/v1/safety/operations",
+        json={"tool_name": "t1", "tool_args": {"k": "v1"}},
+    ).json()["operation_id"]
+    op_b2 = client.post(
+        "/v1/safety/operations",
+        json={"tool_name": "t2", "tool_args": {"k": "v2"}},
+    ).json()["operation_id"]
+
+    resp_batch = client.post(
+        "/v1/safety/operations/batch",
+        headers={"X-IPC-Token": "ipc_secret_test_token"},
+        json={"operation_ids": [op_b1, op_b2], "action": "approve", "actor": "batch_operator"},
+    )
+    assert resp_batch.status_code == 200
+    batch_res = resp_batch.json()
+    assert len(batch_res) == 2
+    assert all(b["status"] == "approved" for b in batch_res)
+
+    # 8. Guardrails Enforcement in Pipeline Registry (core/pipelines/registry.py)
+    import dspy
+    from core.pipelines import PipelineMetadata, get_pipeline_registry
+
+    pipe_reg = get_pipeline_registry()
+
+    class DummySafePipeline(dspy.Module):
+        def forward(self, **kwargs):
+            return dspy.Prediction(output="ok")
+
+    pipe_reg.register(
+        DummySafePipeline,
+        metadata=PipelineMetadata(
+            name="test_guarded_pipeline",
+            description="Pipeline with safety guardrails",
+            inputs=["data"],
+            outputs=["output"],
+            guardrails=["no_destructive_ops"],
+        ),
+    )
+    # Should execute successfully when safe
+    out = pipe_reg.run("test_guarded_pipeline", data="normal input")
+    assert out["output"] == "ok"

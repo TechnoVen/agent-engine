@@ -219,6 +219,36 @@ export interface SelectedSkill {
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'edited';
 
+export interface SafetyPolicyRuleInfo {
+  rule_id: string;
+  name: string;
+  description: string;
+  action: string;
+  severity: string;
+  tool_pattern?: string;
+  match_conditions?: Record<string, any>;
+  suggestion?: string;
+}
+
+export interface PendingOperation {
+  operation_id: string;
+  tool_name: string;
+  tool_args: Record<string, any>;
+  args_hash: string;
+  risk_level: RiskLevel;
+  risk_score: number;
+  status: 'pending' | 'approved' | 'rejected' | 'expired' | 'consumed';
+  created_at: number;
+  expires_at: number;
+  session_id?: string;
+  reason?: string;
+  suggestion?: string;
+  diff?: ToolCallDiff;
+  approval_token?: string;
+  actor?: string;
+  decision_reason?: string;
+}
+
 export interface DiffLine {
   type: 'add' | 'remove' | 'context';
   text: string;

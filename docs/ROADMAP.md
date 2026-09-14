@@ -241,10 +241,11 @@
   - **Deliverables:** Connect `Home.tsx` and `ModePage.tsx` to real backend `/v1/chat/completions` or `/v1/pipelines/{name}/run` streaming endpoints; real server-sent event token streaming; cancellation signal propagation; remove mock `requestAnimationFrame` simulated text; persisted session resumption on reload; honest error handling on provider failure.
   - **Acceptance Criteria:** User prompts reach provider and real streamed tokens appear; abort button stops execution; conversation survives browser/app reload; provider failure renders honest error state instead of canned success narrative.
   - **Status:** ✅ DONE
-- [ ] **Task 4.4 — Mandatory Approval Queue & Safety Execution Boundary (P1 Remediation: F06)**
+- [x] **Task 4.4 — Mandatory Approval Queue & Safety Execution Boundary (P1 Remediation: F06)**
   - **User Story:** As a security auditor, I want a centralized queue of pending high-risk tool calls across all sessions, with fail-closed evaluation and single-use operation-bound execution tokens.
   - **Deliverables:** Centralized queue view in `screens/Policies.tsx` (`/policies`), risk score badges, diff viewers, batch approve/reject actions; server-side pending operation registry with 60s expiration and cryptographic argument binding; fail-closed safety policy evaluation (`decision: 'deny'` on errors).
   - **Acceptance Criteria:** High-risk actions cannot execute without single-use approval token; denied/expired actions never execute; pending calls resolve in <500ms upon approval; rejections return explicit reason to waiting agent.
+  - **Status:** ✅ DONE
 - [ ] **Task 4.5 — Cost Dashboard (Merged 4.5 & 4.9; React in Desktop Shell)**
   - **User Story:** As P2, I want to view monthly spend, 90/9/1 tier splits, and budget ceilings directly in my desktop app (replacing Streamlit Tab 5).
   - **Deliverables:** `apps/desktop/src/renderer/screens/Cost.tsx` (Route `/cost`), Recharts donut (90/9/1 CODE/CACHE/SMALL/MID/FRONTIER), cost-per-task bar chart, cache hit rate line chart, distillation candidate list (>10k calls/mo) with 1-click distill trigger, budget ceiling inputs, CSV/JSON telemetry export.

@@ -68,10 +68,33 @@ class PipelineRegistry:
         return cls(**kwargs)
 
     def run(self, name: str, **inputs: Any) -> dict[str, Any]:
-        """Instantiate and execute a registered pipeline with given inputs."""
+        """Instantiate and execute a registered pipeline with given inputs.
+        Enforces declared guardrails before execution."""
         meta = self.get_metadata(name)
         if meta is None:
             raise KeyError(f"Pipeline '{name}' not found in registry")
+
+        # F06: Apply declared guardrails as executable checks
+        if meta.guardrails:
+            try:
+                from core.safety import get_policy_engine
+
+                engine = get_policy_engine()
+                decision = engine.evaluate(
+                    tool_name=f"pipeline:{name}",
+                    tool_args=inputs,
+                )
+                if decision.decision in ("block", "deny"):
+                    raise PermissionError(
+                        f"Pipeline '{name}' execution blocked by guardrails: {decision.reason}"
+                    )
+            except PermissionError:
+                raise
+            except Exception as e:
+                # Fail closed if guardrail evaluation errors
+                raise PermissionError(
+                    f"Pipeline '{name}' guardrail check failed (fail-closed): {e}"
+                )
 
         instance = self.instantiate(name)
         pred = instance(**inputs)

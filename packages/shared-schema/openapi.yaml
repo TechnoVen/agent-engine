@@ -571,6 +571,147 @@ paths:
               schema:
                 $ref: '#/components/schemas/AuditLogInfo'
 
+  /safety/operations:
+    get:
+      summary: List pending operations awaiting human operator approval
+      operationId: listPendingOperations
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: session_id
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of pending operations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PendingOperationInfo'
+    post:
+      summary: Register a new pending operation with 60s expiration
+      operationId: registerPendingOperation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterOperationRequest'
+      responses:
+        '200':
+          description: Registered pending operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingOperationInfo'
+
+  /safety/operations/{operation_id}:
+    get:
+      summary: Get details of a pending operation
+      operationId: getPendingOperation
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Pending operation details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingOperationInfo'
+
+  /safety/operations/{operation_id}/approve:
+    post:
+      summary: Approve a pending operation and issue single-use execution token
+      operationId: approvePendingOperation
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveOperationRequest'
+      responses:
+        '200':
+          description: Approved operation with execution token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingOperationInfo'
+
+  /safety/operations/{operation_id}/reject:
+    post:
+      summary: Reject a pending operation with explicit reason
+      operationId: rejectPendingOperation
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RejectOperationRequest'
+      responses:
+        '200':
+          description: Rejected operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingOperationInfo'
+
+  /safety/operations/batch:
+    post:
+      summary: Batch approve or reject pending operations
+      operationId: batchOperations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchOperationRequest'
+      responses:
+        '200':
+          description: Batch result
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PendingOperationInfo'
+
+  /safety/verify-execution:
+    post:
+      summary: Verify single-use execution token and burn it upon verification
+      operationId: verifyExecution
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyExecutionRequest'
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyExecutionResponse'
+
   /sessions:
     post:
       summary: Create a unified cross-agent session
@@ -1689,6 +1830,133 @@ components:
           type: string
         audit_id:
           type: integer
+        operation_id:
+          type: string
+
+    PendingOperationInfo:
+      type: object
+      required: [operation_id, tool_name, tool_args, args_hash, risk_level, risk_score, status, created_at, expires_at]
+      properties:
+        operation_id:
+          type: string
+        tool_name:
+          type: string
+        tool_args:
+          type: object
+        args_hash:
+          type: string
+        risk_level:
+          type: string
+        risk_score:
+          type: number
+        status:
+          type: string
+        created_at:
+          type: number
+        expires_at:
+          type: number
+        session_id:
+          type: string
+        reason:
+          type: string
+        suggestion:
+          type: string
+        diff:
+          type: object
+        approval_token:
+          type: string
+        actor:
+          type: string
+        decision_reason:
+          type: string
+
+    RegisterOperationRequest:
+      type: object
+      required: [tool_name, tool_args]
+      properties:
+        tool_name:
+          type: string
+        tool_args:
+          type: object
+        risk_level:
+          type: string
+          default: high
+        risk_score:
+          type: number
+          default: 0.85
+        session_id:
+          type: string
+        reason:
+          type: string
+        suggestion:
+          type: string
+        diff:
+          type: object
+        ttl_seconds:
+          type: number
+          default: 60.0
+
+    ApproveOperationRequest:
+      type: object
+      properties:
+        actor:
+          type: string
+          default: operator
+        modified_args:
+          type: object
+
+    RejectOperationRequest:
+      type: object
+      properties:
+        actor:
+          type: string
+          default: operator
+        reason:
+          type: string
+          default: Rejected by operator
+
+    BatchOperationRequest:
+      type: object
+      required: [operation_ids, action]
+      properties:
+        operation_ids:
+          type: array
+          items:
+            type: string
+        action:
+          type: string
+          enum: [approve, reject]
+        actor:
+          type: string
+          default: operator
+        reason:
+          type: string
+
+    VerifyExecutionRequest:
+      type: object
+      required: [approval_token, tool_name, tool_args]
+      properties:
+        approval_token:
+          type: string
+        tool_name:
+          type: string
+        tool_args:
+          type: object
+
+    VerifyExecutionResponse:
+      type: object
+      required: [authorized, operation_id, tool_name, actor, message]
+      properties:
+        authorized:
+          type: boolean
+        operation_id:
+          type: string
+        tool_name:
+          type: string
+        actor:
+          type: string
+        message:
+          type: string
 
     AuditLogInfo:
       type: object

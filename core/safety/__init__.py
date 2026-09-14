@@ -10,6 +10,13 @@ Provides:
 """
 
 from core.safety.audit import AuditLogger
+from core.safety.pending import (
+    OperationExpiredError,
+    PendingOperation,
+    PendingOperationRegistry,
+    SecurityBoundaryViolation,
+    get_pending_registry,
+)
 from core.safety.policy import PolicyDecision, PolicyEngine, PolicyRule
 from core.safety.risk import RiskLevel, RiskScorer
 
@@ -32,4 +39,9 @@ __all__ = [
     "RiskLevel",
     "AuditLogger",
     "get_policy_engine",
+    "PendingOperation",
+    "PendingOperationRegistry",
+    "get_pending_registry",
+    "OperationExpiredError",
+    "SecurityBoundaryViolation",
 ]

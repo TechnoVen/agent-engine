@@ -16,6 +16,8 @@ import {
   ObservationRecord,
   ScheduledTask,
   ScheduledTaskCreatePayload,
+  PendingOperation,
+  SafetyPolicyRuleInfo,
 } from '../types';
 
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
@@ -437,6 +439,7 @@ class SidecarClient {
     suggestion?: string;
     reason?: string;
     audit_id?: number;
+    operation_id?: string;
   }> {
     try {
       const res = await fetch(`${this.base}/v1/safety/evaluate`, {
@@ -451,19 +454,167 @@ class SidecarClient {
         }),
       });
       if (!res.ok) {
+        // F06: Fail closed with deny decision on HTTP error
         return {
-          decision: 'allow',
-          risk_score: 0.1,
-          risk_level: 'low',
+          decision: 'deny',
+          risk_score: 1.0,
+          risk_level: 'critical',
+          reason: `Safety evaluation service returned HTTP ${res.status} (fail-closed)`,
+          suggestion: 'High-risk execution blocked by safety boundary',
         };
       }
       return await res.json();
-    } catch {
+    } catch (err: any) {
+      // F06: Fail closed with deny decision on network/transport failure
       return {
-        decision: 'allow',
-        risk_score: 0.1,
-        risk_level: 'low',
+        decision: 'deny',
+        risk_score: 1.0,
+        risk_level: 'critical',
+        reason: `Safety evaluation service unreachable: ${err?.message || 'network error'} (fail-closed)`,
+        suggestion: 'Execution halted: safety boundary offline',
       };
+    }
+  }
+
+  async listPendingOperations(
+    status?: string,
+    sessionId?: string
+  ): Promise<PendingOperation[]> {
+    try {
+      const params = new URLSearchParams();
+      if (status) params.set('status', status);
+      if (sessionId) params.set('session_id', sessionId);
+      const qs = params.toString() ? `?${params.toString()}` : '';
+      const res = await fetch(`${this.base}/v1/safety/operations${qs}`);
+      if (!res.ok) return [];
+      return await res.json();
+    } catch {
+      return [];
+    }
+  }
+
+  async getPendingOperation(operationId: string): Promise<PendingOperation | null> {
+    try {
+      const res = await fetch(`${this.base}/v1/safety/operations/${operationId}`);
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  async registerPendingOperation(payload: {
+    tool_name: string;
+    tool_args: Record<string, any>;
+    risk_level?: RiskLevel;
+    risk_score?: number;
+    session_id?: string;
+    reason?: string;
+    suggestion?: string;
+    diff?: any;
+    ttl_seconds?: number;
+  }): Promise<PendingOperation> {
+    const res = await fetch(`${this.base}/v1/safety/operations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to register pending operation: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async approveOperation(
+    operationId: string,
+    actor?: string,
+    modifiedArgs?: Record<string, any>
+  ): Promise<PendingOperation> {
+    const res = await fetch(`${this.base}/v1/safety/operations/${operationId}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ actor: actor || 'operator', modified_args: modifiedArgs }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || `Failed to approve operation: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async rejectOperation(
+    operationId: string,
+    actor?: string,
+    reason?: string
+  ): Promise<PendingOperation> {
+    const res = await fetch(`${this.base}/v1/safety/operations/${operationId}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ actor: actor || 'operator', reason: reason || 'Rejected by operator' }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || `Failed to reject operation: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async batchOperations(
+    operationIds: string[],
+    action: 'approve' | 'reject',
+    actor?: string,
+    reason?: string
+  ): Promise<PendingOperation[]> {
+    const res = await fetch(`${this.base}/v1/safety/operations/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operation_ids: operationIds,
+        action,
+        actor: actor || 'operator',
+        reason,
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to execute batch operation: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async verifyExecution(
+    approvalToken: string,
+    toolName: string,
+    toolArgs: Record<string, any>
+  ): Promise<{
+    authorized: boolean;
+    operation_id: string;
+    tool_name: string;
+    actor: string;
+    message: string;
+  }> {
+    const res = await fetch(`${this.base}/v1/safety/verify-execution`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        approval_token: approvalToken,
+        tool_name: toolName,
+        tool_args: toolArgs,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Execution verification failed: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async listSafetyPolicies(): Promise<SafetyPolicyRuleInfo[]> {
+    try {
+      const res = await fetch(`${this.base}/v1/safety/policies`);
+      if (!res.ok) return [];
+      return await res.json();
+    } catch {
+      return [];
     }
   }
 

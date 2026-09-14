@@ -38,7 +38,12 @@ from core.router import (
     StepProfile,
     audit_pipeline,
 )
-from core.safety import get_policy_engine
+from core.safety import (
+    OperationExpiredError,
+    SecurityBoundaryViolation,
+    get_pending_registry,
+    get_policy_engine,
+)
 from core.security import get_credential_manager, mask_secret
 from core.storage import get_storage_backend
 from core.updater import get_update_manager
@@ -702,6 +707,69 @@ class SafetyEvaluationResponse(BaseModel):
     suggestion: Optional[str] = None
     reason: Optional[str] = None
     audit_id: Optional[int] = None
+    operation_id: Optional[str] = None
+
+
+class PendingOperationInfo(BaseModel):
+    operation_id: str
+    tool_name: str
+    tool_args: Dict[str, Any]
+    args_hash: str
+    risk_level: str
+    risk_score: float
+    status: str
+    created_at: float
+    expires_at: float
+    session_id: Optional[str] = None
+    reason: Optional[str] = None
+    suggestion: Optional[str] = None
+    diff: Optional[Dict[str, Any]] = None
+    approval_token: Optional[str] = None
+    actor: Optional[str] = None
+    decision_reason: Optional[str] = None
+
+
+class RegisterOperationRequest(BaseModel):
+    tool_name: str
+    tool_args: Dict[str, Any]
+    risk_level: Optional[str] = "high"
+    risk_score: Optional[float] = 0.85
+    session_id: Optional[str] = None
+    reason: Optional[str] = None
+    suggestion: Optional[str] = None
+    diff: Optional[Dict[str, Any]] = None
+    ttl_seconds: Optional[float] = 60.0
+
+
+class ApproveOperationRequest(BaseModel):
+    actor: Optional[str] = "operator"
+    modified_args: Optional[Dict[str, Any]] = None
+
+
+class RejectOperationRequest(BaseModel):
+    actor: Optional[str] = "operator"
+    reason: Optional[str] = "Rejected by operator"
+
+
+class BatchOperationRequest(BaseModel):
+    operation_ids: List[str]
+    action: str = Field(..., description="approve | reject")
+    actor: Optional[str] = "operator"
+    reason: Optional[str] = None
+
+
+class VerifyExecutionRequest(BaseModel):
+    approval_token: str
+    tool_name: str
+    tool_args: Dict[str, Any]
+
+
+class VerifyExecutionResponse(BaseModel):
+    authorized: bool
+    operation_id: str
+    tool_name: str
+    actor: str
+    message: str
 
 
 class AuditLogInfo(BaseModel):
@@ -1363,9 +1431,28 @@ async def list_patches():
 
 
 @v1_router.post("/patches/{patch_id}/apply", response_model=ActionResult)
-async def apply_patch(patch_id: int, request: Request):
+async def apply_patch(
+    patch_id: int,
+    request: Request,
+    approval_token: Optional[str] = Query(
+        None, description="Single-use approval token for high-risk patches"
+    ),
+):
     """Apply a staged patch directly to the filesystem."""
     verify_ipc_token(request)
+    if approval_token:
+        registry = get_pending_registry()
+        try:
+            registry.consume_token(
+                approval_token=approval_token,
+                tool_name="filesystem:apply_patch",
+                tool_args={"patch_id": patch_id},
+            )
+        except SecurityBoundaryViolation as e:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Security boundary violation: {e}",
+            )
     success = apply_staged_patch(patch_id)
     if not success:
         raise HTTPException(
@@ -1561,17 +1648,50 @@ async def override_flag(flag_name: str, req: FlagOverrideRequest):
 
 @v1_router.post("/safety/evaluate", response_model=SafetyEvaluationResponse)
 async def evaluate_safety(req: SafetyEvaluationRequest):
-    """Evaluate a prospective tool call against active safety policies and risk scoring."""
+    """Evaluate a prospective tool call against active safety policies and risk scoring.
+    Fails closed on any exception, returning 'deny'."""
     engine = get_policy_engine()
-    decision = engine.evaluate(
-        tool_name=req.tool_name,
-        tool_args=req.tool_args,
-        context={
-            "session_id": req.session_id,
-            "allow_high_risk": req.allow_high_risk,
-            "auto_apply": req.auto_apply,
-        },
-    )
+    try:
+        decision = engine.evaluate(
+            tool_name=req.tool_name,
+            tool_args=req.tool_args,
+            context={
+                "session_id": req.session_id,
+                "allow_high_risk": req.allow_high_risk,
+                "auto_apply": req.auto_apply,
+            },
+        )
+    except Exception as e:
+        # F06: Fail closed on evaluation error
+        return SafetyEvaluationResponse(
+            decision="deny",
+            risk_score=1.0,
+            risk_level="critical",
+            violating_rules=[],
+            suggestion="Execution blocked by safety boundary",
+            reason=f"Safety evaluation failed (fail-closed): {e}",
+            audit_id=None,
+            operation_id=None,
+        )
+
+    # Auto-register into PendingOperationRegistry if decision is block/deny/stage or high/critical risk
+    operation_id = None
+    if decision.decision in ("deny", "block", "stage") or decision.risk_level in (
+        "high",
+        "critical",
+    ):
+        registry = get_pending_registry()
+        op = registry.register_operation(
+            tool_name=req.tool_name,
+            tool_args=req.tool_args,
+            risk_level=decision.risk_level,
+            risk_score=decision.risk_score,
+            session_id=req.session_id,
+            reason=decision.reason,
+            suggestion=decision.suggestion,
+        )
+        operation_id = op.operation_id
+
     return SafetyEvaluationResponse(
         decision=decision.decision,
         risk_score=decision.risk_score,
@@ -1580,7 +1700,187 @@ async def evaluate_safety(req: SafetyEvaluationRequest):
         suggestion=decision.suggestion,
         reason=decision.reason,
         audit_id=decision.audit_id,
+        operation_id=operation_id,
     )
+
+
+@v1_router.get("/safety/operations", response_model=List[PendingOperationInfo])
+async def list_pending_operations(
+    status: Optional[str] = Query(
+        None, description="Filter by status (pending, approved, rejected, expired, consumed)"
+    ),
+    session_id: Optional[str] = Query(None, description="Filter by session ID"),
+):
+    """List pending high-risk operations awaiting operator approval."""
+    registry = get_pending_registry()
+    ops = registry.list_operations(status=status, session_id=session_id)
+    return [PendingOperationInfo(**op.to_dict()) for op in ops]
+
+
+@v1_router.post("/safety/operations", response_model=PendingOperationInfo)
+async def register_pending_operation(req: RegisterOperationRequest):
+    """Register a new pending tool operation into the approval queue with a 60s TTL."""
+    registry = get_pending_registry()
+    op = registry.register_operation(
+        tool_name=req.tool_name,
+        tool_args=req.tool_args,
+        risk_level=req.risk_level or "high",
+        risk_score=req.risk_score or 0.85,
+        session_id=req.session_id,
+        reason=req.reason,
+        suggestion=req.suggestion,
+        diff=req.diff,
+        ttl_seconds=req.ttl_seconds,
+    )
+    return PendingOperationInfo(**op.to_dict())
+
+
+@v1_router.get("/safety/operations/{operation_id}", response_model=PendingOperationInfo)
+async def get_pending_operation(operation_id: str):
+    """Retrieve details and status of a pending operation by ID."""
+    registry = get_pending_registry()
+    op = registry.get_operation(operation_id)
+    if not op:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Operation '{operation_id}' not found",
+        )
+    return PendingOperationInfo(**op.to_dict())
+
+
+@v1_router.post("/safety/operations/{operation_id}/approve", response_model=PendingOperationInfo)
+async def approve_pending_operation(
+    operation_id: str,
+    req: ApproveOperationRequest,
+    request: Request,
+):
+    """Approve a pending operation, generate a single-use execution token, and audit the approval."""
+    verify_ipc_token(request)
+    registry = get_pending_registry()
+    try:
+        op, _token = registry.approve_operation(
+            operation_id=operation_id,
+            actor=req.actor or "operator",
+            modified_args=req.modified_args,
+        )
+        engine = get_policy_engine()
+        engine.audit_logger.log_evaluation(
+            tool_name=op.tool_name,
+            tool_args=op.tool_args,
+            decision="operator_approved",
+            risk_level=op.risk_level,
+            risk_score=op.risk_score,
+            policy_id="approval_queue",
+            reason=f"Approved by {req.actor or 'operator'}",
+            session_id=op.session_id,
+        )
+        return PendingOperationInfo(**op.to_dict())
+    except OperationExpiredError as e:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@v1_router.post("/safety/operations/{operation_id}/reject", response_model=PendingOperationInfo)
+async def reject_pending_operation(
+    operation_id: str,
+    req: RejectOperationRequest,
+    request: Request,
+):
+    """Reject a pending operation with an explicit reason returned to the waiting agent."""
+    verify_ipc_token(request)
+    registry = get_pending_registry()
+    try:
+        op = registry.reject_operation(
+            operation_id=operation_id,
+            actor=req.actor or "operator",
+            reason=req.reason or "Rejected by operator",
+        )
+        engine = get_policy_engine()
+        engine.audit_logger.log_evaluation(
+            tool_name=op.tool_name,
+            tool_args=op.tool_args,
+            decision="operator_rejected",
+            risk_level=op.risk_level,
+            risk_score=op.risk_score,
+            policy_id="approval_queue",
+            reason=req.reason or "Rejected by operator",
+            session_id=op.session_id,
+        )
+        return PendingOperationInfo(**op.to_dict())
+    except OperationExpiredError as e:
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@v1_router.post("/safety/operations/batch", response_model=List[PendingOperationInfo])
+async def batch_operations(req: BatchOperationRequest, request: Request):
+    """Batch approve or reject multiple pending operations."""
+    verify_ipc_token(request)
+    registry = get_pending_registry()
+    engine = get_policy_engine()
+    results = []
+    for op_id in req.operation_ids:
+        try:
+            if req.action == "approve":
+                op, _ = registry.approve_operation(op_id, actor=req.actor or "operator")
+                engine.audit_logger.log_evaluation(
+                    tool_name=op.tool_name,
+                    tool_args=op.tool_args,
+                    decision="operator_approved_batch",
+                    risk_level=op.risk_level,
+                    risk_score=op.risk_score,
+                    policy_id="approval_queue_batch",
+                    reason=f"Batch approved by {req.actor or 'operator'}",
+                    session_id=op.session_id,
+                )
+                results.append(op)
+            elif req.action == "reject":
+                op = registry.reject_operation(
+                    op_id,
+                    actor=req.actor or "operator",
+                    reason=req.reason or "Batch rejected by operator",
+                )
+                engine.audit_logger.log_evaluation(
+                    tool_name=op.tool_name,
+                    tool_args=op.tool_args,
+                    decision="operator_rejected_batch",
+                    risk_level=op.risk_level,
+                    risk_score=op.risk_score,
+                    policy_id="approval_queue_batch",
+                    reason=req.reason or "Batch rejected by operator",
+                    session_id=op.session_id,
+                )
+                results.append(op)
+        except Exception:
+            continue
+    return [PendingOperationInfo(**op.to_dict()) for op in results]
+
+
+@v1_router.post("/safety/verify-execution", response_model=VerifyExecutionResponse)
+async def verify_execution(req: VerifyExecutionRequest, request: Request):
+    """Verify single-use execution token and burn it upon verification (fail-closed boundary)."""
+    verify_ipc_token(request)
+    registry = get_pending_registry()
+    try:
+        op = registry.consume_token(
+            approval_token=req.approval_token,
+            tool_name=req.tool_name,
+            tool_args=req.tool_args,
+        )
+        return VerifyExecutionResponse(
+            authorized=True,
+            operation_id=op.operation_id,
+            tool_name=op.tool_name,
+            actor=op.actor or "operator",
+            message="Approval token successfully validated and burned.",
+        )
+    except SecurityBoundaryViolation as e:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Security boundary violation: {e}",
+        )
 
 
 @v1_router.get("/safety/policies", response_model=List[SafetyPolicyRuleInfo])
