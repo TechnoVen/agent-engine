@@ -10,6 +10,7 @@ from core.storage import (
 )
 from core.storage.base import StorageBackend
 from pathlib import Path
+import sys
 
 
 @pytest.fixture(autouse=True)
@@ -365,7 +366,7 @@ def test_alembic_migration_execution(tmp_path):
 
     # Run alembic upgrade head
     result = subprocess.run(
-        [".venv/bin/alembic", "upgrade", "head"],
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
         cwd=str(Path(__file__).resolve().parents[1]),
         env=env,
         capture_output=True,
