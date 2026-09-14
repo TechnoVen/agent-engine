@@ -9,7 +9,9 @@ import io
 import json
 import os
 import re
+import shutil
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
@@ -451,13 +453,36 @@ if not client_mode:
     # Button to apply new context and restart llama-server
     if st.sidebar.button("Apply Context Change & Restart Server"):
         os.system("pkill -f 'llama-server.*port 8080'")
-        cmd = (
-            f"/home/nadir/.local/lib/ollama/llama-server "
-            f"-m {LLAMA_MODEL_PATH} "
-            f"-c {context_choice} --port 8080 > logs_llama_server.log 2>&1 &"
-        )
-        os.system(cmd)
-        st.sidebar.success(f"llama-server restarted with context size {context_choice}")
+        llama_server = os.environ.get("LLAMA_SERVER_BIN") or shutil.which("llama-server")
+
+        if not llama_server:
+            fallback = os.path.expanduser("~/.local/lib/ollama/llama-server")
+            if os.path.isfile(fallback) and os.access(fallback, os.X_OK):
+                llama_server = fallback
+
+        if not llama_server:
+            st.sidebar.error("llama-server not found. Add it to PATH or set LLAMA_SERVER_BIN.")
+        else:
+            log_path = os.path.join(PROJECT_ROOT, "logs_llama_server.log")
+
+            with open(log_path, "ab") as log_file:
+                subprocess.Popen(
+                    [
+                        llama_server,
+                        "-m",
+                        LLAMA_MODEL_PATH,
+                        "-c",
+                        str(context_choice),
+                        "--port",
+                        "8080",
+                    ],
+                    stdout=log_file,
+                    stderr=subprocess.STDOUT,
+                    cwd=PROJECT_ROOT,
+                    start_new_session=True,
+                )
+
+            st.sidebar.success(f"llama-server restarted with context size {context_choice}")
         time.sleep(2)
         st.rerun()
 else:

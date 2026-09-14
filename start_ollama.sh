@@ -10,4 +10,11 @@ export OLLAMA_IGPU_ENABLE=1
 export OLLAMA_HOST=127.0.0.1:11434
 
 # Use bash to execute to ensure clean signal handling
-exec /home/nadir/.local/bin/ollama serve
+OLLAMA_BIN="${OLLAMA_BIN:-$(command -v ollama 2>/dev/null || true)}"
+
+if [ -z "$OLLAMA_BIN" ]; then
+    echo "Error: ollama executable not found in PATH." >&2
+    exit 1
+fi
+
+exec "$OLLAMA_BIN" serve
