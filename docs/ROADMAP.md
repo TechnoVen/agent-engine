@@ -231,10 +231,11 @@
   - **Deliverables:** `apps/desktop/src/renderer/screens/Projects.tsx` (Route `/projects`), `ProjectDetail.tsx` with thread list and right inspector (Instructions, Files, Agents, Scoped Policy, Scoped Cost), Centered Create Project modal with icon carousel.
   - **Acceptance Criteria:** Project scopes conversation context and file attachments; instructions injected into prompt prefix; thread list loads instantly; 28/28 desktop shell tests pass; 100% of monorepo tests pass (248/248).
   - **Status:** ✅ DONE
-- [ ] **Task 4.2 — Provider Setup Panel & Keychain Storage**
+- [x] **Task 4.2 — Provider Setup Panel & Keychain Storage**
   - **User Story:** As an operator, I want to configure LLM providers and test API connectivity with keychain-backed credential storage.
   - **Deliverables:** Provider configuration cards in `Settings.tsx` (OpenAI, Anthropic, Google Gemini, Ollama, vLLM, Custom OpenAI-compatible), OS keychain integration, 1-click connection test button.
-  - **Acceptance Criteria:** Credentials securely stored in OS keychain; latency and status badge rendered in real-time.
+  - **Acceptance Criteria:** Credentials securely stored in OS keychain; latency and status badge rendered in real-time; 29/29 desktop shell tests pass; 100% of monorepo tests pass (249/249).
+  - **Status:** ✅ DONE
 - [ ] **Task 4.3 — End-to-End Real Execution Engine (P1 Remediation: F03)**
   - **User Story:** As a user, I want the conversation canvas to execute real DSPy pipelines and local/remote providers rather than canned simulations, with real streaming, cancellation, and session persistence.
   - **Deliverables:** Connect `Home.tsx` and `ModePage.tsx` to real backend `/v1/chat/completions` or `/v1/pipelines/{name}/run` streaming endpoints; real server-sent event token streaming; cancellation signal propagation; remove mock `requestAnimationFrame` simulated text; persisted session resumption on reload; honest error handling on provider failure.

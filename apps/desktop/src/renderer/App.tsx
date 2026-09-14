@@ -4,6 +4,7 @@ import { Home } from './screens/Home';
 import { Agent } from './screens/Agent';
 import { Tasks } from './screens/Tasks';
 import { Projects } from './screens/Projects';
+import { Settings } from './screens/Settings';
 import {
   CodeMode,
   ResearchMode,
@@ -195,6 +196,15 @@ export const App: React.FC = () => {
       case 'diagrams':
         return (
           <DiagramsMode
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'settings':
+        return (
+          <Settings
             onSelectMode={setActiveMode}
             activeModel={activeModel}
             onSelectModel={setActiveModel}

@@ -921,3 +921,67 @@ def test_task_4_1_projects_and_workspaces():
     assert "import { Projects } from './screens/Projects';" in app_content
     assert "case 'projects':" in app_content
     assert "<Projects" in app_content
+
+
+def test_task_4_2_provider_setup_and_keychain():
+    """
+    Validates Task 4.2 deliverables and contracts:
+    - Settings.tsx exists with provider cards for OpenAI, Anthropic, Gemini, Ollama, vLLM, Custom
+    - 1-click connection test button & keychain save action
+    - Backend test_provider_key supports local (Ollama, vLLM) and custom endpoints with base_url
+    - POST /v1/credentials/test endpoint accepts base_url
+    - App.tsx routes 'settings'
+    """
+    # 1. Validate Settings.tsx component exists and exports Settings
+    settings_file = RENDERER_ROOT / "screens" / "Settings.tsx"
+    assert settings_file.exists(), "Settings.tsx screen must exist"
+    content = settings_file.read_text()
+    assert "export const Settings:" in content
+    assert "handleTestConnection" in content
+    assert "handleSaveKey" in content
+    assert "sidecarClient.testCredential" in content
+    assert "sidecarClient.setCredential" in content
+    assert "OS Keychain Integration Active" in content
+
+    # 2. Check all 6 required provider configurations
+    required_providers = ["openai", "anthropic", "gemini", "ollama", "vllm", "custom"]
+    for prov in required_providers:
+        assert f"id: '{prov}'" in content, f"Missing required provider {prov} in Settings.tsx"
+
+    # 3. Check App.tsx routing for settings
+    app_file = RENDERER_ROOT / "App.tsx"
+    app_content = app_file.read_text()
+    assert "import { Settings } from './screens/Settings';" in app_content
+    assert "case 'settings':" in app_content
+    assert "<Settings" in app_content
+
+    # 4. Check backend test_provider_key with Ollama / local provider
+    from core.security.credentials import get_credential_manager
+
+    mgr = get_credential_manager()
+    # Test custom provider format validation
+    res = mgr.test_provider_key(
+        "custom", api_key="test-dummy-key-12345", base_url="http://127.0.0.1:9999"
+    )
+    assert "valid" in res
+    assert "latency_ms" in res
+    assert res["provider"] == "custom"
+
+    # 5. Check FastAPI endpoint POST /v1/credentials/test
+    from fastapi.testclient import TestClient
+    from services.python.server.api import app
+
+    client = TestClient(app)
+    resp = client.post(
+        "/v1/credentials/test",
+        json={
+            "provider": "custom",
+            "api_key": "test-key-abcde-12345",
+            "base_url": "http://127.0.0.1:9999",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["provider"] == "custom"
+    assert "valid" in data
+    assert "latency_ms" in data

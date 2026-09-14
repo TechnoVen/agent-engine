@@ -668,6 +668,7 @@ class CredentialManager:
         self,
         provider: str,
         api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
         timeout: float = 5.0,
     ) -> Dict[str, Any]:
         """Test API connectivity and authentication for a provider key."""
@@ -675,19 +676,40 @@ class CredentialManager:
         key_to_test = api_key or self.get_api_key(p_name)
 
         if not key_to_test:
-            return {
-                "provider": provider,
-                "valid": False,
-                "latency_ms": 0.0,
-                "error": f"No API key configured for provider '{provider}'",
-            }
+            if p_name in ("ollama", "local"):
+                key_to_test = "ollama"
+            elif p_name in ("vllm", "custom", "openai-compatible") and base_url:
+                key_to_test = "custom"
+            else:
+                return {
+                    "provider": provider,
+                    "valid": False,
+                    "latency_ms": 0.0,
+                    "error": f"No API key configured for provider '{provider}'",
+                }
 
         t0 = time.perf_counter()
 
         try:
-            if p_name == "openai":
+            if p_name in ("ollama", "local"):
+                url = (base_url or "http://localhost:11434").rstrip("/")
+                resp = requests.get(f"{url}/api/tags", timeout=timeout)
+            elif p_name == "vllm":
+                url = (base_url or "http://localhost:8000").rstrip("/")
+                headers = {}
+                if key_to_test and key_to_test != "custom":
+                    headers["Authorization"] = f"Bearer {key_to_test}"
+                resp = requests.get(f"{url}/v1/models", headers=headers, timeout=timeout)
+            elif p_name in ("custom", "openai-compatible"):
+                url = (base_url or "http://localhost:8080").rstrip("/")
+                headers = {}
+                if key_to_test and key_to_test != "custom":
+                    headers["Authorization"] = f"Bearer {key_to_test}"
+                resp = requests.get(f"{url}/v1/models", headers=headers, timeout=timeout)
+            elif p_name == "openai":
+                url = (base_url or "https://api.openai.com").rstrip("/")
                 resp = requests.get(
-                    "https://api.openai.com/v1/models",
+                    f"{url}/v1/models",
                     headers={"Authorization": f"Bearer {key_to_test}"},
                     timeout=timeout,
                 )

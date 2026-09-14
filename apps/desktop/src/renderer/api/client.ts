@@ -147,10 +147,31 @@ class SidecarClient {
     }
   }
 
+  private getHeaders(extra?: Record<string, string>): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...extra,
+    };
+    try {
+      const token =
+        (window as unknown as { __AGENT_ENGINE_IPC_TOKEN__?: string }).__AGENT_ENGINE_IPC_TOKEN__ ||
+        localStorage.getItem('agent_engine_ipc_token');
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+        headers['X-IPC-Token'] = token;
+      }
+    } catch {
+      // localStorage may be restricted
+    }
+    return headers;
+  }
+
   async getCredentials(service?: string): Promise<CredentialItem[]> {
     try {
       const query = service ? `?service=${encodeURIComponent(service)}` : '';
-      const res = await fetch(`${this.base}/v1/credentials${query}`);
+      const res = await fetch(`${this.base}/v1/credentials${query}`, {
+        headers: this.getHeaders(),
+      });
       if (!res.ok) return [];
       return await res.json();
     } catch {
@@ -161,7 +182,7 @@ class SidecarClient {
   async setCredential(payload: SetCredentialPayload): Promise<CredentialItem> {
     const res = await fetch(`${this.base}/v1/credentials`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.getHeaders(),
       body: JSON.stringify(payload),
     });
     if (!res.ok) {
@@ -177,7 +198,8 @@ class SidecarClient {
   ): Promise<CredentialDetail | null> {
     try {
       const res = await fetch(
-        `${this.base}/v1/credentials/${encodeURIComponent(service)}/${encodeURIComponent(key)}?reveal=${reveal}`
+        `${this.base}/v1/credentials/${encodeURIComponent(service)}/${encodeURIComponent(key)}?reveal=${reveal}`,
+        { headers: this.getHeaders() }
       );
       if (!res.ok) return null;
       return await res.json();
@@ -190,7 +212,7 @@ class SidecarClient {
     try {
       const res = await fetch(
         `${this.base}/v1/credentials/${encodeURIComponent(service)}/${encodeURIComponent(key)}`,
-        { method: 'DELETE' }
+        { method: 'DELETE', headers: this.getHeaders() }
       );
       return res.ok;
     } catch {
@@ -200,12 +222,13 @@ class SidecarClient {
 
   async testCredential(
     provider: string,
-    apiKey?: string
+    apiKey?: string,
+    baseUrl?: string
   ): Promise<CredentialTestResult> {
     const res = await fetch(`${this.base}/v1/credentials/test`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ provider, api_key: apiKey }),
+      headers: this.getHeaders(),
+      body: JSON.stringify({ provider, api_key: apiKey, base_url: baseUrl }),
     });
     if (!res.ok) {
       return {

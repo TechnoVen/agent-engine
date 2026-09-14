@@ -754,10 +754,15 @@ class GetCredentialResponse(BaseModel):
 
 class TestCredentialRequest(BaseModel):
     provider: str = Field(
-        ..., description="Provider name (e.g. openai, anthropic, gemini, deepseek, groq, kimi)"
+        ...,
+        description="Provider name (e.g. openai, anthropic, gemini, ollama, vllm, deepseek, groq, kimi, custom)",
     )
     api_key: Optional[str] = Field(
         default=None, description="Optional API key to test directly; if omitted, uses stored key"
+    )
+    base_url: Optional[str] = Field(
+        default=None,
+        description="Optional base URL for local/custom providers (e.g. http://localhost:11434)",
     )
 
 
@@ -2086,7 +2091,7 @@ async def delete_credential_endpoint(service: str, key: str, request: Request):
 async def test_credential_endpoint(req: TestCredentialRequest):
     """Test API authentication and connectivity for a model provider."""
     mgr = get_credential_manager()
-    res = mgr.test_provider_key(req.provider, api_key=req.api_key)
+    res = mgr.test_provider_key(req.provider, api_key=req.api_key, base_url=req.base_url)
     return TestCredentialResponse(
         provider=res["provider"],
         valid=res["valid"],
