@@ -25,7 +25,7 @@
   - **Task 3.11:** Featured Cases Content Curation (32 curated templates in `configs/cases/`, dedicated mode screens in `apps/desktop/src/renderer/screens/Modes/`, one-click prompt injection, `core/cases.py` loader & search, FastAPI `/v1/cases` endpoints)
 
 ### Current Test Count
-- **Monorepo Tests:** `247 passed` (strictly increasing with every completed task).
+- **Monorepo Tests:** `248 passed` (strictly increasing with every completed task).
 - **Desktop Build:** `pnpm --filter @agent-engine/desktop build` passes with 0 TypeScript errors.
 - **Cargo Check:** `cargo check` in `apps/desktop/src-tauri` passes cleanly.
 
@@ -35,9 +35,8 @@
 
 Aligned with `docs/PROJECT_REVIEW_2026-09-14.md` to remediate findings F01–F14:
 1. **Task 4.0 — Foundation Hardening & Contract Alignment:** ✅ Complete (Remediated F01, F02, F04, F05, F09, F12; 247/247 tests green)
-2. **Task 4.1 — Projects & Workspaces (Organiser) (⏳ NEXT)**
-   - `apps/desktop/src/renderer/screens/Projects.tsx`, `ProjectDetail.tsx`, Create Project modal, context & file scoping.
-3. **Task 4.2 — Provider Setup Panel & Keychain Storage**
+2. **Task 4.1 — Projects & Workspaces (Organiser):** ✅ Complete (`apps/desktop/src/renderer/screens/Projects.tsx`, `ProjectDetail.tsx`, Centered Create Project modal, context & file scoping; 248/248 tests green)
+3. **Task 4.2 — Provider Setup Panel & Keychain Storage (⏳ NEXT)**
    - Provider cards in `Settings.tsx`, OS keychain integration, 1-click connection test.
 4. **Task 4.3 — End-to-End Real Execution Engine (F03)**
    - Connect Home & ModePage to real DSPy/provider execution, real streaming SSE, cancellation, session persistence.

@@ -30,12 +30,38 @@ export interface ModelTierOption {
   costPer1k: string;
 }
 
+export interface ProjectThread {
+  id: string;
+  title: string;
+  updatedAt: string;
+  messageCount: number;
+  snippet?: string;
+  status: 'active' | 'archived';
+}
+
+export interface ProjectFile {
+  id: string;
+  name: string;
+  size: string;
+  type: string;
+  uploadedAt: string;
+}
+
 export interface Project {
   id: string;
   name: string;
   icon: string;
   threadCount: number;
   lastActivity: string;
+  description?: string;
+  instructions?: string;
+  color?: string;
+  files?: ProjectFile[];
+  threads?: ProjectThread[];
+  activeAgents?: string[];
+  scopedPolicy?: string;
+  monthlySpendUsd?: number;
+  budgetCeilingUsd?: number;
 }
 
 export interface RecentChat {

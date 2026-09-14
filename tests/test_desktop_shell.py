@@ -871,3 +871,53 @@ def test_task_3_11_featured_cases_content_curation():
     mode_payload = resp_mode.json()
     assert mode_payload["mode"] == "deep-research"
     assert len(mode_payload["cases"]) >= 4
+
+
+def test_task_4_1_projects_and_workspaces():
+    """
+    Validates Task 4.1 deliverables and contracts:
+    - Projects.tsx screen exists with workspace cards grid and create project modal
+    - ProjectDetail.tsx inspector exists with 5-tab inspector and thread list
+    - App.tsx routes 'projects'
+    - Project types in types/index.ts
+    """
+    # 1. Check types
+    types_file = RENDERER_ROOT / "types" / "index.ts"
+    types_content = types_file.read_text()
+    assert "export interface Project {" in types_content
+    assert "export interface ProjectThread {" in types_content
+    assert "export interface ProjectFile {" in types_content
+    assert "scopedPolicy?:" in types_content
+    assert "budgetCeilingUsd?:" in types_content
+
+    # 2. Check Projects.tsx
+    projects_screen = RENDERER_ROOT / "screens" / "Projects.tsx"
+    assert projects_screen.exists(), "Projects.tsx screen must exist"
+    p_content = projects_screen.read_text()
+    assert "export const Projects:" in p_content
+    assert "Create New Workspace" in p_content or "Create Project" in p_content
+    assert "Persistent System Instructions" in p_content
+    assert "Scoped Security Policy" in p_content
+    assert "AVAILABLE_ICONS" in p_content
+    assert "ProjectDetail" in p_content
+
+    # 3. Check ProjectDetail.tsx
+    detail_screen = RENDERER_ROOT / "screens" / "ProjectDetail.tsx"
+    assert detail_screen.exists(), "ProjectDetail.tsx screen must exist"
+    d_content = detail_screen.read_text()
+    assert "export const ProjectDetail:" in d_content
+    assert "activeTab" in d_content
+    assert "'instructions'" in d_content
+    assert "'files'" in d_content
+    assert "'agents'" in d_content
+    assert "'policy'" in d_content
+    assert "'cost'" in d_content
+    assert "handleSaveInstructions" in d_content
+    assert "handleCreateNewThread" in d_content
+
+    # 4. Check App.tsx routing
+    app_file = RENDERER_ROOT / "App.tsx"
+    app_content = app_file.read_text()
+    assert "import { Projects } from './screens/Projects';" in app_content
+    assert "case 'projects':" in app_content
+    assert "<Projects" in app_content

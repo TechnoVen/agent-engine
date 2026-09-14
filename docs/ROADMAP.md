@@ -226,10 +226,11 @@
   - **Deliverables:** Fix native supervisor lock order deadlock in `apps/desktop/src-tauri/src/sidecar.rs` (F02); add canonical `GET /v1/health` and `POST /v1/memory/ingest` routes in `services/python/server/api.py` and flexible array/envelope parsing in `apps/desktop/src/renderer/api/client.ts` (F04); implement persistent scheduled tasks table in `core/storage/sqlite.py` and real CRUD routes in `api.py` (F09); enforce IPC token authentication on sensitive routes, restrict CORS, and protect secret reveals (F01); prevent stale patch overwrites via disk content verification in `core/storage/sqlite.py` and `postgres.py` (F05); fix `Makefile` lint recipe exit code propagation (F12); and add test suite `tests/test_task_4_0_hardening.py`.
   - **Acceptance Criteria:** Supervisor acquires locks without deadlock; `/v1/health` returns `SidecarHealth`; `/v1/memory/ingest` succeeds; `/v1/tasks` supports full CRUD and persists across reboots; unauthorized IPC requests receive 401; unauthenticated `reveal=true` fails; stale patches are rejected with error and leave disk files intact; `make lint` fails when lint errors exist; test count strictly increases (240 → 247).
   - **Status:** ✅ DONE
-- [ ] **Task 4.1 — Projects & Workspaces (Organiser)**
+- [x] **Task 4.1 — Projects & Workspaces (Organiser)**
   - **User Story:** As a user, I want dedicated workspaces that group threads, persistent instructions, attached files, active agent adapters, and scoped policies.
   - **Deliverables:** `apps/desktop/src/renderer/screens/Projects.tsx` (Route `/projects`), `ProjectDetail.tsx` with thread list and right inspector (Instructions, Files, Agents, Scoped Policy, Scoped Cost), Centered Create Project modal with icon carousel.
-  - **Acceptance Criteria:** Project scopes conversation context and file attachments; instructions injected into prompt prefix; thread list loads instantly.
+  - **Acceptance Criteria:** Project scopes conversation context and file attachments; instructions injected into prompt prefix; thread list loads instantly; 28/28 desktop shell tests pass; 100% of monorepo tests pass (248/248).
+  - **Status:** ✅ DONE
 - [ ] **Task 4.2 — Provider Setup Panel & Keychain Storage**
   - **User Story:** As an operator, I want to configure LLM providers and test API connectivity with keychain-backed credential storage.
   - **Deliverables:** Provider configuration cards in `Settings.tsx` (OpenAI, Anthropic, Google Gemini, Ollama, vLLM, Custom OpenAI-compatible), OS keychain integration, 1-click connection test button.

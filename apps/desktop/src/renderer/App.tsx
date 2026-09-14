@@ -3,6 +3,7 @@ import { Layout } from './shell/Layout';
 import { Home } from './screens/Home';
 import { Agent } from './screens/Agent';
 import { Tasks } from './screens/Tasks';
+import { Projects } from './screens/Projects';
 import {
   CodeMode,
   ResearchMode,
@@ -113,6 +114,16 @@ export const App: React.FC = () => {
         return (
           <Tasks
             onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'projects':
+        return (
+          <Projects
+            onSelectMode={setActiveMode}
+            onSelectSession={setActiveSessionId}
             activeModel={activeModel}
             onSelectModel={setActiveModel}
             inputRef={chatInputRef}
