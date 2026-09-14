@@ -89,6 +89,112 @@ class SidecarClient {
     }
   }
 
+  async getSession(sessionId: string): Promise<any | null> {
+    try {
+      const res = await fetch(`${this.base}/v1/sessions/${encodeURIComponent(sessionId)}`, {
+        headers: this.getHeaders(),
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  async runPipeline(name: string, inputs: Record<string, any>): Promise<any> {
+    const res = await fetch(`${this.base}/v1/pipelines/${encodeURIComponent(name)}/run`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ inputs }),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(errData.detail || `Pipeline execution failed: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async streamChatCompletion(options: {
+    prompt: string;
+    sessionId?: string;
+    model?: string;
+    signal?: AbortSignal;
+    onToken: (token: string) => void;
+    onCostUpdate?: (costData: any) => void;
+    onError?: (error: string) => void;
+    onDone?: () => void;
+  }): Promise<void> {
+    const { prompt, sessionId, model, signal, onToken, onCostUpdate, onError, onDone } = options;
+    try {
+      const res = await fetch(`${this.base}/v1/chat/completions`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({
+          prompt,
+          session_id: sessionId,
+          model,
+          stream: true,
+        }),
+        signal,
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({ detail: `HTTP ${res.status}: ${res.statusText}` }));
+        const errMsg = errJson.detail || `HTTP ${res.status}: ${res.statusText}`;
+        onError?.(errMsg);
+        return;
+      }
+
+      if (!res.body) {
+        onError?.('Response body is empty');
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('data: ')) {
+            const jsonStr = trimmed.slice(6).trim();
+            if (!jsonStr) continue;
+            try {
+              const payload = JSON.parse(jsonStr);
+              if (payload.event === 'token' && payload.delta) {
+                onToken(payload.delta);
+              } else if (payload.event === 'cost_update') {
+                onCostUpdate?.(payload);
+              } else if (payload.event === 'error') {
+                onError?.(payload.error || 'Execution failed');
+              } else if (payload.event === 'done') {
+                onDone?.();
+              }
+            } catch {
+              // ignore malformed JSON chunk
+            }
+          }
+        }
+      }
+      onDone?.();
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        // Aborted by user cancellation
+        return;
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      onError?.(msg);
+    }
+  }
+
   async searchSessions(query: string, limit = 20): Promise<SessionSearchResult[]> {
     const trimmed = query.trim();
     if (!trimmed) return [];

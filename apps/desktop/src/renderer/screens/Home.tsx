@@ -26,6 +26,7 @@ export interface HomeProps {
   onSelectModel?: (model: ModelTier) => void;
   inputRef?: React.RefObject<HTMLTextAreaElement>;
   initialMessages?: ChatMessage[];
+  activeSessionId?: string;
 }
 
 // Tool Call Interceptor for Policy Shield and Dangerous Operations
@@ -221,6 +222,7 @@ export const Home: React.FC<HomeProps> = ({
   onSelectModel,
   inputRef: externalInputRef,
   initialMessages = [],
+  activeSessionId,
 }) => {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -236,7 +238,39 @@ export const Home: React.FC<HomeProps> = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const internalInputRef = useRef<HTMLTextAreaElement>(null);
   const activeInputRef = externalInputRef || internalInputRef;
-  const streamAbortController = useRef<{ aborted: boolean }>({ aborted: false });
+  const activeAbortController = useRef<AbortController | null>(null);
+
+  // Session persistence: load session messages when activeSessionId changes
+  useEffect(() => {
+    if (!activeSessionId) return;
+    let isCurrent = true;
+    const loadSession = async () => {
+      try {
+        const sess = await sidecarClient.getSession(activeSessionId);
+        if (isCurrent && sess && sess.messages && sess.messages.length > 0) {
+          const loaded: ChatMessage[] = sess.messages.map((m: any, idx: number) => ({
+            id: m.message_id || `msg-${idx}`,
+            role: m.role === 'user' ? 'user' : 'assistant',
+            content: m.content || '',
+            timestamp: m.timestamp ? new Date(m.timestamp).toLocaleTimeString() : 'Earlier',
+            metadata: {
+              modelTier: (m.metadata?.model || 'instant') as ModelTier,
+              tokenCount: m.tokens?.completion_tokens || m.metadata?.completion_tokens,
+              estCost: m.cost_usd !== undefined ? `$${m.cost_usd.toFixed(4)}` : undefined,
+              ...m.metadata,
+            },
+          }));
+          setMessages(loaded);
+        }
+      } catch {
+        // Offline or session not found
+      }
+    };
+    loadSession();
+    return () => {
+      isCurrent = false;
+    };
+  }, [activeSessionId]);
 
   // Canvas Drag & Drop handlers (Task 3.6)
   const handleCanvasDragEnter = (e: React.DragEvent) => {
@@ -409,7 +443,7 @@ export const Home: React.FC<HomeProps> = ({
     { id: '2', name: 'Client Website Redesign', threads: 3, updated: '1d ago' },
   ];
 
-  // 60fps streaming token dispatcher
+  // Real streaming token dispatcher via sidecarClient
   const startStreamingResponse = useCallback(
     (
       promptText: string,
@@ -417,8 +451,13 @@ export const Home: React.FC<HomeProps> = ({
       skill?: SelectedSkill,
       enabledPlugins?: string[]
     ) => {
+      if (activeAbortController.current) {
+        activeAbortController.current.abort();
+      }
+      const controller = new AbortController();
+      activeAbortController.current = controller;
+
       setIsStreaming(true);
-      streamAbortController.current = { aborted: false };
 
       const assistantMsgId = `msg-${Date.now()}`;
       const startTime = performance.now();
@@ -437,8 +476,7 @@ export const Home: React.FC<HomeProps> = ({
             latencyMs: 0,
             tokenCount: 0,
             tokensPerSec: 0,
-            estCost:
-              model === 'instant' ? '$0.0001' : model === 'swarm' ? '$0.0008' : '$0.0032',
+            estCost: '$0.0000',
             skillId: skill?.skill.id,
             skillName: skill?.skill.name,
             enabledPlugins,
@@ -446,91 +484,19 @@ export const Home: React.FC<HomeProps> = ({
         },
       ]);
 
-      // Craft response stream depending on whether a skill or standard prompt is invoked
-      let responseStreamText = '';
-
-      if (skill) {
-        const paramSummary = Object.entries(skill.parameters)
-          .filter(([_, v]) => String(v).trim().length > 0)
-          .map(([k, v]) => `  - **${k}**: \`${v}\``)
-          .join('\n');
-
-        responseStreamText = `### Executing Skill: ${skill.skill.name}
-**Category:** ${skill.skill.category} • **Command:** \`${skill.skill.command}\`
-
-#### Input Parameters:
-${paramSummary || '  *(Using default template schema)*'}
-
-${promptText ? `**Instruction:** "${promptText}"\n\n` : ''}---
-
-#### Synthesized Execution Result (90/9/1 Pipeline):
-\`\`\`python
-# Deterministic AST Verification Passed
-result = {
-    "skill_id": "${skill.skill.id}",
-    "status": "success",
-    "cached": True,
-    "outputs": ${JSON.stringify(skill.skill.outputs)},
-    "grounding_plugins": ${JSON.stringify(enabledPlugins || [])}
-}
-\`\`\`
-
-- **Validation Checklist:** Verified zero naked returns and confirmed schema integrity.
-- **Cost Routing:** Executed under local **CODE Tier** (0 frontier tokens expended).`;
-      } else {
-        responseStreamText = `I have analyzed your request: "${promptText}".
-
-### Execution Plan (90/9/1 Cost Optimized)
-1. **Deterministic Rule Check (CODE Tier):**
-   - Verified zero syntax conflicts and validated input structure.
-   - Grounding Plugins: **${enabledPlugins?.join(', ') || 'Standard Local'}**
-   - Evaluated semantic cache; 0 frontier tokens expended.
-
-2. **Core Pipeline Execution:**
-   - Active Model Tier: **${model.toUpperCase()}**
-   - Workspace Context: **${activeProjectName || 'Global Scratchpad'}**
-   - Multi-agent coordinator dispatched sub-tasks to local runners.
-
-\`\`\`python
-# Agent Engine Execution Spec
-def execute_agent_task(prompt: str, tier: str) -> dict:
-    \"\"\"Local-first deterministic dispatcher\"\"\"
-    return {
-        "status": "completed",
-        "tier": tier,
-        "latency_overhead_ms": 14.2,
-        "cache_hit": True
-    }
-\`\`\`
-
-All constraints satisfied. Ready for your follow-up command!`;
-      }
-
-      // 60fps token streaming loop via requestAnimationFrame
-      const tokens = responseStreamText.split(/(\s+|\n+)/);
-      let currentIdx = 0;
       let accumulated = '';
-      let lastFrameTime = performance.now();
-      const tokensPerFrame = 2; // Smooth 60fps chunk pacing (~60-90 tokens/sec)
+      const promptPayload = skill
+        ? `[Skill: ${skill.skill.name} (${skill.skill.command})] ${promptText}`
+        : promptText;
 
-      const streamStep = (now: number) => {
-        if (streamAbortController.current.aborted) {
-          setIsStreaming(false);
-          setMessages((prev) =>
-            prev.map((m) => (m.id === assistantMsgId ? { ...m, isStreaming: false } : m))
-          );
-          return;
-        }
-
-        // Emit tokens at 60fps interval (~16.6ms per frame)
-        if (now - lastFrameTime >= 16) {
-          const nextIdx = Math.min(currentIdx + tokensPerFrame, tokens.length);
-          for (let i = currentIdx; i < nextIdx; i++) {
-            accumulated += tokens[i];
-          }
-          currentIdx = nextIdx;
-          lastFrameTime = now;
-
+      sidecarClient.streamChatCompletion({
+        prompt: promptPayload,
+        sessionId: activeSessionId,
+        model,
+        signal: controller.signal,
+        onToken: (token: string) => {
+          accumulated += token;
+          const now = performance.now();
           const elapsedSec = Math.max((now - startTime) / 1000, 0.05);
           const currentTokenCount = Math.ceil(accumulated.length / 4);
           const tps = Math.round(currentTokenCount / elapsedSec);
@@ -551,22 +517,52 @@ All constraints satisfied. Ready for your follow-up command!`;
                 : m
             )
           );
-        }
-
-        if (currentIdx < tokens.length) {
-          requestAnimationFrame(streamStep);
-        } else {
-          // Completed
+        },
+        onCostUpdate: (costData: any) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId
+                ? {
+                    ...m,
+                    metadata: {
+                      ...m.metadata,
+                      estCost:
+                        costData.cost_usd !== undefined
+                          ? `$${costData.cost_usd.toFixed(4)}`
+                          : m.metadata?.estCost,
+                      tokenCount:
+                        (costData.prompt_tokens || 0) + (costData.completion_tokens || 0),
+                    },
+                  }
+                : m
+            )
+          );
+        },
+        onError: (errMsg: string) => {
+          setIsStreaming(false);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId
+                ? {
+                    ...m,
+                    content: accumulated
+                      ? `${accumulated}\n\n❌ **Execution Error:** ${errMsg}`
+                      : `❌ **Provider Error:** ${errMsg}`,
+                    isStreaming: false,
+                  }
+                : m
+            )
+          );
+        },
+        onDone: () => {
           setIsStreaming(false);
           setMessages((prev) =>
             prev.map((m) => (m.id === assistantMsgId ? { ...m, isStreaming: false } : m))
           );
-        }
-      };
-
-      requestAnimationFrame(streamStep);
+        },
+      });
     },
-    [activeProjectName]
+    [activeSessionId]
   );
 
   const handleSend = (
@@ -835,8 +831,14 @@ All constraints satisfied. Ready for your follow-up command!`;
   };
 
   const handleStop = () => {
-    streamAbortController.current.aborted = true;
+    if (activeAbortController.current) {
+      activeAbortController.current.abort();
+      activeAbortController.current = null;
+    }
     setIsStreaming(false);
+    setMessages((prev) =>
+      prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m))
+    );
   };
 
   const handleSelectFeaturedCase = (c: FeaturedCase) => {

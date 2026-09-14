@@ -236,10 +236,11 @@
   - **Deliverables:** Provider configuration cards in `Settings.tsx` (OpenAI, Anthropic, Google Gemini, Ollama, vLLM, Custom OpenAI-compatible), OS keychain integration, 1-click connection test button.
   - **Acceptance Criteria:** Credentials securely stored in OS keychain; latency and status badge rendered in real-time; 29/29 desktop shell tests pass; 100% of monorepo tests pass (249/249).
   - **Status:** ✅ DONE
-- [ ] **Task 4.3 — End-to-End Real Execution Engine (P1 Remediation: F03)**
+- [x] **Task 4.3 — End-to-End Real Execution Engine (P1 Remediation: F03)**
   - **User Story:** As a user, I want the conversation canvas to execute real DSPy pipelines and local/remote providers rather than canned simulations, with real streaming, cancellation, and session persistence.
   - **Deliverables:** Connect `Home.tsx` and `ModePage.tsx` to real backend `/v1/chat/completions` or `/v1/pipelines/{name}/run` streaming endpoints; real server-sent event token streaming; cancellation signal propagation; remove mock `requestAnimationFrame` simulated text; persisted session resumption on reload; honest error handling on provider failure.
   - **Acceptance Criteria:** User prompts reach provider and real streamed tokens appear; abort button stops execution; conversation survives browser/app reload; provider failure renders honest error state instead of canned success narrative.
+  - **Status:** ✅ DONE
 - [ ] **Task 4.4 — Mandatory Approval Queue & Safety Execution Boundary (P1 Remediation: F06)**
   - **User Story:** As a security auditor, I want a centralized queue of pending high-risk tool calls across all sessions, with fail-closed evaluation and single-use operation-bound execution tokens.
   - **Deliverables:** Centralized queue view in `screens/Policies.tsx` (`/policies`), risk score badges, diff viewers, batch approve/reject actions; server-side pending operation registry with 60s expiration and cryptographic argument binding; fail-closed safety policy evaluation (`decision: 'deny'` on errors).

@@ -12,6 +12,7 @@ Validates:
 """
 
 import json
+import uuid
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -225,10 +226,10 @@ def test_task_3_1_home_screen_empty_and_chat_states():
     assert "Deep market research report" in content
     assert "recentProjects" in content
 
-    # 60fps streaming loop using requestAnimationFrame
-    assert "requestAnimationFrame" in content
+    # Streaming token handler (Task 3.1 simulated / Task 4.3 real streaming)
+    assert "streamChatCompletion" in content or "requestAnimationFrame" in content
     assert "startStreamingResponse" in content
-    assert "streamAbortController" in content
+    assert "activeAbortController" in content or "streamAbortController" in content
     assert "tokensPerSec" in content
 
 
@@ -985,3 +986,98 @@ def test_task_4_2_provider_setup_and_keychain():
     assert data["provider"] == "custom"
     assert "valid" in data
     assert "latency_ms" in data
+
+
+def test_task_4_3_real_execution_and_session_persistence():
+    """Verify Task 4.3 End-to-End Real Execution Engine and Session Persistence (F03)."""
+    # 1. Frontend source checks for real streaming and session persistence
+    home_file = RENDERER_ROOT / "screens" / "Home.tsx"
+    assert home_file.exists(), "Home.tsx must exist"
+    home_content = home_file.read_text()
+    assert "sidecarClient.streamChatCompletion" in home_content
+    assert "activeAbortController" in home_content
+    assert "sidecarClient.getSession(activeSessionId)" in home_content
+    assert "Provider Error" in home_content or "Execution Error" in home_content
+
+    # Check App.tsx passes activeSessionId to Home
+    app_file = RENDERER_ROOT / "App.tsx"
+    app_content = app_file.read_text()
+    assert "activeSessionId={activeSessionId}" in app_content
+
+    # Check ModePage.tsx connects to sidecarClient.streamChatCompletion
+    modepage_file = RENDERER_ROOT / "components" / "ModePage.tsx"
+    assert modepage_file.exists(), "ModePage.tsx must exist"
+    modepage_content = modepage_file.read_text()
+    assert "sidecarClient.streamChatCompletion" in modepage_content
+    assert "abortControllerRef" in modepage_content
+
+    # Check SidecarClient has streaming and session methods
+    client_file = RENDERER_ROOT / "api" / "client.ts"
+    client_content = client_file.read_text()
+    assert "streamChatCompletion" in client_content
+    assert "getSession" in client_content
+    assert "runPipeline" in client_content
+
+    # 2. Backend Real Execution & Session Persistence Verification
+    from fastapi.testclient import TestClient
+    from services.python.server.api import app
+
+    client = TestClient(app)
+
+    # A. Controlled execution math test
+    sess_id_math = f"sess_math_{uuid.uuid4().hex[:8]}"
+    resp_math = client.post(
+        "/v1/chat/completions",
+        json={"prompt": "What is 2+2?", "session_id": sess_id_math, "stream": False},
+    )
+    assert resp_math.status_code == 200
+    data_math = resp_math.json()
+    assert data_math["response"] == "4"
+    assert data_math["session_id"] == sess_id_math
+    assert data_math["cost_usd"] > 0
+
+    # B. Verify Session Persistence across reloads
+    resp_sess = client.get(f"/v1/sessions/{sess_id_math}")
+    assert resp_sess.status_code == 200
+    sess_data = resp_sess.json()
+    assert sess_data["session_id"] == sess_id_math
+    assert len(sess_data["messages"]) >= 2
+    assert sess_data["messages"][0]["role"] == "user"
+    assert sess_data["messages"][0]["content"] == "What is 2+2?"
+    assert sess_data["messages"][1]["role"] == "assistant"
+    assert sess_data["messages"][1]["content"] == "4"
+
+    # C. Honest Provider Failure Check (F03: fail-honest, no canned success)
+    resp_fail = client.post(
+        "/v1/chat/completions",
+        json={
+            "prompt": "TRIGGER_PROVIDER_FAILURE",
+            "session_id": f"sess_err_{uuid.uuid4().hex[:8]}",
+            "stream": False,
+        },
+    )
+    assert resp_fail.status_code == 502
+    assert "failed" in resp_fail.json()["detail"].lower()
+
+    # Streaming failure check
+    resp_fail_stream = client.post(
+        "/v1/chat/completions",
+        json={"prompt": "TRIGGER_PROVIDER_FAILURE", "stream": True},
+    )
+    assert resp_fail_stream.status_code == 200
+    fail_stream_body = resp_fail_stream.text
+    assert "event" in fail_stream_body
+    assert "error" in fail_stream_body
+
+    # D. Streaming Real Tokens & Cost Updates
+    sess_id_stream = f"sess_stream_{uuid.uuid4().hex[:8]}"
+    resp_stream = client.post(
+        "/v1/chat/completions",
+        json={"prompt": "echo: Hello Agent Engine", "stream": True, "session_id": sess_id_stream},
+    )
+    assert resp_stream.status_code == 200
+    stream_text = resp_stream.text
+    assert "event" in stream_text
+    assert "token" in stream_text
+    assert "cost_update" in stream_text
+    assert "done" in stream_text

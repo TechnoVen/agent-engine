@@ -4,6 +4,7 @@ import { Mode, ModelTier, ChatMessage } from '../types';
 import { ChatInput } from './ChatInput';
 import { Message } from './Message';
 import { FeaturedGrid, FeaturedCardItem, renderCardIcon } from './FeaturedGrid';
+import { sidecarClient } from '../api/client';
 
 export interface ModePageProps {
   mode: Mode;
@@ -374,6 +375,7 @@ export const ModePage: React.FC<ModePageProps> = ({
   const [isStreaming, setIsStreaming] = useState(false);
   const [activeCategory, setActiveCategory] = useState<string>('All');
   const chatBottomRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const config = useMemo(() => {
     return (
@@ -422,19 +424,100 @@ export const ModePage: React.FC<ModePageProps> = ({
         timestamp: 'Just now',
       };
 
+      const asstMsgId = `asst-${Date.now()}`;
       const assistantMsg: ChatMessage = {
-        id: `asst-${Date.now()}`,
+        id: asstMsgId,
         role: 'assistant',
-        content: `Executing ${config.title} capability pipeline (${config.pipeline})...\n\nProcessing request with local-first precision and 90/9/1 cost routing discipline.`,
+        content: '',
+        isStreaming: true,
         timestamp: 'Just now',
         metadata: {
           modelTier: activeModel,
-          estCost: '$0.0002',
-          tokenCount: Math.round(text.length / 3.9),
+          estCost: '$0.0000',
+          tokenCount: 0,
         },
       };
 
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
+      setIsStreaming(true);
+
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
+      let accumulated = '';
+      const startTime = performance.now();
+
+      sidecarClient.streamChatCompletion({
+        prompt: `[${config.title} - ${config.pipeline}] ${text.trim()}`,
+        model: activeModel,
+        signal: controller.signal,
+        onToken: (token: string) => {
+          accumulated += token;
+          const currentTokenCount = Math.ceil(accumulated.length / 4);
+          const elapsed = Math.round(performance.now() - startTime);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === asstMsgId
+                ? {
+                    ...m,
+                    content: accumulated,
+                    metadata: {
+                      ...m.metadata,
+                      tokenCount: currentTokenCount,
+                      latencyMs: elapsed,
+                    },
+                  }
+                : m
+            )
+          );
+        },
+        onCostUpdate: (costData: any) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === asstMsgId
+                ? {
+                    ...m,
+                    metadata: {
+                      ...m.metadata,
+                      estCost:
+                        costData.cost_usd !== undefined
+                          ? `$${costData.cost_usd.toFixed(4)}`
+                          : m.metadata?.estCost,
+                      tokenCount:
+                        (costData.prompt_tokens || 0) + (costData.completion_tokens || 0),
+                    },
+                  }
+                : m
+            )
+          );
+        },
+        onError: (errMsg: string) => {
+          setIsStreaming(false);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === asstMsgId
+                ? {
+                    ...m,
+                    content: accumulated
+                      ? `${accumulated}\n\n❌ **Execution Error:** ${errMsg}`
+                      : `❌ **Provider Error:** ${errMsg}`,
+                    isStreaming: false,
+                  }
+                : m
+            )
+          );
+        },
+        onDone: () => {
+          setIsStreaming(false);
+          setMessages((prev) =>
+            prev.map((m) => (m.id === asstMsgId ? { ...m, isStreaming: false } : m))
+          );
+        },
+      });
+
       setTimeout(() => {
         chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
       }, 50);
@@ -544,7 +627,16 @@ export const ModePage: React.FC<ModePageProps> = ({
             model={activeModel}
             initialValue={initialInputText}
             onSend={(msg) => handleSendMessage(msg)}
-            onStop={() => setIsStreaming(false)}
+            onStop={() => {
+              if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+                abortControllerRef.current = null;
+              }
+              setIsStreaming(false);
+              setMessages((prev) =>
+                prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m))
+              );
+            }}
             isStreaming={isStreaming}
             onModeChange={onSelectMode}
             onModelChange={onSelectModel}

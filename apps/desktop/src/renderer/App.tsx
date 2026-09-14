@@ -100,6 +100,7 @@ export const App: React.FC = () => {
             activeModel={activeModel}
             onSelectModel={setActiveModel}
             inputRef={chatInputRef}
+            activeSessionId={activeSessionId}
           />
         );
       case 'agent':
