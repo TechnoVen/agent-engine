@@ -25,7 +25,7 @@
   - **Task 3.11:** Featured Cases Content Curation (32 curated templates in `configs/cases/`, dedicated mode screens in `apps/desktop/src/renderer/screens/Modes/`, one-click prompt injection, `core/cases.py` loader & search, FastAPI `/v1/cases` endpoints)
 
 ### Current Test Count
-- **Monorepo Tests:** `251 passed` (strictly increasing with every completed task).
+- **Monorepo Tests:** `252 passed` (strictly increasing with every completed task).
 - **Desktop Build:** `pnpm --filter @agent-engine/desktop build` passes with 0 TypeScript errors.
 - **Cargo Check:** `cargo check` in `apps/desktop/src-tauri` passes cleanly.
 
@@ -39,10 +39,9 @@ Aligned with `docs/PROJECT_REVIEW_2026-09-14.md` to remediate findings F01–F14
 3. **Task 4.2 — Provider Setup Panel & Keychain Storage:** ✅ Complete (`apps/desktop/src/renderer/screens/Settings.tsx`, OpenAI/Anthropic/Gemini/Ollama/vLLM/Custom cards, 1-click test button, OS keychain integration; 249/249 tests green)
 4. **Task 4.3 — End-to-End Real Execution Engine (F03):** ✅ Complete (Connected `Home.tsx` and `ModePage.tsx` to real streaming SSE, cancellation signal propagation, persisted session resumption, honest error reporting; 250/250 tests green)
 5. **Task 4.4 — Mandatory Approval Queue & Safety Execution Boundary (F06):** ✅ Complete (Centralized queue in `screens/Policies.tsx`, fail-closed evaluation, single-use operation-bound execution tokens with 60s expiry; 251/251 tests green)
-6. **Task 4.5 — Cost Dashboard (Merged 4.5 & 4.9; React in Desktop Shell) (⏳ NEXT)**
-   - `screens/Cost.tsx`, Recharts 90/9/1 donut, spend metrics, budget ceilings, CSV export.
-7. **Task 4.6 — Policy Editor & Immutable Audit Log**
-   - YAML editor with validation, dry-run playground, paginated audit log table.
+6. **Task 4.5 — Cost Dashboard (Merged 4.5 & 4.9; React in Desktop Shell):** ✅ Complete (`screens/Cost.tsx`, responsive SVG 90/9/1 donut, spend ledger, budget ceilings, Law 8 distillation pipeline, CSV/JSON export; 252/252 tests green)
+7. **Task 4.6 — Policy Editor & Immutable Audit Log (⏳ NEXT)**
+   - Monaco YAML editor in `screens/Policies.tsx`, rule dry-run playground, paginated audit log table with filter by risk level and tool name.
 8. **Task 4.7 — Hardware Telemetry Panel**
    - VRAM/RAM/CPU gauges, 95% VRAM warning threshold.
 9. **Task 4.8 — Settings Screen & Diagnostics Export**

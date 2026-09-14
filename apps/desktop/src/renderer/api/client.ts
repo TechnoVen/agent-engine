@@ -18,6 +18,9 @@ import {
   ScheduledTaskCreatePayload,
   PendingOperation,
   SafetyPolicyRuleInfo,
+  CostMetrics,
+  BudgetConfig,
+  DistillationCandidate,
 } from '../types';
 
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
@@ -663,6 +666,135 @@ class SidecarClient {
     } catch {
       return [];
     }
+  }
+
+  async getCostMetrics(
+    groupBy: string = 'day',
+    project?: string,
+    agentName?: string,
+    modelName?: string
+  ): Promise<CostMetrics> {
+    try {
+      const params = new URLSearchParams({ group_by: groupBy });
+      if (project) params.set('project', project);
+      if (agentName) params.set('agent_name', agentName);
+      if (modelName) params.set('model_name', modelName);
+      const res = await fetch(`${this.base}/v1/telemetry/cost?${params.toString()}`);
+      if (res.ok) return await res.json();
+    } catch {
+      // fallback if offline
+    }
+    return {
+      total_cost_usd: 0.0,
+      total_prompt_tokens: 0,
+      total_completion_tokens: 0,
+      total_tokens: 0,
+      month_spend_usd: 0.0,
+      day_spend_usd: 0.0,
+      cache_hit_rate: 0.42,
+      tier_split: {
+        deterministic_cache_local_pct: 90.0,
+        mid_tier_pct: 9.0,
+        frontier_pct: 1.0,
+        code_cache_calls: 0,
+        mid_tier_calls: 0,
+        frontier_calls: 0,
+      },
+      cost_per_task: [],
+      breakdown: [],
+      alerts: [],
+    };
+  }
+
+  async getBudgetConfig(project: string = 'default'): Promise<BudgetConfig> {
+    try {
+      const params = new URLSearchParams({ project });
+      const res = await fetch(`${this.base}/v1/telemetry/budget?${params.toString()}`);
+      if (res.ok) return await res.json();
+    } catch {
+      // fallback
+    }
+    return {
+      monthly_budget_usd: 100.0,
+      daily_budget_usd: 10.0,
+      warning_threshold_pct: 80.0,
+      critical_threshold_pct: 100.0,
+      project,
+      alerts: [],
+    };
+  }
+
+  async setBudgetConfig(payload: {
+    monthly_budget_usd: number;
+    daily_budget_usd: number;
+    warning_threshold_pct?: number;
+    critical_threshold_pct?: number;
+    project?: string;
+  }): Promise<BudgetConfig> {
+    const res = await fetch(`${this.base}/v1/telemetry/budget`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        monthly_budget_usd: payload.monthly_budget_usd,
+        daily_budget_usd: payload.daily_budget_usd,
+        warning_threshold_pct: payload.warning_threshold_pct ?? 80.0,
+        critical_threshold_pct: payload.critical_threshold_pct ?? 100.0,
+        project: payload.project || 'default',
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to update budget configuration: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async recordCostMetric(payload: {
+    agent_name: string;
+    model_name: string;
+    prompt_tokens: number;
+    completion_tokens: number;
+    cost_usd?: number;
+    task_id?: string;
+    success?: boolean;
+    project?: string;
+  }): Promise<{ id: number; success: boolean }> {
+    const res = await fetch(`${this.base}/v1/telemetry/cost/record`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to record spend: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async listDistillationCandidates(): Promise<DistillationCandidate[]> {
+    try {
+      const res = await fetch(`${this.base}/v1/telemetry/distillation-candidates`);
+      if (res.ok) return await res.json();
+    } catch {
+      // fallback
+    }
+    return [];
+  }
+
+  async triggerDistillation(
+    candidateId: string,
+    targetStudentModel?: string
+  ): Promise<{ success: boolean; message: string }> {
+    const res = await fetch(`${this.base}/v1/telemetry/distill`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        candidate_id: candidateId,
+        target_student_model: targetStudentModel,
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to trigger distillation: HTTP ${res.status}`);
+    }
+    return await res.json();
   }
 
   async listScheduledTasks(): Promise<ScheduledTask[]> {

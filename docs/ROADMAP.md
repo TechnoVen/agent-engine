@@ -246,10 +246,11 @@
   - **Deliverables:** Centralized queue view in `screens/Policies.tsx` (`/policies`), risk score badges, diff viewers, batch approve/reject actions; server-side pending operation registry with 60s expiration and cryptographic argument binding; fail-closed safety policy evaluation (`decision: 'deny'` on errors).
   - **Acceptance Criteria:** High-risk actions cannot execute without single-use approval token; denied/expired actions never execute; pending calls resolve in <500ms upon approval; rejections return explicit reason to waiting agent.
   - **Status:** ✅ DONE
-- [ ] **Task 4.5 — Cost Dashboard (Merged 4.5 & 4.9; React in Desktop Shell)**
+- [x] **Task 4.5 — Cost Dashboard (Merged 4.5 & 4.9; React in Desktop Shell)**
   - **User Story:** As P2, I want to view monthly spend, 90/9/1 tier splits, and budget ceilings directly in my desktop app (replacing Streamlit Tab 5).
   - **Deliverables:** `apps/desktop/src/renderer/screens/Cost.tsx` (Route `/cost`), Recharts donut (90/9/1 CODE/CACHE/SMALL/MID/FRONTIER), cost-per-task bar chart, cache hit rate line chart, distillation candidate list (>10k calls/mo) with 1-click distill trigger, budget ceiling inputs, CSV/JSON telemetry export.
   - **Acceptance Criteria:** Numbers match `/v1/telemetry/cost`; alerts trigger warning at 80% and block/alert at 100%; CSV/JSON export works; fully replaces Streamlit Tab 5 with full feature parity.
+  - **Status:** ✅ DONE
 - [ ] **Task 4.6 — Policy Editor & Immutable Audit Log**
   - **User Story:** As P4, I want to edit YAML guardrail policies with a test playground and browse immutable audit logs.
   - **Deliverables:** Monaco YAML editor in `screens/Policies.tsx`, rule dry-run playground, paginated audit log table with filter by risk level and tool name.

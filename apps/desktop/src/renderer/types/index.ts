@@ -362,5 +362,74 @@ export interface ScheduledTaskCreatePayload {
   prompt: string;
 }
 
+export interface TierSplitInfo {
+  deterministic_cache_local_pct: number;
+  mid_tier_pct: number;
+  frontier_pct: number;
+  code_cache_calls: number;
+  mid_tier_calls: number;
+  frontier_calls: number;
+}
+
+export interface DistillationCandidate {
+  candidate_id: string;
+  task_name: string;
+  teacher_model: string;
+  student_model: string;
+  monthly_calls: number;
+  current_cost_usd: number;
+  distilled_cost_usd: number;
+  monthly_savings_usd: number;
+  accuracy_score: number;
+  status: 'ready' | 'distilling' | 'distilled';
+}
+
+export interface BudgetConfig {
+  monthly_budget_usd: number;
+  daily_budget_usd: number;
+  warning_threshold_pct: number;
+  critical_threshold_pct: number;
+  project: string;
+  alerts?: Array<{
+    alert_id?: string;
+    level: 'warning' | 'critical';
+    message: string;
+    percentage: number;
+    period: string;
+  }>;
+}
+
+export interface CostMetrics {
+  total_cost_usd: number;
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  total_tokens: number;
+  month_spend_usd: number;
+  day_spend_usd: number;
+  cache_hit_rate: number;
+  tier_split?: TierSplitInfo;
+  cost_per_task?: Array<{
+    task: string;
+    calls: number;
+    cost_usd: number;
+    avg_cost: number;
+  }>;
+  breakdown: Array<{
+    group: string;
+    calls: number;
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    cost_usd: number;
+  }>;
+  alerts: Array<{
+    alert_id?: string;
+    level: 'warning' | 'critical';
+    message: string;
+    percentage: number;
+    period: string;
+  }>;
+}
+
 
 

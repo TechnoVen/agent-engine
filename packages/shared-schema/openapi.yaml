@@ -423,6 +423,38 @@ paths:
               schema:
                 $ref: '#/components/schemas/BudgetConfigResponse'
 
+  /telemetry/distillation-candidates:
+    get:
+      summary: List high-volume tasks eligible for local model distillation
+      operationId: listDistillationCandidates
+      responses:
+        '200':
+          description: Distillation candidates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DistillationCandidate'
+
+  /telemetry/distill:
+    post:
+      summary: Trigger task distillation workflow to local model
+      operationId: triggerDistillation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DistillTriggerRequest'
+      responses:
+        '200':
+          description: Distillation pipeline response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResult'
+
   /auth/session:
     get:
       summary: Get current authenticated session info
@@ -1579,6 +1611,57 @@ components:
         indexed_memory_documents:
           type: integer
 
+    TierSplitInfo:
+      type: object
+      properties:
+        deterministic_cache_local_pct:
+          type: number
+        mid_tier_pct:
+          type: number
+        frontier_pct:
+          type: number
+        code_cache_calls:
+          type: integer
+        mid_tier_calls:
+          type: integer
+        frontier_calls:
+          type: integer
+
+    DistillationCandidate:
+      type: object
+      required: [candidate_id, task_name, teacher_model, student_model, monthly_calls, current_cost_usd, distilled_cost_usd, monthly_savings_usd, accuracy_score, status]
+      properties:
+        candidate_id:
+          type: string
+        task_name:
+          type: string
+        teacher_model:
+          type: string
+        student_model:
+          type: string
+        monthly_calls:
+          type: integer
+        current_cost_usd:
+          type: number
+        distilled_cost_usd:
+          type: number
+        monthly_savings_usd:
+          type: number
+        accuracy_score:
+          type: number
+        status:
+          type: string
+
+    DistillTriggerRequest:
+      type: object
+      required: [candidate_id]
+      properties:
+        candidate_id:
+          type: string
+        target_student_model:
+          type: string
+          default: qwen2.5-coder
+
     CostMetricsResponse:
       type: object
       required: [total_cost_usd, breakdown]
@@ -1591,6 +1674,18 @@ components:
           type: integer
         total_tokens:
           type: integer
+        month_spend_usd:
+          type: number
+        day_spend_usd:
+          type: number
+        cache_hit_rate:
+          type: number
+        tier_split:
+          $ref: '#/components/schemas/TierSplitInfo'
+        cost_per_task:
+          type: array
+          items:
+            type: object
         breakdown:
           type: array
           items:

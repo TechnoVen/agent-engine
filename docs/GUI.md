@@ -800,6 +800,14 @@ Each mode uses the same shell, the same input, the same chat history, the same p
 2. **Dedicated Mode Architecture:** Modular screen components in `apps/desktop/src/renderer/screens/Modes/` wrapping `ModePage` with mode-specific category chips, cost estimates, and tool badges.
 3. **One-Click Frictionless Prompt Injection:** Clicking any featured card dynamically populates the hardened `ChatInput` with one-click runnable prompts and triggers input events for immediate execution.
 
+### Task 4.5 — Cost & Budget Command Center
+- **Route:** `/cost`
+- **Component:** `apps/desktop/src/renderer/screens/Cost.tsx`
+1. **Law 1 90/9/1 Cost Routing Donut:** High-performance native SVG donut visualizer illustrating live token traffic distribution across Deterministic/Cache/Local (90%), Mid-Tier Swarm (9%), and Frontier Reasoning (1%).
+2. **Aggregated Telemetry & Spend Breakdown:** Real-time monthly spend, daily spend, cache hit rate gauge, and interactive bar chart of cost per task type or date range.
+3. **Law 8 Distillation Pipeline:** One-click distillation trigger for high-volume repeating tasks (>10,000 calls/month) to train and deploy compact local specialist models from teacher logs.
+4. **Budget Ceilings & Export:** Configurable monthly/daily spending limits with warning (80%) and critical (100%) thresholds, plus one-click CSV and JSON export.
+
 
 
 

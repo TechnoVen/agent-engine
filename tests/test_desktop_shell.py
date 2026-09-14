@@ -1314,3 +1314,191 @@ def test_task_4_4_mandatory_approval_queue_and_safety_boundary():
     # Should execute successfully when safe
     out = pipe_reg.run("test_guarded_pipeline", data="normal input")
     assert out["output"] == "ok"
+
+
+def test_task_4_5_cost_dashboard_and_distillation_engine(monkeypatch):
+    """Verify Task 4.5 Cost Dashboard (Law 1 90/9/1 split, token ledger, budget guardrails, Law 8 distillation)."""
+    monkeypatch.setenv("AGENT_ENGINE_IPC_TOKEN", "ipc_secret_test_token")
+    from fastapi.testclient import TestClient
+    from services.python.server.api import app
+
+    client = TestClient(app)
+
+    # 1. Telemetry Cost Metrics (Initial State & 90/9/1 Defaults)
+    resp_cost = client.get("/v1/telemetry/cost?project=cost_test_proj")
+    assert resp_cost.status_code == 200
+    cost_data = resp_cost.json()
+    assert "total_cost_usd" in cost_data
+    assert "month_spend_usd" in cost_data
+    assert "day_spend_usd" in cost_data
+    assert "cache_hit_rate" in cost_data
+    assert "tier_split" in cost_data
+    assert "cost_per_task" in cost_data
+    assert "breakdown" in cost_data
+
+    tier_split = cost_data["tier_split"]
+    assert "deterministic_cache_local_pct" in tier_split
+    assert "mid_tier_pct" in tier_split
+    assert "frontier_pct" in tier_split
+
+    # 2. Record Token Spend Across Model Tiers (Law 1 Routing: Tier 1 Local, Tier 2 Mid, Tier 3 Frontier)
+    # Tier 1 (Deterministic/Local/Code)
+    rec1 = client.post(
+        "/v1/telemetry/cost/record",
+        json={
+            "agent_name": "coder_agent",
+            "model_name": "qwen2.5-coder-7b",
+            "prompt_tokens": 900,
+            "completion_tokens": 100,
+            "cost_usd": 0.0,
+            "project": "cost_test_proj",
+            "task_id": "task_t1",
+        },
+    )
+    assert rec1.status_code == 200
+    assert rec1.json()["success"] is True
+
+    # Tier 2 (Mid-tier swarm)
+    rec2 = client.post(
+        "/v1/telemetry/cost/record",
+        json={
+            "agent_name": "summarizer_agent",
+            "model_name": "gemini-2.0-flash",
+            "prompt_tokens": 450,
+            "completion_tokens": 50,
+            "cost_usd": 0.0005,
+            "project": "cost_test_proj",
+            "task_id": "task_t2",
+        },
+    )
+    assert rec2.status_code == 200
+
+    # Tier 3 (Frontier reasoning)
+    rec3 = client.post(
+        "/v1/telemetry/cost/record",
+        json={
+            "agent_name": "architect_agent",
+            "model_name": "gpt-4o",
+            "prompt_tokens": 500,
+            "completion_tokens": 100,
+            "cost_usd": 0.005,
+            "project": "cost_test_proj",
+            "task_id": "task_t3",
+        },
+    )
+    assert rec3.status_code == 200
+
+    # Verify updated tier metrics
+    resp_cost_updated = client.get("/v1/telemetry/cost?project=cost_test_proj")
+    assert resp_cost_updated.status_code == 200
+    updated_data = resp_cost_updated.json()
+    assert updated_data["total_cost_usd"] >= 0.0055
+    ts_updated = updated_data["tier_split"]
+    assert ts_updated["code_cache_calls"] >= 1
+    assert ts_updated["mid_tier_calls"] >= 1
+    assert ts_updated["frontier_calls"] >= 1
+    assert len(updated_data["cost_per_task"]) >= 1
+
+    # 3. Budget Configuration & Ceilings
+    resp_budget_set = client.post(
+        "/v1/telemetry/budget",
+        json={
+            "monthly_budget_usd": 150.0,
+            "daily_budget_usd": 15.0,
+            "warning_threshold_pct": 75.0,
+            "critical_threshold_pct": 95.0,
+            "project": "cost_test_proj",
+        },
+    )
+    assert resp_budget_set.status_code == 200
+    budget_res = resp_budget_set.json()
+    assert budget_res["monthly_budget_usd"] == 150.0
+    assert budget_res["daily_budget_usd"] == 15.0
+    assert budget_res["warning_threshold_pct"] == 75.0
+    assert budget_res["critical_threshold_pct"] == 95.0
+
+    resp_budget_get = client.get("/v1/telemetry/budget?project=cost_test_proj")
+    assert resp_budget_get.status_code == 200
+    assert resp_budget_get.json()["monthly_budget_usd"] == 150.0
+
+    # 4. Law 8: Distillation Candidates (>10k calls/month)
+    resp_candidates = client.get("/v1/telemetry/distillation-candidates")
+    assert resp_candidates.status_code == 200
+    candidates = resp_candidates.json()
+    assert len(candidates) >= 3
+    for cand in candidates:
+        assert (
+            cand["monthly_calls"] >= 10000
+        ), "Distillation candidate must have >=10,000 monthly calls (Law 8)"
+        assert cand["teacher_model"] is not None
+        assert cand["student_model"] is not None
+        assert cand["monthly_savings_usd"] > 0
+        assert 0.0 <= cand["accuracy_score"] <= 1.0
+
+    # 5. Distillation Trigger & Pipeline Initialization
+    # Unauthenticated call fails with 401
+    resp_distill_unauth = client.post(
+        "/v1/telemetry/distill",
+        json={"candidate_id": "dist-001", "target_student_model": "qwen2.5-coder-7b"},
+    )
+    assert resp_distill_unauth.status_code == 401
+
+    # Authenticated call succeeds
+    resp_distill = client.post(
+        "/v1/telemetry/distill",
+        headers={"X-IPC-Token": "ipc_secret_test_token"},
+        json={"candidate_id": "dist-001", "target_student_model": "qwen2.5-coder-7b"},
+    )
+    assert resp_distill.status_code == 200
+    distill_res = resp_distill.json()
+    assert distill_res["success"] is True
+    assert "Distillation pipeline initialized" in distill_res["message"]
+
+    # Invalid candidate fails cleanly
+    resp_distill_invalid = client.post(
+        "/v1/telemetry/distill",
+        headers={"X-IPC-Token": "ipc_secret_test_token"},
+        json={"candidate_id": "nonexistent-candidate"},
+    )
+    assert resp_distill_invalid.status_code == 200
+    assert resp_distill_invalid.json()["success"] is False
+
+    # 6. Verify React Desktop Shell Artifacts for Task 4.5
+    cost_screen_file = RENDERER_ROOT / "screens" / "Cost.tsx"
+    assert cost_screen_file.exists(), "apps/desktop/src/renderer/screens/Cost.tsx must exist"
+    cost_screen_content = cost_screen_file.read_text()
+
+    assert "sidecarClient.getCostMetrics" in cost_screen_content
+    assert "sidecarClient.getBudgetConfig" in cost_screen_content
+    assert "sidecarClient.setBudgetConfig" in cost_screen_content
+    assert "sidecarClient.listDistillationCandidates" in cost_screen_content
+    assert "sidecarClient.triggerDistillation" in cost_screen_content
+    assert "renderDonutChart" in cost_screen_content
+    assert "renderBarChart" in cost_screen_content
+    assert "exportCSV" in cost_screen_content
+    assert "exportJSON" in cost_screen_content
+    assert "Law 1" in cost_screen_content
+    assert "Law 8" in cost_screen_content or "Distillation" in cost_screen_content
+
+    # Check App.tsx integration
+    app_file = RENDERER_ROOT / "App.tsx"
+    app_content = app_file.read_text()
+    assert "import { Cost } from './screens/Cost';" in app_content
+    assert "case 'cost':" in app_content
+    assert "<Cost" in app_content
+
+    # Check client.ts and types
+    client_file = RENDERER_ROOT / "api" / "client.ts"
+    client_content = client_file.read_text()
+    assert "getCostMetrics" in client_content
+    assert "getBudgetConfig" in client_content
+    assert "setBudgetConfig" in client_content
+    assert "listDistillationCandidates" in client_content
+    assert "triggerDistillation" in client_content
+
+    types_file = RENDERER_ROOT / "types" / "index.ts"
+    types_content = types_file.read_text()
+    assert "TierSplitInfo" in types_content
+    assert "DistillationCandidate" in types_content
+    assert "BudgetConfig" in types_content
+    assert "CostMetrics" in types_content
