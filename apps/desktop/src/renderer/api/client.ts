@@ -27,6 +27,8 @@ import {
   PaginatedAuditLogsResponse,
   HardwareTelemetry,
   SpeedRecordPayload,
+  AppSettings,
+  DiagnosticsBundle,
 } from '../types';
 
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
@@ -966,6 +968,103 @@ class SidecarClient {
     }
     return await res.json();
   }
+
+  async getAppSettings(): Promise<AppSettings> {
+    try {
+      const res = await fetch(`${this.base}/v1/settings/config`, {
+        headers: this.getHeaders(),
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.error('Failed to get app settings:', err);
+    }
+    return {
+      models: {
+        default_tier: 'instant',
+        fallback_tier: 'swarm',
+        temperature: 0.7,
+        max_context_tokens: 4000,
+        hard_ceiling_tokens: 32000,
+        bypass_cache: false,
+      },
+      local_runtime: {
+        ollama_base_url: 'http://localhost:11434',
+        llamacpp_base_url: 'http://localhost:8080',
+        gpu_layers: 33,
+        cpu_threads: 4,
+        context_length: 8192,
+        auto_detect_gpu: true,
+      },
+      adapters: {
+        mcp_enabled: true,
+        claude_code_adapter: true,
+        codex_adapter: false,
+        openclaw_adapter: false,
+        goose_adapter: false,
+        cursor_adapter: false,
+      },
+      channels: {
+        slack_enabled: false,
+        slack_webhook_url: null,
+        discord_enabled: false,
+        discord_webhook_url: null,
+        telegram_enabled: false,
+        telegram_bot_token: null,
+        whatsapp_enabled: false,
+      },
+      storage: {
+        database_backend: 'sqlite',
+        sqlite_path: 'data/agent_engine.db',
+        postgres_url: null,
+        chroma_path: 'data/chroma',
+        retention_days: 90,
+      },
+      security: {
+        zero_trust_eval: 'strict',
+        approval_timeout_seconds: 60,
+        ipc_token_enabled: true,
+        sandbox_mode: 'standard',
+        keychain_backend: 'auto',
+      },
+      appearance: {
+        theme: 'dark',
+        font_size: 'base',
+        ui_density: 'comfortable',
+        code_font_family: 'monospace',
+      },
+      version: '1.0.0',
+      updated_at: new Date().toISOString(),
+    };
+  }
+
+  async saveAppSettings(settings: Partial<AppSettings>): Promise<AppSettings> {
+    const res = await fetch(`${this.base}/v1/settings/config`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(settings),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Failed to save app settings: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async exportDiagnostics(format: 'zip' | 'json' = 'zip'): Promise<Blob | DiagnosticsBundle> {
+    const res = await fetch(`${this.base}/v1/diagnostics/export?format=${format}`, {
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      throw new Error(`Failed to export diagnostics: HTTP ${res.status}`);
+    }
+    if (format === 'zip') {
+      return await res.blob();
+    }
+    return await res.json();
+  }
+
 
   async listScheduledTasks(): Promise<ScheduledTask[]> {
     try {

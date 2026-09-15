@@ -1793,3 +1793,174 @@ def test_task_4_7_hardware_telemetry_panel():
     assert "Ollama Daemon" in settings_ts
     assert "llama.cpp Server" in settings_ts
     assert "2000" in settings_ts  # 2s polling interval
+
+
+def test_task_4_8_settings_screen_and_diagnostics_export(tmp_path: Path):
+    """Validate Task 4.8: Settings screen, encrypted config persistence, and diagnostics export bundle (.zip/.json).
+
+    Verifies:
+    1. Core SettingsManager & AppSettings encrypted round-trip using AES-256-GCM.
+    2. Diagnostics bundle generator (redacts sensitive credentials, packages zip with system info & schemas).
+    3. FastAPI sidecar endpoints:
+       - GET /v1/settings/config
+       - POST /v1/settings/config
+       - GET /v1/diagnostics/export?format=zip (validates zip contents)
+       - GET /v1/diagnostics/export?format=json
+    4. Desktop TypeScript client, types, and Settings.tsx:
+       - 9 tabs present
+       - 1-click export diagnostics buttons
+       - Redaction warning notice
+    """
+    import io
+    import zipfile
+    from fastapi.testclient import TestClient
+
+    from core.config.settings import SettingsManager
+    from core.diagnostics import build_diagnostics_bundle, redact_sensitive_data
+    from services.python.server.api import app
+
+    # 1. Test Encrypted Settings Persistence
+    custom_vault = tmp_path / "settings_test.encrypted.vault"
+    mgr = SettingsManager(vault_path=custom_vault)
+    initial_settings = mgr.get_settings()
+    assert initial_settings.models.default_tier == "instant"
+    assert initial_settings.storage.database_backend == "sqlite"
+
+    # Mutate and save
+    updated_settings = mgr.update_settings(
+        {
+            "models": {"default_tier": "swarm", "temperature": 0.4},
+            "appearance": {"theme": "light", "font_size": "lg"},
+            "security": {"zero_trust_eval": "strict"},
+        }
+    )
+    assert updated_settings.models.default_tier == "swarm"
+    assert updated_settings.models.temperature == 0.4
+    assert updated_settings.appearance.theme == "light"
+    assert updated_settings.appearance.font_size == "lg"
+    assert custom_vault.exists(), "Encrypted vault file must exist on disk"
+
+    # Reload from disk into fresh manager
+    fresh_mgr = SettingsManager(vault_path=custom_vault)
+    loaded_settings = fresh_mgr.get_settings()
+    assert loaded_settings.models.default_tier == "swarm"
+    assert loaded_settings.models.temperature == 0.4
+    assert loaded_settings.appearance.theme == "light"
+
+    # 2. Test Diagnostics Redaction and Bundle Generation
+    raw_config = {
+        "anthropic_api_key": "sk-ant-api03-abcdef1234567890",
+        "custom_token": "secret_token_val",
+        "endpoint": "https://api.anthropic.com",
+        "nested": {"db_password": "supersecretpassword", "safe_val": 42},
+    }
+    redacted = redact_sensitive_data(raw_config)
+    assert redacted["anthropic_api_key"] == "***REDACTED***"
+    assert redacted["custom_token"] == "***REDACTED***"
+    assert redacted["nested"]["db_password"] == "***REDACTED***"
+    assert redacted["endpoint"] == "https://api.anthropic.com"
+    assert redacted["nested"]["safe_val"] == 42
+
+    # Test ZIP bundle generation
+    zip_bytes, content_type, filename = build_diagnostics_bundle(format="zip")
+    assert isinstance(zip_bytes, bytes)
+    assert content_type == "application/zip"
+    assert filename.endswith(".zip")
+    with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+        namelist = zf.namelist()
+        assert "system_info.json" in namelist
+        assert "schema_versions.json" in namelist
+        assert "config_redacted.json" in namelist
+        assert "logs_redacted.txt" in namelist
+
+    # Test JSON bundle generation
+    json_bytes, json_type, json_filename = build_diagnostics_bundle(format="json")
+    assert json_type == "application/json"
+    assert json_filename.endswith(".json")
+    json_bundle = json.loads(json_bytes.decode("utf-8"))
+    assert isinstance(json_bundle, dict)
+    assert "system_info" in json_bundle
+    assert "schema_versions" in json_bundle
+    assert "config" in json_bundle
+
+    # 3. FastAPI Sidecar API Verification
+    client = TestClient(app)
+
+    # GET /v1/settings/config
+    resp_get = client.get("/v1/settings/config")
+    assert resp_get.status_code == 200
+    cfg_data = resp_get.json()
+    assert "models" in cfg_data
+    assert "local_runtime" in cfg_data
+    assert "adapters" in cfg_data
+    assert "channels" in cfg_data
+    assert "storage" in cfg_data
+    assert "security" in cfg_data
+    assert "appearance" in cfg_data
+    assert "version" in cfg_data
+    assert "updated_at" in cfg_data
+
+    # POST /v1/settings/config
+    resp_post = client.post(
+        "/v1/settings/config",
+        json={"models": {"temperature": 0.25}, "appearance": {"ui_density": "compact"}},
+    )
+    assert resp_post.status_code == 200
+    updated_cfg = resp_post.json()
+    assert updated_cfg["models"]["temperature"] == 0.25
+    assert updated_cfg["appearance"]["ui_density"] == "compact"
+
+    # GET /v1/diagnostics/export?format=zip
+    resp_diag_zip = client.get("/v1/diagnostics/export?format=zip")
+    assert resp_diag_zip.status_code == 200
+    assert resp_diag_zip.headers.get("content-type") == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(resp_diag_zip.content), "r") as zf:
+        assert "system_info.json" in zf.namelist()
+        assert "schema_versions.json" in zf.namelist()
+        assert "config_redacted.json" in zf.namelist()
+        assert "logs_redacted.txt" in zf.namelist()
+
+    # GET /v1/diagnostics/export?format=json
+    resp_diag_json = client.get("/v1/diagnostics/export?format=json")
+    assert resp_diag_json.status_code == 200
+    diag_json = resp_diag_json.json()
+    assert "system_info" in diag_json
+    assert "schema_versions" in diag_json
+
+    # 4. Desktop Client & TypeScript Integration Verification
+    client_ts = (RENDERER_ROOT / "api" / "client.ts").read_text()
+    assert "getAppSettings" in client_ts
+    assert "saveAppSettings" in client_ts
+    assert "exportDiagnostics" in client_ts
+
+    types_ts = (RENDERER_ROOT / "types" / "index.ts").read_text()
+    assert "interface AppSettings" in types_ts
+    assert "interface DiagnosticsBundle" in types_ts
+    assert "interface ModelSettingsConfig" in types_ts
+    assert "interface LocalRuntimeSettingsConfig" in types_ts
+
+    settings_ts = (RENDERER_ROOT / "screens" / "Settings.tsx").read_text()
+    # 9 tabs present
+    for tab in [
+        "providers",
+        "models",
+        "local",
+        "adapters",
+        "channels",
+        "storage",
+        "security",
+        "appearance",
+        "diagnostics",
+    ]:
+        assert (
+            f"setActiveTab('{tab}')" in settings_ts
+        ), f"Settings.tsx must have tab switch for {tab}"
+
+    # 1-click export buttons & disclaimer
+    assert "Export Diagnostics (.zip)" in settings_ts
+    assert "Export Diagnostics (.json)" in settings_ts
+    assert (
+        "Sensitive data (keys, secrets, personal paths) has been redacted. Review before sharing."
+        in settings_ts
+    )
+    assert "handleSaveAppSettings" in settings_ts

@@ -378,6 +378,57 @@ paths:
                   runtime:
                     type: string
 
+  /settings/config:
+    get:
+      summary: Retrieve current application configuration decrypted from encrypted vault
+      operationId: getAppSettingsConfig
+      responses:
+        '200':
+          description: Application configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppSettingsConfig'
+    post:
+      summary: Update and persist application configuration into local encrypted vault
+      operationId: updateAppSettingsConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Updated configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppSettingsConfig'
+
+  /diagnostics/export:
+    get:
+      summary: Export complete diagnostics bundle (.zip or JSON)
+      operationId: exportDiagnostics
+      parameters:
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [zip, json]
+            default: zip
+      responses:
+        '200':
+          description: Diagnostics export bundle
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiagnosticsBundleResponse'
+
   /telemetry/cost:
     get:
       summary: Get token usage and cost metrics
@@ -1868,6 +1919,42 @@ components:
           type: string
         runtime:
           type: string
+
+    AppSettingsConfig:
+      type: object
+      properties:
+        models:
+          type: object
+        local_runtime:
+          type: object
+        adapters:
+          type: object
+        channels:
+          type: object
+        storage:
+          type: object
+        security:
+          type: object
+        appearance:
+          type: object
+        version:
+          type: string
+        updated_at:
+          type: string
+
+    DiagnosticsBundleResponse:
+      type: object
+      properties:
+        system_info:
+          type: object
+        schema_versions:
+          type: object
+        config:
+          type: object
+        logs:
+          type: array
+          items:
+            type: string
 
     TierSplitInfo:
       type: object

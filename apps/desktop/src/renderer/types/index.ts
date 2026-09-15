@@ -502,6 +502,86 @@ export interface SpeedRecordPayload {
   runtime?: string;
 }
 
+export interface ModelSettingsConfig {
+  default_tier: ModelTier;
+  fallback_tier: ModelTier;
+  temperature: number;
+  max_context_tokens: number;
+  hard_ceiling_tokens: number;
+  bypass_cache: boolean;
+}
+
+export interface LocalRuntimeSettingsConfig {
+  ollama_base_url: string;
+  llamacpp_base_url: string;
+  gpu_layers: number;
+  cpu_threads: number;
+  context_length: number;
+  auto_detect_gpu: boolean;
+}
+
+export interface AdapterSettingsConfig {
+  mcp_enabled: boolean;
+  claude_code_adapter: boolean;
+  codex_adapter: boolean;
+  openclaw_adapter: boolean;
+  goose_adapter: boolean;
+  cursor_adapter: boolean;
+}
+
+export interface ChannelSettingsConfig {
+  slack_enabled: boolean;
+  slack_webhook_url?: string | null;
+  discord_enabled: boolean;
+  discord_webhook_url?: string | null;
+  telegram_enabled: boolean;
+  telegram_bot_token?: string | null;
+  whatsapp_enabled: boolean;
+}
+
+export interface StorageSettingsConfig {
+  database_backend: 'sqlite' | 'postgres';
+  sqlite_path: string;
+  postgres_url?: string | null;
+  chroma_path: string;
+  retention_days: number;
+}
+
+export interface SecuritySettingsConfig {
+  zero_trust_eval: 'strict' | 'permissive';
+  approval_timeout_seconds: number;
+  ipc_token_enabled: boolean;
+  sandbox_mode: 'standard' | 'isolated';
+  keychain_backend: string;
+}
+
+export interface AppearanceSettingsConfig {
+  theme: 'dark' | 'light' | 'system';
+  font_size: 'sm' | 'base' | 'lg';
+  ui_density: 'comfortable' | 'compact';
+  code_font_family: string;
+}
+
+export interface AppSettings {
+  models: ModelSettingsConfig;
+  local_runtime: LocalRuntimeSettingsConfig;
+  adapters: AdapterSettingsConfig;
+  channels: ChannelSettingsConfig;
+  storage: StorageSettingsConfig;
+  security: SecuritySettingsConfig;
+  appearance: AppearanceSettingsConfig;
+  version: string;
+  updated_at: string;
+}
+
+export interface DiagnosticsBundle {
+  system_info: Record<string, any>;
+  schema_versions: Record<string, any>;
+  config: Record<string, any>;
+  logs: string[];
+}
+
+
 
 
 

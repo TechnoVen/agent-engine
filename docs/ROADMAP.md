@@ -261,10 +261,11 @@
   - **Deliverables:** Local telemetry widget in `Settings.tsx` and status bar, VRAM gauge, generation speed gauge, GPU model detection.
   - **Acceptance Criteria:** Updates every 2 seconds when local models run; warns when VRAM reaches 95%.
   - **Status:** ✅ DONE
-- [ ] **Task 4.8 — Settings Screen & Diagnostics Export**
+- [x] **Task 4.8 — Settings Screen & Diagnostics Export**
   - **User Story:** As a user, I want a single settings page to control Providers, Models, Local Runtime, Adapters, Channels, Storage, Security, Appearance, and Diagnostics.
   - **Deliverables:** `apps/desktop/src/renderer/screens/Settings.tsx` (Route `/settings`), tabbed configuration layout, diagnostics bundle export (`.zip`).
   - **Acceptance Criteria:** Settings persist to local encrypted config; diagnostics export includes redacted logs, schema versions, and system info.
+  - **Status:** ✅ DONE
 - [ ] **Task 4.9 — Streamlit Demotion to Developer Tool & Process Lifecycle (P1/P2 Remediation: F07, F14)**
   - **User Story:** As a maintainer, I want Streamlit reserved purely for internal development and CI benchmarks, cleanly removed from user packaging, with reliable launcher process lifecycle cleanup.
   - **Deliverables:** Move `server/dashboard.py` to `tools/dev_dashboard.py`, add developer warning banner ("Developer tool — not for end users"), update `Makefile` target `make dev-dashboard`, remove port 8501 references from user-facing docs; fix `start_studio.sh` signal trap installation and eliminate foreground `exec` replacement.

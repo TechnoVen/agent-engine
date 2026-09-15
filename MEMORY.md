@@ -25,7 +25,7 @@
   - **Task 3.11:** Featured Cases Content Curation (32 curated templates in `configs/cases/`, dedicated mode screens in `apps/desktop/src/renderer/screens/Modes/`, one-click prompt injection, `core/cases.py` loader & search, FastAPI `/v1/cases` endpoints)
 
 ### Current Test Count
-- **Monorepo Tests:** `254 passed` (strictly increasing with every completed task).
+- **Monorepo Tests:** `255 passed` (strictly increasing with every completed task).
 - **Desktop Build:** `pnpm --filter @agent-engine/desktop build` passes with 0 TypeScript errors.
 - **Cargo Check:** `cargo check` in `apps/desktop/src-tauri` passes cleanly.
 
@@ -42,9 +42,8 @@ Aligned with `docs/PROJECT_REVIEW_2026-09-14.md` to remediate findings F01–F14
 6. **Task 4.5 — Cost Dashboard (Merged 4.5 & 4.9; React in Desktop Shell):** ✅ Complete (`screens/Cost.tsx`, responsive SVG 90/9/1 donut, spend ledger, budget ceilings, Law 8 distillation pipeline, CSV/JSON export; 252/252 tests green)
 7. **Task 4.6 — Policy Editor & Immutable Audit Log:** ✅ Complete (`screens/Policies.tsx`, YAML editor with validation & hot-reload, zero-footprint dry-run playground, paginated immutable audit log with filters & CSV/JSON export; 253/253 tests green)
 8. **Task 4.7 — Hardware Telemetry Panel:** ✅ Complete (`core/telemetry/hardware.py`, `TopBar.tsx` status bar with 2s polling, `Settings.tsx` Hardware & Compute panel, GPU model detection, VRAM 95% warning threshold, tokens/sec throughput gauge; 254/254 tests green)
-9. **Task 4.8 — Settings Screen & Diagnostics Export (⏳ NEXT)**
-   - Tabbed configuration layout (Providers, Models, Local Runtime, Adapters, Channels, Storage, Security, Appearance, Diagnostics), encrypted local config, diagnostics bundle export (`.zip`).
-10. **Task 4.9 — Streamlit Demotion to Developer Tool & Process Lifecycle (F07, F14)**
+9. **Task 4.8 — Settings Screen & Diagnostics Export:** ✅ Complete (`core/config/settings.py`, `core/diagnostics.py`, 9 tabs in `screens/Settings.tsx`, encrypted AES-256-GCM config at rest, 1-click diagnostics bundle export `.zip` & `.json` with credential redaction guarantee; 255/255 tests green)
+10. **Task 4.9 — Streamlit Demotion to Developer Tool & Process Lifecycle (⏳ NEXT)**
     - Demote Streamlit to `tools/dev_dashboard.py`, fix `start_studio.sh` traps.
 
 ---

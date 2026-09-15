@@ -1,5 +1,6 @@
 import asyncio
 import datetime
+import io
 import json
 import logging
 import os
@@ -24,7 +25,8 @@ from pydantic import BaseModel, Field
 
 from core.cache import get_semantic_cache
 from core.cases import get_case_manager
-from core.config import get_feature_flags, require_flag, set_flag_override
+from core.config import get_feature_flags, get_settings_manager, require_flag, set_flag_override
+from core.diagnostics import build_diagnostics_bundle
 from core.context import ContextSpec, MissingContextFieldError, build_context
 from core.eval import EvalSample, ModelEvalReport, ModelEvalSuite, get_golden_dataset
 from core.memory import AgentMemory, ObservationalMemory
@@ -2984,6 +2986,44 @@ async def check_updates_endpoint(req: Optional[UpdateCheckRequest] = None):
     channel_override = req.channel if req else None
     info = mgr.check_for_updates(channel=channel_override)
     return UpdateCheckResponse(**info.to_dict())
+
+
+# ---------------------------------------------------------------------------
+# Encrypted Settings & Diagnostics Endpoints (Task 4.8)
+# ---------------------------------------------------------------------------
+
+
+@v1_router.get("/settings/config", response_model=Dict[str, Any])
+async def get_settings_config_endpoint():
+    """Retrieve current application configuration decrypted from local encrypted storage."""
+    mgr = get_settings_manager()
+    settings = mgr.load_settings()
+    return settings.to_dict()
+
+
+@v1_router.post("/settings/config", response_model=Dict[str, Any])
+async def update_settings_config_endpoint(payload: Dict[str, Any], request: Request):
+    """Update and persist application configuration into local encrypted vault."""
+    verify_ipc_token(request)
+    mgr = get_settings_manager()
+    updated = mgr.save_settings(payload)
+    return updated.to_dict()
+
+
+@v1_router.get("/diagnostics/export")
+async def export_diagnostics_endpoint(
+    format: str = Query("zip", description="Export format: 'zip' or 'json'"),
+):
+    """Export complete diagnostics bundle (system info, schema versions, redacted config, redacted logs)."""
+    content_bytes, media_type, filename = build_diagnostics_bundle(format=format)
+    if format.lower() == "json":
+        return Response(content=content_bytes, media_type="application/json")
+
+    return StreamingResponse(
+        io.BytesIO(content_bytes),
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # Mount router to FastAPI app

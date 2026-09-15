@@ -9,6 +9,18 @@ from core.config.flags import (
     reset_flag_overrides,
     set_flag_override,
 )
+from core.config.settings import (
+    AdapterSettings,
+    AppearanceSettings,
+    AppSettings,
+    ChannelSettings,
+    LocalRuntimeSettings,
+    ModelSettings,
+    SecuritySettings,
+    SettingsManager,
+    StorageSettings,
+    get_settings_manager,
+)
 
 __all__ = [
     "FeatureFlags",
@@ -18,4 +30,14 @@ __all__ = [
     "require_flag",
     "set_flag_override",
     "reset_flag_overrides",
+    "AppSettings",
+    "ModelSettings",
+    "LocalRuntimeSettings",
+    "AdapterSettings",
+    "ChannelSettings",
+    "StorageSettings",
+    "SecuritySettings",
+    "AppearanceSettings",
+    "SettingsManager",
+    "get_settings_manager",
 ]
