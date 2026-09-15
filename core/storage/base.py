@@ -432,10 +432,24 @@ class StorageBackend(ABC):
     def list_audit_logs(
         self,
         limit: int = 50,
+        offset: int = 0,
         decision: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        tool_name: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Retrieve recent safety audit logs."""
+        """Retrieve recent safety audit logs with filtering and pagination."""
+        pass
+
+    @abstractmethod
+    def count_audit_logs(
+        self,
+        decision: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        tool_name: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> int:
+        """Count total matching safety audit logs."""
         pass
 
     # --- 8. SCHEDULED TASKS ---

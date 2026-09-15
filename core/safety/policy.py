@@ -186,16 +186,90 @@ class PolicyEngine:
     def list_rules(self) -> List[PolicyRule]:
         return list(self._rules.values())
 
+    def get_yaml_content(self) -> str:
+        """Retrieve raw policy YAML content from disk."""
+        if os.path.exists(self.policy_file):
+            try:
+                with open(self.policy_file, "r", encoding="utf-8") as f:
+                    return f.read()
+            except Exception as e:
+                logger.error("Failed to read policy file %s: %s", self.policy_file, e)
+                return ""
+        return ""
+
+    def update_yaml_content(self, content: str) -> Dict[str, Any]:
+        """Validate, persist, and hot-reload policy rules from raw YAML content."""
+        if not content or not content.strip():
+            raise ValueError("Policy YAML content cannot be empty.")
+
+        try:
+            parsed = yaml.safe_load(content)
+        except Exception as e:
+            raise ValueError(f"Invalid YAML syntax: {e}")
+
+        if not isinstance(parsed, dict):
+            raise ValueError("YAML root must be a mapping/dictionary.")
+
+        rules_raw = parsed.get("rules")
+        if rules_raw is None or not isinstance(rules_raw, list):
+            raise ValueError("Policy YAML must define a 'rules' list.")
+
+        new_rules: Dict[str, PolicyRule] = {}
+        for idx, r in enumerate(rules_raw):
+            if not isinstance(r, dict):
+                raise ValueError(f"Rule at index {idx} must be a dictionary.")
+            if not r.get("id"):
+                raise ValueError(f"Rule at index {idx} missing required 'id' field.")
+            if not r.get("pattern"):
+                raise ValueError(f"Rule '{r.get('id')}' missing required 'pattern' field.")
+
+            # Validate regex pattern compilation if match_type is regex
+            match_type = r.get("match_type", "regex")
+            if match_type.lower() == "regex":
+                try:
+                    re.compile(r["pattern"])
+                except re.error as err:
+                    raise ValueError(f"Invalid regex in rule '{r['id']}': {err}")
+
+            rule = PolicyRule(
+                id=r["id"],
+                name=r.get("name", r["id"]),
+                description=r.get("description", ""),
+                match_type=match_type,
+                pattern=r["pattern"],
+                action=r.get("action", "block"),
+                risk_level=r.get("risk_level", "high"),
+                reason=r.get("reason"),
+                suggestion=r.get("suggestion"),
+            )
+            new_rules[rule.id] = rule
+
+        # Persist to policy file
+        os.makedirs(os.path.dirname(os.path.abspath(self.policy_file)), exist_ok=True)
+        with open(self.policy_file, "w", encoding="utf-8") as f:
+            f.write(content)
+
+        # Hot reload in-memory rules
+        self._rules = new_rules
+        logger.info("Successfully hot-reloaded %d safety guardrail rules.", len(self._rules))
+
+        return {
+            "success": True,
+            "rules_count": len(new_rules),
+            "message": f"Successfully updated and hot-reloaded {len(new_rules)} safety rules.",
+        }
+
     def evaluate(
         self,
         tool_name: str,
         tool_args: Dict[str, Any],
         context: Optional[Dict[str, Any]] = None,
+        dry_run: bool = False,
     ) -> PolicyDecision:
         """
         Evaluate a prospective tool call against active guardrail policies.
         Enforces blocking rules, computes risk scores, applies Conflict C6 staging,
-        and logs the outcome to the persistent audit log.
+        and logs the outcome to the persistent audit log (unless dry_run=True).
         """
         ctx = context or {}
         session_id = ctx.get("session_id")
@@ -250,18 +324,22 @@ class PolicyEngine:
             decision = "allow"
             reason = "Action complies with all active safety guardrails."
 
-        # 4. Record event in persistent audit log
-        audit_id = self.audit_logger.log_evaluation(
-            tool_name=tool_name,
-            tool_args=tool_args,
-            decision=decision,
-            risk_level=risk_level.value if isinstance(risk_level, RiskLevel) else str(risk_level),
-            risk_score=risk_score,
-            policy_id=primary_policy_id,
-            reason=reason,
-            suggestion=suggestion,
-            session_id=session_id,
-        )
+        # 4. Record event in persistent audit log (skip if dry run)
+        audit_id = None
+        if not dry_run:
+            audit_id = self.audit_logger.log_evaluation(
+                tool_name=tool_name,
+                tool_args=tool_args,
+                decision=decision,
+                risk_level=risk_level.value
+                if isinstance(risk_level, RiskLevel)
+                else str(risk_level),
+                risk_score=risk_score,
+                policy_id=primary_policy_id,
+                reason=reason,
+                suggestion=suggestion,
+                session_id=session_id,
+            )
 
         return PolicyDecision(
             decision=decision,
@@ -270,5 +348,5 @@ class PolicyEngine:
             violating_rules=violating_rules,
             suggestion=suggestion,
             reason=reason,
-            audit_id=audit_id if audit_id > 0 else None,
+            audit_id=audit_id if (audit_id and audit_id > 0) else None,
         )

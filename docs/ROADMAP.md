@@ -251,10 +251,11 @@
   - **Deliverables:** `apps/desktop/src/renderer/screens/Cost.tsx` (Route `/cost`), Recharts donut (90/9/1 CODE/CACHE/SMALL/MID/FRONTIER), cost-per-task bar chart, cache hit rate line chart, distillation candidate list (>10k calls/mo) with 1-click distill trigger, budget ceiling inputs, CSV/JSON telemetry export.
   - **Acceptance Criteria:** Numbers match `/v1/telemetry/cost`; alerts trigger warning at 80% and block/alert at 100%; CSV/JSON export works; fully replaces Streamlit Tab 5 with full feature parity.
   - **Status:** ✅ DONE
-- [ ] **Task 4.6 — Policy Editor & Immutable Audit Log**
+- [x] **Task 4.6 — Policy Editor & Immutable Audit Log**
   - **User Story:** As P4, I want to edit YAML guardrail policies with a test playground and browse immutable audit logs.
   - **Deliverables:** Monaco YAML editor in `screens/Policies.tsx`, rule dry-run playground, paginated audit log table with filter by risk level and tool name.
   - **Acceptance Criteria:** Validates YAML syntax before save; hot-reloads policies without restarting sidecar; audit logs exportable as CSV/JSON.
+  - **Status:** ✅ DONE
 - [ ] **Task 4.7 — Hardware Telemetry Panel**
   - **User Story:** As a local model user, I want to see VRAM, RAM, CPU, and tokens/sec for local runtimes (Ollama/llama.cpp).
   - **Deliverables:** Local telemetry widget in `Settings.tsx` and status bar, VRAM gauge, generation speed gauge, GPU model detection.

@@ -1502,3 +1502,178 @@ def test_task_4_5_cost_dashboard_and_distillation_engine(monkeypatch):
     assert "DistillationCandidate" in types_content
     assert "BudgetConfig" in types_content
     assert "CostMetrics" in types_content
+
+
+def test_task_4_6_policy_editor_and_immutable_audit_log(monkeypatch):
+    """Verify Task 4.6 Policy Editor, Dry-Run Playground, and Paginated Audit Log."""
+    monkeypatch.setenv("AGENT_ENGINE_IPC_TOKEN", "ipc_secret_test_token")
+    from fastapi.testclient import TestClient
+    from services.python.server.api import app
+    from core.safety import get_policy_engine
+
+    client = TestClient(app)
+    engine = get_policy_engine()
+    original_yaml = engine.get_yaml_content()
+
+    try:
+        # 1. Get YAML Policy
+        resp_get = client.get("/v1/safety/policies/yaml")
+        assert resp_get.status_code == 200
+        yaml_data = resp_get.json()
+        assert "yaml_content" in yaml_data
+        assert "rules:" in yaml_data["yaml_content"]
+        assert yaml_data["rules_count"] >= 8
+
+        # 2. Syntax and Validation checks
+        # Invalid syntax fails with 400
+        resp_bad_syntax = client.post(
+            "/v1/safety/policies/yaml",
+            headers={"X-IPC-Token": "ipc_secret_test_token"},
+            json={"yaml_content": "invalid: yaml: [syntax"},
+        )
+        assert resp_bad_syntax.status_code == 400
+        assert "Invalid YAML syntax" in resp_bad_syntax.json()["detail"]
+
+        # Missing rules fails with 400
+        resp_missing_rules = client.post(
+            "/v1/safety/policies/yaml",
+            headers={"X-IPC-Token": "ipc_secret_test_token"},
+            json={"yaml_content": "version: '1.0.0'\nname: 'No Rules'"},
+        )
+        assert resp_missing_rules.status_code == 400
+        assert "rules" in resp_missing_rules.json()["detail"].lower()
+
+        # Valid YAML update hot-reloads policies without restart
+        test_custom_yaml = """version: "1.0.0"
+name: "Hot Reloaded Policy Test"
+description: "Test policy for hot reload"
+
+rules:
+  - id: "custom_block_rule_test"
+    name: "Custom Block Rule"
+    description: "Custom test rule"
+    match_type: "regex"
+    pattern: "custom_forbidden_keyword"
+    action: "block"
+    risk_level: "critical"
+    reason: "Blocked by hot-reloaded custom rule."
+"""
+        resp_update = client.post(
+            "/v1/safety/policies/yaml",
+            headers={"X-IPC-Token": "ipc_secret_test_token"},
+            json={"yaml_content": test_custom_yaml},
+        )
+        assert resp_update.status_code == 200
+        update_res = resp_update.json()
+        assert update_res["success"] is True
+        assert update_res["rules_count"] == 1
+
+        # Confirm hot-reload took effect immediately in-memory
+        resp_pols = client.get("/v1/safety/policies")
+        assert resp_pols.status_code == 200
+        pols = resp_pols.json()
+        assert len(pols) == 1
+        assert pols[0]["id"] == "custom_block_rule_test"
+
+        # 3. Dry-Run Playground Simulation
+        # Simulate call matching the new rule
+        resp_sim_block = client.post(
+            "/v1/safety/policies/dry-run",
+            json={
+                "tool_name": "bash:execute",
+                "tool_args": {"cmd": "echo custom_forbidden_keyword"},
+            },
+        )
+        assert resp_sim_block.status_code == 200
+        block_res = resp_sim_block.json()
+        assert block_res["decision"] == "block"
+        assert block_res["risk_level"] == "critical"
+        assert block_res["risk_score"] >= 0.90
+        assert len(block_res["violating_rules"]) == 1
+        assert block_res["violating_rules"][0]["id"] == "custom_block_rule_test"
+        # Zero audit footprint: audit_id must be None
+        assert block_res.get("audit_id") is None
+
+        # Simulate call that is safe
+        resp_sim_safe = client.post(
+            "/v1/safety/policies/dry-run",
+            json={
+                "tool_name": "sql:execute",
+                "tool_args": {"query": "SELECT * FROM safe_table;"},
+            },
+        )
+        assert resp_sim_safe.status_code == 200
+        safe_res = resp_sim_safe.json()
+        assert safe_res["decision"] == "allow"
+        assert safe_res["risk_score"] < 0.70
+        assert safe_res["risk_level"] in ("low", "medium")
+        assert safe_res.get("audit_id") is None
+
+        # 4. Paginated Audit Log & Filtering
+        # Seed an audit record via real evaluate endpoint
+        client.post(
+            "/v1/safety/evaluate",
+            json={
+                "tool_name": "bash:execute",
+                "tool_args": {"cmd": "echo custom_forbidden_keyword"},
+            },
+        )
+
+        resp_logs = client.get("/v1/safety/audit-logs?limit=10&offset=0")
+        assert resp_logs.status_code == 200
+        logs_data = resp_logs.json()
+        assert "total" in logs_data
+        assert "items" in logs_data
+        assert logs_data["total"] >= 1
+        assert len(logs_data["items"]) >= 1
+
+        # Test filtering by decision
+        resp_filter_block = client.get("/v1/safety/audit-logs?decision=block")
+        assert resp_filter_block.status_code == 200
+        filter_data = resp_filter_block.json()
+        assert all(item["decision"] == "block" for item in filter_data["items"])
+
+        # 5. Export Audit Logs (CSV and JSON)
+        resp_export_json = client.get("/v1/safety/audit-logs/export?format=json")
+        assert resp_export_json.status_code == 200
+        assert isinstance(resp_export_json.json(), list)
+
+        resp_export_csv = client.get("/v1/safety/audit-logs/export?format=csv")
+        assert resp_export_csv.status_code == 200
+        assert "text/csv" in resp_export_csv.headers["content-type"]
+        csv_text = resp_export_csv.text
+        assert "id,timestamp,tool_name" in csv_text
+
+    finally:
+        # Restore original YAML policy
+        engine.update_yaml_content(original_yaml)
+
+    # 6. Verify Desktop UI Integration for Task 4.6
+    pol_file = RENDERER_ROOT / "screens" / "Policies.tsx"
+    assert pol_file.exists(), "Policies.tsx must exist"
+    pol_content = pol_file.read_text()
+
+    assert "sidecarClient.getPolicyYaml" in pol_content
+    assert "sidecarClient.updatePolicyYaml" in pol_content
+    assert "sidecarClient.dryRunPolicy" in pol_content
+    assert "sidecarClient.getSafetyAuditLogsPage" in pol_content
+    assert "sidecarClient.exportSafetyAuditLogs" in pol_content
+    assert "POLICY_PRESETS" in pol_content
+    assert "PLAYGROUND_PRESETS" in pol_content
+    assert "YAML Editor" in pol_content
+    assert "Dry-Run Simulator" in pol_content
+    assert "Audit Log" in pol_content
+
+    # Check client.ts and types.ts
+    client_content = (RENDERER_ROOT / "api" / "client.ts").read_text()
+    assert "getPolicyYaml" in client_content
+    assert "updatePolicyYaml" in client_content
+    assert "dryRunPolicy" in client_content
+    assert "getSafetyAuditLogsPage" in client_content
+    assert "exportSafetyAuditLogs" in client_content
+
+    types_content = (RENDERER_ROOT / "types" / "index.ts").read_text()
+    assert "PolicyYamlResponse" in types_content
+    assert "DryRunRequest" in types_content
+    assert "DryRunResult" in types_content
+    assert "PaginatedAuditLogsResponse" in types_content

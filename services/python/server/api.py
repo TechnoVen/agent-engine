@@ -20,7 +20,7 @@ import numpy  # noqa: F401
 import psutil
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from core.cache import get_semantic_cache
@@ -828,6 +828,28 @@ class ApprovalDecisionRequest(BaseModel):
     modified_args: Optional[Dict[str, Any]] = None
     session_id: Optional[str] = None
     operator: Optional[str] = "local-operator"
+
+
+class PolicyYamlResponse(BaseModel):
+    yaml_content: str
+    rules_count: int
+
+
+class PolicyYamlUpdateRequest(BaseModel):
+    yaml_content: str
+
+
+class DryRunRequest(BaseModel):
+    tool_name: str
+    tool_args: Dict[str, Any] = Field(default_factory=dict)
+    context: Optional[Dict[str, Any]] = None
+
+
+class PaginatedAuditLogsResponse(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: List[AuditLogInfo]
 
 
 class SetCredentialRequest(BaseModel):
@@ -2121,6 +2143,139 @@ async def submit_safety_approval(req: ApprovalDecisionRequest, request: Request)
         reason=reason_str,
         suggestion="Approved with modified args" if req.decision == "edit" else None,
         session_id=req.session_id,
+    )
+
+
+@v1_router.get("/safety/policies/yaml", response_model=PolicyYamlResponse)
+async def get_safety_policy_yaml():
+    """Retrieve raw safety policy YAML for inspection or editing."""
+    engine = get_policy_engine()
+    content = engine.get_yaml_content()
+    return PolicyYamlResponse(yaml_content=content, rules_count=len(engine.list_rules()))
+
+
+@v1_router.post("/safety/policies/yaml")
+async def update_safety_policy_yaml(req: PolicyYamlUpdateRequest, request: Request):
+    """Validate, persist, and hot-reload safety guardrail policies from YAML content."""
+    verify_ipc_token(request)
+    engine = get_policy_engine()
+    try:
+        res = engine.update_yaml_content(req.yaml_content)
+        return res
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@v1_router.post("/safety/policies/dry-run", response_model=SafetyEvaluationResponse)
+async def dry_run_safety_policy(req: DryRunRequest):
+    """Simulate and dry-run safety policy evaluation without logging to audit trail."""
+    engine = get_policy_engine()
+    decision = engine.evaluate(
+        tool_name=req.tool_name,
+        tool_args=req.tool_args,
+        context=req.context,
+        dry_run=True,
+    )
+    return SafetyEvaluationResponse(**decision.to_dict())
+
+
+@v1_router.get("/safety/audit-logs", response_model=PaginatedAuditLogsResponse)
+async def list_safety_audit_logs_paginated(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    decision: Optional[str] = Query(None),
+    risk_level: Optional[str] = Query(None),
+    tool_name: Optional[str] = Query(None),
+    session_id: Optional[str] = Query(None),
+):
+    """Paginated query of safety audit logs with risk and tool name filters."""
+    engine = get_policy_engine()
+    total = engine.audit_logger.count_logs(
+        decision=decision,
+        risk_level=risk_level,
+        tool_name=tool_name,
+        session_id=session_id,
+    )
+    logs = engine.audit_logger.list_logs(
+        limit=limit,
+        offset=offset,
+        decision=decision,
+        risk_level=risk_level,
+        tool_name=tool_name,
+        session_id=session_id,
+    )
+    return PaginatedAuditLogsResponse(
+        total=total,
+        limit=limit,
+        offset=offset,
+        items=[AuditLogInfo(**log) for log in logs],
+    )
+
+
+@v1_router.get("/safety/audit-logs/export")
+async def export_safety_audit_logs(
+    format: str = Query("csv", pattern="^(csv|json)$"),
+    decision: Optional[str] = Query(None),
+    risk_level: Optional[str] = Query(None),
+    tool_name: Optional[str] = Query(None),
+    limit: int = Query(1000, ge=1, le=10000),
+):
+    """Export safety audit logs as CSV or JSON."""
+    engine = get_policy_engine()
+    logs = engine.audit_logger.list_logs(
+        limit=limit,
+        offset=0,
+        decision=decision,
+        risk_level=risk_level,
+        tool_name=tool_name,
+    )
+    if format == "json":
+        return logs
+
+    import csv
+    import io
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        [
+            "id",
+            "timestamp",
+            "tool_name",
+            "tool_args",
+            "decision",
+            "risk_level",
+            "risk_score",
+            "policy_id",
+            "reason",
+            "suggestion",
+            "session_id",
+        ]
+    )
+    for log in logs:
+        writer.writerow(
+            [
+                log.get("id"),
+                log.get("timestamp"),
+                log.get("tool_name"),
+                json.dumps(log.get("tool_args", {})),
+                log.get("decision"),
+                log.get("risk_level"),
+                log.get("risk_score"),
+                log.get("policy_id"),
+                log.get("reason"),
+                log.get("suggestion"),
+                log.get("session_id"),
+            ]
+        )
+    output.seek(0)
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=safety_audit_logs.csv"},
     )
 
 

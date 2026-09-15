@@ -808,6 +808,14 @@ Each mode uses the same shell, the same input, the same chat history, the same p
 3. **Law 8 Distillation Pipeline:** One-click distillation trigger for high-volume repeating tasks (>10,000 calls/month) to train and deploy compact local specialist models from teacher logs.
 4. **Budget Ceilings & Export:** Configurable monthly/daily spending limits with warning (80%) and critical (100%) thresholds, plus one-click CSV and JSON export.
 
+### Task 4.6 — Policy Editor & Immutable Audit Log
+- **Route:** `/policies`
+- **Component:** `apps/desktop/src/renderer/screens/Policies.tsx`
+1. **YAML Policy Editor:** Live syntax-validated editor with preset templates (`strict`, `developer`), diff checking, and instantaneous hot-reloading in the sidecar engine without process restarts.
+2. **Rule Dry-Run Playground:** Safe simulator allowing operators to test prospective tool names and JSON parameters against active guardrails, computing risk scores and rule matches with zero footprint on the immutable audit trail.
+3. **Paginated Immutable Audit Log:** High-volume searchable ledger with pagination controls (10/25/50 items per page), risk-tier filters (Low/Medium/High/Critical), decision filters (Allow/Deny/Pending/Approved/Rejected), inline JSON arguments inspection, and CSV/JSON export.
+
+
 
 
 

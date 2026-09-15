@@ -21,6 +21,10 @@ import {
   CostMetrics,
   BudgetConfig,
   DistillationCandidate,
+  PolicyYamlResponse,
+  DryRunRequest,
+  DryRunResult,
+  PaginatedAuditLogsResponse,
 } from '../types';
 
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
@@ -666,6 +670,90 @@ class SidecarClient {
     } catch {
       return [];
     }
+  }
+
+  async getPolicyYaml(): Promise<PolicyYamlResponse> {
+    try {
+      const res = await fetch(`${this.base}/v1/safety/policies/yaml`);
+      if (res.ok) return await res.json();
+    } catch (err) {
+      console.error('Failed to load policy YAML', err);
+    }
+    return { yaml_content: '', rules_count: 0 };
+  }
+
+  async updatePolicyYaml(yamlContent: string): Promise<{ success: boolean; message: string; rules_count?: number }> {
+    const res = await fetch(`${this.base}/v1/safety/policies/yaml`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ yaml_content: yamlContent }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Failed to update policy YAML: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async dryRunPolicy(payload: DryRunRequest): Promise<DryRunResult> {
+    const res = await fetch(`${this.base}/v1/safety/policies/dry-run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tool_name: payload.tool_name,
+        tool_args: payload.tool_args || {},
+        context: payload.context,
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`Dry run failed: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async getSafetyAuditLogsPage(query: {
+    limit?: number;
+    offset?: number;
+    decision?: string;
+    riskLevel?: string;
+    toolName?: string;
+    sessionId?: string;
+  } = {}): Promise<PaginatedAuditLogsResponse> {
+    try {
+      const params = new URLSearchParams();
+      if (query.limit !== undefined) params.set('limit', String(query.limit));
+      if (query.offset !== undefined) params.set('offset', String(query.offset));
+      if (query.decision && query.decision !== 'all') params.set('decision', query.decision);
+      if (query.riskLevel && query.riskLevel !== 'all') params.set('risk_level', query.riskLevel);
+      if (query.toolName) params.set('tool_name', query.toolName);
+      if (query.sessionId) params.set('session_id', query.sessionId);
+
+      const res = await fetch(`${this.base}/v1/safety/audit-logs?${params.toString()}`);
+      if (res.ok) return await res.json();
+    } catch (err) {
+      console.error('Failed to load paginated audit logs', err);
+    }
+    return { total: 0, limit: query.limit || 50, offset: query.offset || 0, items: [] };
+  }
+
+  async exportSafetyAuditLogs(
+    format: 'csv' | 'json' = 'csv',
+    filters: { decision?: string; riskLevel?: string; toolName?: string; limit?: number } = {}
+  ): Promise<string | AuditLogEntry[]> {
+    const params = new URLSearchParams({ format });
+    if (filters.decision && filters.decision !== 'all') params.set('decision', filters.decision);
+    if (filters.riskLevel && filters.riskLevel !== 'all') params.set('risk_level', filters.riskLevel);
+    if (filters.toolName) params.set('tool_name', filters.toolName);
+    if (filters.limit) params.set('limit', String(filters.limit));
+
+    const res = await fetch(`${this.base}/v1/safety/audit-logs/export?${params.toString()}`);
+    if (!res.ok) {
+      throw new Error(`Export failed: HTTP ${res.status}`);
+    }
+    if (format === 'csv') {
+      return await res.text();
+    }
+    return await res.json();
   }
 
   async getCostMetrics(

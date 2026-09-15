@@ -64,16 +64,45 @@ class AuditLogger:
     def list_logs(
         self,
         limit: int = 50,
+        offset: int = 0,
         decision: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        tool_name: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Retrieve recent safety audit logs.
+        Retrieve recent safety audit logs with filtering and pagination.
         """
         try:
             return self.storage.list_audit_logs(
-                limit=limit, decision=decision, session_id=session_id
+                limit=limit,
+                offset=offset,
+                decision=decision,
+                risk_level=risk_level,
+                tool_name=tool_name,
+                session_id=session_id,
             )
         except Exception as e:
             logger.error("Failed to list safety audit logs: %s", e)
             return []
+
+    def count_logs(
+        self,
+        decision: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        tool_name: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> int:
+        """
+        Count total matching safety audit logs.
+        """
+        try:
+            return self.storage.count_audit_logs(
+                decision=decision,
+                risk_level=risk_level,
+                tool_name=tool_name,
+                session_id=session_id,
+            )
+        except Exception as e:
+            logger.error("Failed to count safety audit logs: %s", e)
+            return 0

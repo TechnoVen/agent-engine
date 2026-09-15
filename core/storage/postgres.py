@@ -1003,22 +1003,31 @@ class PostgresBackend(StorageBackend):
     def list_audit_logs(
         self,
         limit: int = 50,
+        offset: int = 0,
         decision: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        tool_name: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         with self.engine.connect() as conn:
             query = "SELECT * FROM audit_logs"
             conditions = []
-            params: Dict[str, Any] = {"limit": limit}
+            params: Dict[str, Any] = {"limit": limit, "offset": offset}
             if decision:
                 conditions.append("decision = :decision")
                 params["decision"] = decision
+            if risk_level:
+                conditions.append("risk_level = :risk_level")
+                params["risk_level"] = risk_level
+            if tool_name:
+                conditions.append("tool_name ILIKE :tool_name")
+                params["tool_name"] = f"%{tool_name}%"
             if session_id:
                 conditions.append("session_id = :session_id")
                 params["session_id"] = session_id
             if conditions:
                 query += " WHERE " + " AND ".join(conditions)
-            query += " ORDER BY id DESC LIMIT :limit"
+            query += " ORDER BY id DESC LIMIT :limit OFFSET :offset"
 
             result = conn.execute(text(query), params)
             results = []
@@ -1027,3 +1036,32 @@ class PostgresBackend(StorageBackend):
                 data["tool_args"] = json.loads(data.get("tool_args") or "{}")
                 results.append(data)
             return results
+
+    def count_audit_logs(
+        self,
+        decision: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        tool_name: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> int:
+        with self.engine.connect() as conn:
+            query = "SELECT COUNT(*) as count FROM audit_logs"
+            conditions = []
+            params: Dict[str, Any] = {}
+            if decision:
+                conditions.append("decision = :decision")
+                params["decision"] = decision
+            if risk_level:
+                conditions.append("risk_level = :risk_level")
+                params["risk_level"] = risk_level
+            if tool_name:
+                conditions.append("tool_name ILIKE :tool_name")
+                params["tool_name"] = f"%{tool_name}%"
+            if session_id:
+                conditions.append("session_id = :session_id")
+                params["session_id"] = session_id
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+
+            row = conn.execute(text(query), params).fetchone()
+            return int(row.count) if row and row.count else 0

@@ -1063,7 +1063,10 @@ class SQLiteBackend(StorageBackend):
     def list_audit_logs(
         self,
         limit: int = 50,
+        offset: int = 0,
         decision: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        tool_name: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         with self._lock:
@@ -1076,13 +1079,19 @@ class SQLiteBackend(StorageBackend):
                 if decision:
                     conditions.append("decision = ?")
                     params.append(decision)
+                if risk_level:
+                    conditions.append("risk_level = ?")
+                    params.append(risk_level)
+                if tool_name:
+                    conditions.append("tool_name LIKE ?")
+                    params.append(f"%{tool_name}%")
                 if session_id:
                     conditions.append("session_id = ?")
                     params.append(session_id)
                 if conditions:
                     query += " WHERE " + " AND ".join(conditions)
-                query += " ORDER BY id DESC LIMIT ?"
-                params.append(limit)
+                query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+                params.extend([limit, offset])
 
                 cursor.execute(query, tuple(params))
                 results = []
@@ -1091,6 +1100,42 @@ class SQLiteBackend(StorageBackend):
                     data["tool_args"] = json.loads(data.get("tool_args") or "{}")
                     results.append(data)
                 return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def count_audit_logs(
+        self,
+        decision: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        tool_name: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> int:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                query = "SELECT COUNT(*) FROM audit_logs"
+                conditions = []
+                params: List[Any] = []
+                if decision:
+                    conditions.append("decision = ?")
+                    params.append(decision)
+                if risk_level:
+                    conditions.append("risk_level = ?")
+                    params.append(risk_level)
+                if tool_name:
+                    conditions.append("tool_name LIKE ?")
+                    params.append(f"%{tool_name}%")
+                if session_id:
+                    conditions.append("session_id = ?")
+                    params.append(session_id)
+                if conditions:
+                    query += " WHERE " + " AND ".join(conditions)
+
+                cursor.execute(query, tuple(params))
+                row = cursor.fetchone()
+                return row[0] if row else 0
             finally:
                 if not self._is_memory:
                     conn.close()

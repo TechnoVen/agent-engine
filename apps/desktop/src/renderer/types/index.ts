@@ -301,6 +301,44 @@ export interface AuditLogEntry {
   policy_id?: string;
   reason?: string;
   suggestion?: string;
+  session_id?: string;
+}
+
+export interface PolicyYamlResponse {
+  yaml_content: string;
+  rules_count: number;
+}
+
+export interface DryRunRequest {
+  tool_name: string;
+  tool_args?: Record<string, any>;
+  context?: Record<string, any>;
+}
+
+export interface DryRunResult {
+  decision: 'allow' | 'block' | 'stage';
+  risk_score: number;
+  risk_level: RiskLevel;
+  violating_rules: Array<{
+    id: string;
+    name: string;
+    description: string;
+    action: string;
+    risk_level: string;
+    pattern: string;
+    reason?: string;
+    suggestion?: string;
+  }>;
+  suggestion?: string;
+  reason?: string;
+  audit_id?: number;
+}
+
+export interface PaginatedAuditLogsResponse {
+  total: number;
+  limit: number;
+  offset: number;
+  items: AuditLogEntry[];
 }
 
 export interface AgentPersona {

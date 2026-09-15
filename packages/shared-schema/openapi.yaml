@@ -744,6 +744,134 @@ paths:
               schema:
                 $ref: '#/components/schemas/VerifyExecutionResponse'
 
+  /safety/policies/yaml:
+    get:
+      summary: Retrieve raw safety policy YAML
+      operationId: getSafetyPolicyYaml
+      responses:
+        '200':
+          description: Raw YAML content and rule count
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyYamlResponse'
+    post:
+      summary: Validate and hot-reload safety policies from YAML
+      operationId: updateSafetyPolicyYaml
+      security:
+        - IPCTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyYamlUpdateRequest'
+      responses:
+        '200':
+          description: Policies successfully updated and hot-reloaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResult'
+
+  /safety/policies/dry-run:
+    post:
+      summary: Simulate safety policy evaluation without logging to audit trail
+      operationId: dryRunSafetyPolicy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DryRunRequest'
+      responses:
+        '200':
+          description: Simulated evaluation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SafetyEvaluationResponse'
+
+  /safety/audit-logs:
+    get:
+      summary: Paginated query of safety audit logs
+      operationId: listSafetyAuditLogsPaginated
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: decision
+          in: query
+          schema:
+            type: string
+        - name: risk_level
+          in: query
+          schema:
+            type: string
+        - name: tool_name
+          in: query
+          schema:
+            type: string
+        - name: session_id
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paginated audit logs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAuditLogsResponse'
+
+  /safety/audit-logs/export:
+    get:
+      summary: Export safety audit logs as CSV or JSON
+      operationId: exportSafetyAuditLogs
+      parameters:
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [csv, json]
+            default: csv
+        - name: decision
+          in: query
+          schema:
+            type: string
+        - name: risk_level
+          in: query
+          schema:
+            type: string
+        - name: tool_name
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 1000
+      responses:
+        '200':
+          description: Exported audit logs
+          content:
+            text/csv:
+              schema:
+                type: string
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AuditLogInfo'
+
   /sessions:
     post:
       summary: Create a unified cross-agent session
@@ -2105,6 +2233,48 @@ components:
           type: string
         operator:
           type: string
+
+    PolicyYamlResponse:
+      type: object
+      required: [yaml_content, rules_count]
+      properties:
+        yaml_content:
+          type: string
+        rules_count:
+          type: integer
+
+    PolicyYamlUpdateRequest:
+      type: object
+      required: [yaml_content]
+      properties:
+        yaml_content:
+          type: string
+
+    DryRunRequest:
+      type: object
+      required: [tool_name]
+      properties:
+        tool_name:
+          type: string
+        tool_args:
+          type: object
+        context:
+          type: object
+
+    PaginatedAuditLogsResponse:
+      type: object
+      required: [total, limit, offset, items]
+      properties:
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditLogInfo'
 
     ToolCallInfo:
       type: object
