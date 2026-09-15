@@ -3,7 +3,7 @@ import builtins
 import contextlib
 import io
 
-from server.dashboard import auto_repair_naked_return, extract_code_block
+from tools.dev_dashboard import auto_repair_naked_return, extract_code_block
 
 
 def test_extract_code_block_markdown_fences():

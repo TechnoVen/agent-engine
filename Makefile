@@ -3,7 +3,7 @@ PYTEST ?= .venv/bin/pytest
 RUFF ?= .venv/bin/ruff
 UV ?= uv
 
-.PHONY: all bootstrap verify test lint format clean help desktop-install desktop-build desktop-dev desktop-tauri-dev desktop-bundle-sidecar desktop-sign-sidecar desktop-verify-sidecar
+.PHONY: all bootstrap verify test lint format clean help desktop-install desktop-build desktop-dev desktop-tauri-dev desktop-bundle-sidecar desktop-sign-sidecar desktop-verify-sidecar dev-dashboard
 
 all: verify
 
@@ -15,6 +15,7 @@ help:
 	@echo "  make lint        - Check code formatting and style with ruff"
 	@echo "  make format      - Auto-format code with ruff"
 	@echo "  make clean       - Remove cached files and build artifacts"
+	@echo "  make dev-dashboard          - Start internal developer diagnostic dashboard (tools/dev_dashboard.py)"
 	@echo "  make desktop-install        - Install Tauri/React desktop app dependencies"
 	@echo "  make desktop-build          - Build Tauri/React desktop app frontend"
 	@echo "  make desktop-dev            - Start Vite dev server for desktop app"
@@ -107,4 +108,9 @@ desktop-update-manifest:
 desktop-update-server:
 	@echo "==> Starting local mock update feed server..."
 	$(PYTHON) infra/update-server/serve_feed.py --port 8088 --dir dist/updates
+
+dev-dashboard:
+	@echo "==> Starting internal developer diagnostic dashboard (Streamlit)..."
+	@echo "⚠️  NOTE: Developer diagnostic tool only. The sole official user-facing UI is the Tauri Desktop application."
+	$(PYTHON) -m streamlit run tools/dev_dashboard.py
 

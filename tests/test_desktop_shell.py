@@ -1964,3 +1964,104 @@ def test_task_4_8_settings_screen_and_diagnostics_export(tmp_path: Path):
         in settings_ts
     )
     assert "handleSaveAppSettings" in settings_ts
+
+
+def test_task_4_9_streamlit_demotion_and_process_lifecycle():
+    """Validate Task 4.9: Streamlit demotion to developer tool & process lifecycle (F07, F14).
+
+    Verifies:
+    1. Demotion of Streamlit from user-facing UI to internal dev tool:
+       - tools/dev_dashboard.py exists with prominent top warning banner.
+       - F07 remediation: host execution privileges clearly labeled.
+       - server/dashboard.py deprecation shim forwards to tools.dev_dashboard.
+       - tests/test_sandbox.py imports from tools.dev_dashboard.
+    2. Makefile integration:
+       - make dev-dashboard target runs streamlit on tools/dev_dashboard.py.
+    3. Master CLI integration:
+       - main.py exposes dev-dashboard subcommand and routes to tools/dev_dashboard.py.
+    4. Process lifecycle & signal trap verification (F14):
+       - start_studio.sh installs trap cleanup SIGINT SIGTERM EXIT before launching daemons.
+       - start_studio.sh eliminates foreground exec replacement so traps execute.
+       - cleanup() selectively terminates spawned children and leaves pre-existing services untouched.
+    5. Documentation alignment:
+       - README.md, docs/GUI.md, and operational guide promote Tauri Desktop as sole user UI.
+    """
+    repo_root = REPO_ROOT
+
+    # 1. Dev dashboard files and banners
+    dev_dash = repo_root / "tools" / "dev_dashboard.py"
+    assert dev_dash.exists(), "tools/dev_dashboard.py must exist"
+    dev_content = dev_dash.read_text()
+    assert (
+        "Developer tool — not for end users" in dev_content
+    ), "tools/dev_dashboard.py must contain prominent developer warning banner"
+    assert (
+        "Tauri Desktop application" in dev_content
+    ), "tools/dev_dashboard.py must reference Tauri Desktop application as official UI"
+    assert (
+        "Developer Notice (F07)" in dev_content
+    ), "tools/dev_dashboard.py must remediate F07 by noting host developer execution"
+
+    # server/dashboard.py deprecation shim
+    server_dash = repo_root / "server" / "dashboard.py"
+    assert server_dash.exists(), "server/dashboard.py shim must exist"
+    server_content = server_dash.read_text()
+    assert "deprecated" in server_content.lower()
+    assert "tools.dev_dashboard" in server_content
+    assert "extract_code_block" in server_content
+    assert "auto_repair_naked_return" in server_content
+
+    # test_sandbox.py updated import
+    sandbox_test_content = (repo_root / "tests" / "test_sandbox.py").read_text()
+    assert "from tools.dev_dashboard import" in sandbox_test_content
+
+    # 2. Makefile dev-dashboard target
+    makefile_content = (repo_root / "Makefile").read_text()
+    assert "dev-dashboard:" in makefile_content
+    assert "tools/dev_dashboard.py" in makefile_content
+    assert "dev-dashboard" in makefile_content.split(".PHONY:")[1].split("\n")[0]
+
+    # 3. Master CLI main.py
+    main_py_content = (repo_root / "main.py").read_text()
+    assert "dev-dashboard" in main_py_content
+    assert "tools/dev_dashboard.py" in main_py_content
+
+    # 4. start_studio.sh lifecycle and signal trapping (F14)
+    start_sh = repo_root / "start_studio.sh"
+    assert start_sh.exists()
+    sh_content = start_sh.read_text()
+
+    # Trap must be installed
+    assert "trap cleanup SIGINT SIGTERM EXIT" in sh_content
+    assert "cleanup()" in sh_content
+
+    # Cleanup must precede background daemon launches
+    trap_idx = sh_content.find("trap cleanup")
+    ollama_launch_idx = sh_content.find("start_ollama.sh")
+    watcher_launch_idx = sh_content.find("server.watcher")
+    sidecar_launch_idx = sh_content.find("services.python.server.api")
+
+    assert trap_idx < ollama_launch_idx, "Signal trap must be registered before Ollama launch"
+    assert trap_idx < watcher_launch_idx, "Signal trap must be registered before Watcher launch"
+    assert trap_idx < sidecar_launch_idx, "Signal trap must be registered before Sidecar launch"
+
+    # No foreground exec command replacing the shell
+    for line in sh_content.splitlines():
+        trimmed = line.strip()
+        if not trimmed.startswith("#"):
+            assert not trimmed.startswith("exec "), f"start_studio.sh must not execute exec: {line}"
+
+    # Cleanup selectively kills spawned PIDs
+    assert "PID_SIDECAR" in sh_content
+    assert "PID_WATCHER" in sh_content
+    assert "PID_LLAMA" in sh_content
+    assert "PID_OLLAMA" in sh_content
+
+    # 5. Documentation
+    gui_doc = (repo_root / "docs" / "GUI.md").read_text()
+    assert "Streamline to ONE" in gui_doc
+    assert "Tauri shell as the only user-facing dashboard" in gui_doc
+
+    readme = (repo_root / "README.md").read_text()
+    assert "make desktop-tauri-dev" in readme
+    assert "make dev-dashboard" in readme

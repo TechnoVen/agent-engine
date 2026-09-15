@@ -130,7 +130,7 @@ def cmd_rag_demo():
         "Agent Engine supports dynamic signature generation via DSPy.",
         "Local inference can run Gemma 4B models on AMD Ryzen CPUs using Ollama or llama.cpp.",
         "Model Context Protocol (MCP) connects local AI agents to VS Code, Cursor, and Goose AI.",
-        "Streamlit dashboard runs on port 8501 for real-time telemetry and file watcher control.",
+        "Streamlit dashboard is an internal developer tool; the sole official user UI is Tauri Desktop.",
     ]
 
     console.print(f"Ingesting {len(sample_docs)} sample system knowledge items...")
@@ -153,7 +153,14 @@ def main():
     subparsers.add_parser("rag-demo", help="Test ChromaDB RAG memory ingestion and retrieval")
 
     subparsers.add_parser("mcp", help="Start the FastMCP stdio server for VS Code / Goose / Cursor")
-    subparsers.add_parser("dashboard", help="Start the Streamlit Control Center on port 8501")
+    subparsers.add_parser(
+        "dev-dashboard",
+        help="Start the internal developer diagnostic dashboard (tools/dev_dashboard.py)",
+    )
+    subparsers.add_parser(
+        "dashboard",
+        help="Start the internal developer dashboard (deprecated alias for dev-dashboard)",
+    )
 
     # Watcher commands
     watch_p = subparsers.add_parser("watch", help="Start the Code Sentry / File-Watcher daemon")
@@ -178,11 +185,12 @@ def main():
         router = ModelRouter()
         router.initialize_and_configure()
         mcp_instance.run()
-    elif args.command == "dashboard":
+    elif args.command in ("dashboard", "dev-dashboard"):
         import subprocess
 
         console.print(
-            "[bold cyan]🚀 Launching Streamlit Control Center on http://localhost:8501...[/bold cyan]"
+            "[bold yellow]⚠️ Launching internal developer diagnostic dashboard (tools/dev_dashboard.py)...[/bold yellow]\n"
+            "[dim]Note: The sole official user-facing UI is the Tauri Desktop application (`apps/desktop`).[/dim]"
         )
         subprocess.run(
             [
@@ -190,7 +198,7 @@ def main():
                 "-m",
                 "streamlit",
                 "run",
-                str(PROJECT_ROOT / "server" / "dashboard.py"),
+                str(PROJECT_ROOT / "tools" / "dev_dashboard.py"),
                 "--server.port",
                 "8501",
                 "--server.headless",

@@ -25,13 +25,13 @@
   - **Task 3.11:** Featured Cases Content Curation (32 curated templates in `configs/cases/`, dedicated mode screens in `apps/desktop/src/renderer/screens/Modes/`, one-click prompt injection, `core/cases.py` loader & search, FastAPI `/v1/cases` endpoints)
 
 ### Current Test Count
-- **Monorepo Tests:** `255 passed` (strictly increasing with every completed task).
+- **Monorepo Tests:** `256 passed` (strictly increasing with every completed task).
 - **Desktop Build:** `pnpm --filter @agent-engine/desktop build` passes with 0 TypeScript errors.
 - **Cargo Check:** `cargo check` in `apps/desktop/src-tauri` passes cleanly.
 
 ---
 
-## 2. Active Scope: Phase 4 — Control Dashboard (Milestone M3)
+## 2. Active Scope: Phase 4 — Control Dashboard (Milestone M3) — 100% COMPLETED!
 
 Aligned with `docs/PROJECT_REVIEW_2026-09-14.md` to remediate findings F01–F14:
 1. **Task 4.0 — Foundation Hardening & Contract Alignment:** ✅ Complete (Remediated F01, F02, F04, F05, F09, F12; 247/247 tests green)
@@ -43,8 +43,7 @@ Aligned with `docs/PROJECT_REVIEW_2026-09-14.md` to remediate findings F01–F14
 7. **Task 4.6 — Policy Editor & Immutable Audit Log:** ✅ Complete (`screens/Policies.tsx`, YAML editor with validation & hot-reload, zero-footprint dry-run playground, paginated immutable audit log with filters & CSV/JSON export; 253/253 tests green)
 8. **Task 4.7 — Hardware Telemetry Panel:** ✅ Complete (`core/telemetry/hardware.py`, `TopBar.tsx` status bar with 2s polling, `Settings.tsx` Hardware & Compute panel, GPU model detection, VRAM 95% warning threshold, tokens/sec throughput gauge; 254/254 tests green)
 9. **Task 4.8 — Settings Screen & Diagnostics Export:** ✅ Complete (`core/config/settings.py`, `core/diagnostics.py`, 9 tabs in `screens/Settings.tsx`, encrypted AES-256-GCM config at rest, 1-click diagnostics bundle export `.zip` & `.json` with credential redaction guarantee; 255/255 tests green)
-10. **Task 4.9 — Streamlit Demotion to Developer Tool & Process Lifecycle (⏳ NEXT)**
-    - Demote Streamlit to `tools/dev_dashboard.py`, fix `start_studio.sh` traps.
+10. **Task 4.9 — Streamlit Demotion to Developer Tool & Process Lifecycle (F07, F14):** ✅ Complete (Moved `server/dashboard.py` to `tools/dev_dashboard.py` with prominent developer warning banner and F07 host privileges notice; `server/dashboard.py` deprecation shim; added `make dev-dashboard` target to `Makefile`; added `dev-dashboard` CLI in `main.py`; remediated F14 in `start_studio.sh` with pre-daemon `trap cleanup SIGINT SIGTERM EXIT` and removal of foreground `exec` replacement; 256/256 tests green)
 
 ---
 

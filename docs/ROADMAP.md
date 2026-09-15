@@ -11,9 +11,8 @@
 |---|---|---|---|
 | **M0 — Foundations** | Phase 0 | Monorepo layout, API contract, storage repo, feature flags, CI/CD | 🟢 COMPLETED |
 | **M1 — Hardened Core** | Phase 1 | Router, pipelines, memory, policy, cost tracker, session store | 🟢 COMPLETED |
-| **M2 — Desktop Alpha** | Phases 2–3 | Tauri shell + Kimi-style conversational interface (universal ChatInput, mode pages, empty states) | ⚪ PENDING |
-
-| **M3 — Dashboard Beta** | Phase 4 | Unified Tauri dashboard, projects, approval queue, telemetry, settings (Streamlit demoted to dev tool) | ⚪ PENDING |
+| **M2 — Desktop Alpha** | Phases 2–3 | Tauri shell + Kimi-style conversational interface (universal ChatInput, mode pages, empty states) | 🟢 COMPLETED |
+| **M3 — Dashboard Beta** | Phase 4 | Unified Tauri dashboard, projects, approval queue, telemetry, settings (Streamlit demoted to dev tool) | 🟢 COMPLETED |
 | **M4 — Agent Hub** | Phases 5–6 | Agent adapters + multi-tool skill management | ⚪ PENDING |
 | **M5 — Orchestration** | Phases 7–8 | Mastra-style workflows + Swarm + advanced RAG & memory scoring | ⚪ PENDING |
 | **M6 — Observability** | Phases 9–10 | Audit event telemetry + architecture diagram generator | ⚪ PENDING |
@@ -266,10 +265,11 @@
   - **Deliverables:** `apps/desktop/src/renderer/screens/Settings.tsx` (Route `/settings`), tabbed configuration layout, diagnostics bundle export (`.zip`).
   - **Acceptance Criteria:** Settings persist to local encrypted config; diagnostics export includes redacted logs, schema versions, and system info.
   - **Status:** ✅ DONE
-- [ ] **Task 4.9 — Streamlit Demotion to Developer Tool & Process Lifecycle (P1/P2 Remediation: F07, F14)**
+- [x] **Task 4.9 — Streamlit Demotion to Developer Tool & Process Lifecycle (P1/P2 Remediation: F07, F14)**
   - **User Story:** As a maintainer, I want Streamlit reserved purely for internal development and CI benchmarks, cleanly removed from user packaging, with reliable launcher process lifecycle cleanup.
   - **Deliverables:** Move `server/dashboard.py` to `tools/dev_dashboard.py`, add developer warning banner ("Developer tool — not for end users"), update `Makefile` target `make dev-dashboard`, remove port 8501 references from user-facing docs; fix `start_studio.sh` signal trap installation and eliminate foreground `exec` replacement.
   - **Acceptance Criteria:** Production builds contain zero Streamlit code; `make dev-dashboard` launches internal tool for debugging; closing `start_studio.sh` cleans up child processes cleanly.
+  - **Status:** ✅ DONE
 
 ---
 

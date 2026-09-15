@@ -2,9 +2,9 @@
 
 > [!NOTE]
 > **Project Location:** [repository root](../)  
-> **Interactive Tutorial Guide:** [`agent_engine_guide.html`](agent_engine_guide.html)  
-> **Streamlit Operations Center:** `http://localhost:8501`
-
+> **Official UI:** Tauri Native Desktop Shell (`apps/desktop`)  
+> **Sidecar API:** `http://127.0.0.1:8000`  
+> **Developer Dashboard:** `make dev-dashboard`  
 ---
 
 ## 1. System Architecture
@@ -13,8 +13,8 @@
 flowchart TD
     subgraph Clients ["Interfaces & IDEs"]
         VSCode["VS Code / Cursor / Claude Desktop"]
-        Goose["Goose AI Developer Assistant"]
-        StreamlitUI["Streamlit Control Center (:8501)"]
+        TauriDesktop["Tauri Native Desktop Shell"]
+        DevDashboard["Developer Dashboard (:tools/dev_dashboard.py)"]
         CLI["Rich Terminal CLI (main.py)"]
     end
 
@@ -78,7 +78,7 @@ flowchart TD
 | **Optimizer Harness** | [`core/harness.py`](../core/harness.py) | Automated prompt evaluation and self-improvement compilation via `BootstrapFewShot`. |
 | **Hardened Code Sentry**| [`server/watcher.py`](../server/watcher.py) | Filesystem watcher with 3-tier audit chain, loop breaker, and SQLite patch staging database. |
 | **FastMCP Server** | [`server/mcp_server.py`](../server/mcp_server.py) | Exposes 7 native IDE tools over stdio for VS Code, Claude Desktop, Cursor, and Goose AI. |
-| **Streamlit Studio** | [`server/dashboard.py`](../server/dashboard.py) | Web control center on port 8501 for live telemetry, patch approvals, and speedometers. |
+| **Dev Dashboard** | [`tools/dev_dashboard.py`](../tools/dev_dashboard.py) | Internal developer diagnostic dashboard (`make dev-dashboard`). |
 | **Master CLI** | [`main.py`](../main.py) | Unified CLI with `status`, `watch`, `staged`, `apply`, `mcp`, `dashboard`, and `rag-demo`. |
 | **Exclusions Filter** | [`.agentignore`](../.agentignore) | Pattern matcher ignoring `.venv/`, `__pycache__/`, database files, and watcher daemons. |
 
@@ -122,7 +122,8 @@ tests/test_watcher.py::test_infinite_loop_breaker PASSED                 [100%]
 
 | Command | Purpose |
 | :--- | :--- |
-| `.venv/bin/python main.py dashboard` | **Launch Web Dashboard (`http://localhost:8501`)** |
+| `make desktop-tauri-dev` | **Launch Official Tauri Native Desktop App** |
+| `.venv/bin/python main.py dev-dashboard` | **Launch Internal Dev Dashboard (`make dev-dashboard`)** |
 | `.venv/bin/python main.py watch` | **Start Code Sentry (Safe Staging Mode)** |
 | `.venv/bin/python main.py watch --auto-apply` | **Start Code Sentry (Auto-Apply Mode)** |
 | `.venv/bin/python main.py status` | **Check Health & Provider Status** |
