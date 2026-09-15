@@ -1677,3 +1677,119 @@ rules:
     assert "DryRunRequest" in types_content
     assert "DryRunResult" in types_content
     assert "PaginatedAuditLogsResponse" in types_content
+
+
+def test_task_4_7_hardware_telemetry_panel():
+    """
+    Verify Task 4.7 Hardware Telemetry Panel:
+    - Real-time hardware telemetry (CPU, RAM, VRAM, GPU detection).
+    - Local LLM inference speed throughput tracking (tokens/sec).
+    - 95% VRAM saturation warning threshold.
+    - TopBar compact telemetry status bar with 2s polling.
+    - Settings.tsx Hardware & Compute panel with gauges and local runtime status.
+    """
+    from fastapi.testclient import TestClient
+    from services.python.server.api import app
+    from core.telemetry.hardware import get_hardware_telemetry_tracker, HardwareTelemetry
+
+    tracker = get_hardware_telemetry_tracker()
+
+    # 1. Core Hardware Telemetry & Threshold Verification
+    telem = tracker.get_telemetry()
+    assert isinstance(telem, HardwareTelemetry)
+    assert telem.cpu_usage_percent >= 0.0
+    assert telem.cpu_cores_logical >= 1
+    assert telem.cpu_cores_physical >= 1
+    assert telem.ram_used_percent >= 0.0
+    assert telem.ram_total_gb > 0.0
+    assert isinstance(telem.gpu_detected, bool)
+    assert len(telem.gpu_model) > 0
+    assert telem.gpu_vendor in ["nvidia", "amd", "apple", "intel", "generic"]
+
+    # Test 95% VRAM Warning Threshold Trigger
+    try:
+        tracker.set_vram_override(total_gb=10.0, used_gb=9.6)
+        telem_warn = tracker.get_telemetry()
+        assert telem_warn.vram_used_percent == 96.0
+        assert telem_warn.vram_warning is True, "VRAM >= 95% must trigger vram_warning flag"
+
+        # Below threshold test
+        tracker.set_vram_override(total_gb=10.0, used_gb=8.5)
+        telem_ok = tracker.get_telemetry()
+        assert telem_ok.vram_used_percent == 85.0
+        assert telem_ok.vram_warning is False, "VRAM < 95% must not trigger vram_warning flag"
+    finally:
+        tracker.reset_override()
+
+    # Test Local Model Throughput Recording (tokens/sec)
+    speed = tracker.record_inference_speed(
+        tokens=150,
+        elapsed_seconds=2.5,
+        model="qwen2.5-coder:7b",
+        runtime="ollama",
+    )
+    assert speed == 60.0
+    assert tracker.get_telemetry().tokens_per_second == 60.0
+    assert tracker.get_telemetry().recent_inference_model == "qwen2.5-coder:7b"
+    assert tracker.get_telemetry().recent_inference_runtime == "ollama"
+
+    # 2. FastAPI Endpoints Verification
+    client = TestClient(app)
+
+    resp_hw = client.get("/v1/telemetry/hardware")
+    assert resp_hw.status_code == 200
+    hw_data = resp_hw.json()
+    assert "cpu_usage_percent" in hw_data
+    assert "ram_used_percent" in hw_data
+    assert "gpu_detected" in hw_data
+    assert "gpu_model" in hw_data
+    assert "vram_used_percent" in hw_data
+    assert "vram_warning" in hw_data
+    assert "tokens_per_second" in hw_data
+    assert hw_data["tokens_per_second"] == 60.0
+
+    resp_spd = client.post(
+        "/v1/telemetry/record-speed",
+        json={"tokens": 240, "elapsed_seconds": 3.0, "model": "llama3.2:3b", "runtime": "ollama"},
+    )
+    assert resp_spd.status_code == 200
+    spd_data = resp_spd.json()
+    assert spd_data["status"] == "success"
+    assert spd_data["tokens_per_second"] == 80.0
+
+    # Verify standard telemetry endpoint is also enriched
+    resp_telem = client.get("/v1/telemetry")
+    assert resp_telem.status_code == 200
+    telem_data = resp_telem.json()
+    assert "gpu_detected" in telem_data
+    assert "tokens_per_second" in telem_data
+    assert telem_data["tokens_per_second"] == 80.0
+
+    # 3. Client & Types Integration
+    client_ts = (RENDERER_ROOT / "api" / "client.ts").read_text()
+    assert "getHardwareTelemetry" in client_ts
+    assert "recordInferenceSpeed" in client_ts
+
+    types_ts = (RENDERER_ROOT / "types" / "index.ts").read_text()
+    assert "interface HardwareTelemetry" in types_ts
+    assert "vram_warning" in types_ts
+    assert "tokens_per_second" in types_ts
+
+    # 4. Desktop UI & Shell Integration
+    topbar_ts = (RENDERER_ROOT / "shell" / "TopBar.tsx").read_text()
+    assert "getHardwareTelemetry" in topbar_ts
+    assert "vram_warning" in topbar_ts
+    assert "CRITICAL" in topbar_ts
+    assert "tok/s" in topbar_ts
+    assert "2000" in topbar_ts  # 2s polling interval
+
+    settings_ts = (RENDERER_ROOT / "screens" / "Settings.tsx").read_text()
+    assert "Hardware & Compute" in settings_ts
+    assert "GPU Model Detection" in settings_ts
+    assert "Generation Speed Gauge" in settings_ts
+    assert "VRAM Utilization Gauge" in settings_ts
+    assert "95%" in settings_ts
+    assert "Run Speed Benchmark" in settings_ts
+    assert "Ollama Daemon" in settings_ts
+    assert "llama.cpp Server" in settings_ts
+    assert "2000" in settings_ts  # 2s polling interval

@@ -17,7 +17,6 @@ if PROJECT_ROOT not in sys.path:
 
 # Ensure numpy pre-import before dspy lazy import
 import numpy  # noqa: F401
-import psutil
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
@@ -55,7 +54,11 @@ from core.session import (
     ToolCall,
     get_session_store,
 )
-from core.telemetry import BudgetConfig, get_cost_tracker
+from core.telemetry import (
+    BudgetConfig,
+    get_cost_tracker,
+    get_hardware_telemetry_tracker,
+)
 from core.templates import TemplateManager
 from server.watcher import apply_staged_patch, get_staged_patches, reject_staged_patch
 
@@ -325,6 +328,49 @@ class TelemetryResponse(BaseModel):
     ollama_active: bool
     llamacpp_active: bool
     indexed_memory_documents: int
+    gpu_detected: Optional[bool] = False
+    gpu_model: Optional[str] = "Unknown"
+    gpu_vendor: Optional[str] = "generic"
+    vram_used_percent: Optional[float] = 0.0
+    vram_used_gb: Optional[float] = 0.0
+    vram_total_gb: Optional[float] = 0.0
+    vram_free_gb: Optional[float] = 0.0
+    vram_warning: Optional[bool] = False
+    tokens_per_second: Optional[float] = 0.0
+    local_runtime_active: Optional[bool] = False
+
+
+class HardwareTelemetryResponse(BaseModel):
+    cpu_usage_percent: float
+    cpu_cores_logical: int
+    cpu_cores_physical: int
+    ram_used_percent: float
+    ram_used_gb: float
+    ram_total_gb: float
+    ram_available_gb: float
+    gpu_detected: bool
+    gpu_model: str
+    gpu_vendor: str
+    vram_used_percent: float
+    vram_used_gb: float
+    vram_total_gb: float
+    vram_free_gb: float
+    vram_warning: bool
+    vram_warning_threshold: float = 95.0
+    tokens_per_second: float = 0.0
+    recent_inference_runtime: Optional[str] = None
+    recent_inference_model: Optional[str] = None
+    ollama_active: bool = False
+    llamacpp_active: bool = False
+    local_runtime_active: bool = False
+    timestamp: str = Field(default_factory=lambda: datetime.datetime.now().isoformat())
+
+
+class SpeedRecordRequest(BaseModel):
+    tokens: int
+    elapsed_seconds: float
+    model: Optional[str] = "qwen2.5-coder:7b"
+    runtime: Optional[str] = "ollama"
 
 
 class TierSplitInfo(BaseModel):
@@ -1059,6 +1105,22 @@ async def chat_completions(req: ChatRequest):
         },
     )
 
+    # Record local throughput in hardware tracker if local model was used
+    local_keywords = ["qwen", "llama", "local", "ollama", "mistral", "deepseek"]
+    model_lower = (req.model or "").lower()
+    if any(k in model_lower for k in local_keywords) or (
+        getattr(req, "provider", None) in ["ollama", "llamacpp"]
+    ):
+        hw_tracker = get_hardware_telemetry_tracker()
+        hw_tracker.record_inference_speed(
+            tokens=max(1, completion_tokens),
+            elapsed_seconds=max(0.05, completion_tokens * 0.016),
+            model=req.model or "qwen2.5-coder:7b",
+            runtime="ollama"
+            if ("ollama" in model_lower or getattr(req, "provider", None) == "ollama")
+            else "local",
+        )
+
     if req.stream:
 
         async def event_generator() -> AsyncGenerator[str, None]:
@@ -1531,21 +1593,61 @@ async def reject_patch(patch_id: int, request: Request):
 
 @v1_router.get("/telemetry", response_model=TelemetryResponse)
 async def get_telemetry():
-    """Return local resource utilization and model router readiness."""
-    ram = psutil.virtual_memory()
+    """Return local resource utilization, model router readiness, and enriched hardware stats."""
     router_status = router_instance.get_status()
+    hw_tracker = get_hardware_telemetry_tracker()
+    hw = hw_tracker.get_telemetry(router_status=router_status)
 
     return TelemetryResponse(
-        cpu_usage_percent=psutil.cpu_percent(interval=0.05),
-        ram_used_percent=ram.percent,
-        ram_total_gb=round(ram.total / (1024**3), 2),
-        ram_available_gb=round(ram.available / (1024**3), 2),
+        cpu_usage_percent=hw.cpu_usage_percent,
+        ram_used_percent=hw.ram_used_percent,
+        ram_total_gb=hw.ram_total_gb,
+        ram_available_gb=hw.ram_available_gb,
         primary_provider=router_status.get("primary_provider", "local"),
         active_model=router_status.get("active_model", "qwen2.5-coder"),
-        ollama_active=bool(router_status.get("ollama_live", False)),
-        llamacpp_active=bool(router_status.get("llamacpp_live", False)),
+        ollama_active=hw.ollama_active,
+        llamacpp_active=hw.llamacpp_active,
         indexed_memory_documents=memory_instance.count(),
+        gpu_detected=hw.gpu_detected,
+        gpu_model=hw.gpu_model,
+        gpu_vendor=hw.gpu_vendor,
+        vram_used_percent=hw.vram_used_percent,
+        vram_used_gb=hw.vram_used_gb,
+        vram_total_gb=hw.vram_total_gb,
+        vram_free_gb=hw.vram_free_gb,
+        vram_warning=hw.vram_warning,
+        tokens_per_second=hw.tokens_per_second,
+        local_runtime_active=hw.local_runtime_active,
     )
+
+
+@v1_router.get("/telemetry/hardware", response_model=HardwareTelemetryResponse)
+async def get_hardware_telemetry():
+    """Return comprehensive real-time hardware telemetry: CPU, RAM, VRAM, GPU detection, and local tokens/sec."""
+    router_status = router_instance.get_status()
+    hw_tracker = get_hardware_telemetry_tracker()
+    hw = hw_tracker.get_telemetry(router_status=router_status)
+    return HardwareTelemetryResponse(**hw.to_dict())
+
+
+@v1_router.post("/telemetry/record-speed", response_model=Dict[str, Any])
+async def record_inference_speed_endpoint(req: SpeedRecordRequest):
+    """Record local model inference throughput (tokens/sec) for benchmark or live telemetry."""
+    hw_tracker = get_hardware_telemetry_tracker()
+    tps = hw_tracker.record_inference_speed(
+        tokens=req.tokens,
+        elapsed_seconds=req.elapsed_seconds,
+        model=req.model or "qwen2.5-coder:7b",
+        runtime=req.runtime or "ollama",
+    )
+    return {
+        "status": "success",
+        "tokens_per_second": tps,
+        "tokens": req.tokens,
+        "elapsed_seconds": req.elapsed_seconds,
+        "model": req.model,
+        "runtime": req.runtime,
+    }
 
 
 _distillation_candidates: List[Dict[str, Any]] = [

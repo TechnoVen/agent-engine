@@ -335,6 +335,49 @@ paths:
               schema:
                 $ref: '#/components/schemas/TelemetryResponse'
 
+  /telemetry/hardware:
+    get:
+      summary: Get detailed real-time hardware telemetry and local model tokens/sec
+      operationId: getHardwareTelemetry
+      responses:
+        '200':
+          description: Hardware telemetry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HardwareTelemetryResponse'
+
+  /telemetry/record-speed:
+    post:
+      summary: Record local model inference throughput (tokens/sec)
+      operationId: recordInferenceSpeed
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SpeedRecordRequest'
+      responses:
+        '200':
+          description: Speed recording result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  tokens_per_second:
+                    type: number
+                  tokens:
+                    type: integer
+                  elapsed_seconds:
+                    type: number
+                  model:
+                    type: string
+                  runtime:
+                    type: string
+
   /telemetry/cost:
     get:
       summary: Get token usage and cost metrics
@@ -1738,6 +1781,93 @@ components:
           type: boolean
         indexed_memory_documents:
           type: integer
+        gpu_detected:
+          type: boolean
+        gpu_model:
+          type: string
+        gpu_vendor:
+          type: string
+        vram_used_percent:
+          type: number
+        vram_used_gb:
+          type: number
+        vram_total_gb:
+          type: number
+        vram_free_gb:
+          type: number
+        vram_warning:
+          type: boolean
+        tokens_per_second:
+          type: number
+        local_runtime_active:
+          type: boolean
+
+    HardwareTelemetryResponse:
+      type: object
+      required: [cpu_usage_percent, cpu_cores_logical, cpu_cores_physical, ram_used_percent, ram_used_gb, ram_total_gb, ram_available_gb, gpu_detected, gpu_model, gpu_vendor, vram_used_percent, vram_used_gb, vram_total_gb, vram_free_gb, vram_warning, tokens_per_second]
+      properties:
+        cpu_usage_percent:
+          type: number
+        cpu_cores_logical:
+          type: integer
+        cpu_cores_physical:
+          type: integer
+        ram_used_percent:
+          type: number
+        ram_used_gb:
+          type: number
+        ram_total_gb:
+          type: number
+        ram_available_gb:
+          type: number
+        gpu_detected:
+          type: boolean
+        gpu_model:
+          type: string
+        gpu_vendor:
+          type: string
+        vram_used_percent:
+          type: number
+        vram_used_gb:
+          type: number
+        vram_total_gb:
+          type: number
+        vram_free_gb:
+          type: number
+        vram_warning:
+          type: boolean
+        vram_warning_threshold:
+          type: number
+          default: 95.0
+        tokens_per_second:
+          type: number
+        recent_inference_runtime:
+          type: string
+          nullable: true
+        recent_inference_model:
+          type: string
+          nullable: true
+        ollama_active:
+          type: boolean
+        llamacpp_active:
+          type: boolean
+        local_runtime_active:
+          type: boolean
+        timestamp:
+          type: string
+
+    SpeedRecordRequest:
+      type: object
+      required: [tokens, elapsed_seconds]
+      properties:
+        tokens:
+          type: integer
+        elapsed_seconds:
+          type: number
+        model:
+          type: string
+        runtime:
+          type: string
 
     TierSplitInfo:
       type: object

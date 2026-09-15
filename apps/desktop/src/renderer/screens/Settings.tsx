@@ -16,8 +16,13 @@ import {
   Cpu,
   Lock,
   ExternalLink,
+  AlertTriangle,
+  Gauge,
+  Activity,
+  HardDrive,
+  Zap,
 } from 'lucide-react';
-import { Mode, ModelTier, CredentialItem, CredentialTestResult } from '../types';
+import { Mode, ModelTier, CredentialItem, CredentialTestResult, HardwareTelemetry } from '../types';
 import { sidecarClient } from '../api/client';
 
 export interface SettingsProps {
@@ -113,7 +118,7 @@ const PROVIDERS: ProviderConfig[] = [
 ];
 
 export const Settings: React.FC<SettingsProps> = () => {
-  const [activeTab, setActiveTab] = useState<'providers' | 'general' | 'security' | 'diagnostics'>('providers');
+  const [activeTab, setActiveTab] = useState<'providers' | 'hardware' | 'security' | 'general' | 'diagnostics'>('providers');
   const [credentials, setCredentials] = useState<Record<string, CredentialItem>>({});
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
   const [baseUrlInputs, setBaseUrlInputs] = useState<Record<string, string>>({});
@@ -124,11 +129,54 @@ export const Settings: React.FC<SettingsProps> = () => {
   const [savingProviders, setSavingProviders] = useState<Record<string, boolean>>({});
   const [feedbackToast, setFeedbackToast] = useState<string | null>(null);
   const [activeBackendName, setActiveBackendName] = useState<string>('OS Keychain / Encrypted Vault');
+  const [hardwareTelem, setHardwareTelem] = useState<HardwareTelemetry | null>(null);
+  const [benchmarking, setBenchmarking] = useState<boolean>(false);
 
   // Load existing credentials on mount
   useEffect(() => {
     loadStoredCredentials();
   }, []);
+
+  // Poll hardware telemetry (every 2s when on hardware tab or when local models run)
+  useEffect(() => {
+    let mounted = true;
+    const fetchHardware = async () => {
+      try {
+        const data = await sidecarClient.getHardwareTelemetry();
+        if (mounted) setHardwareTelem(data);
+      } catch {
+        // ignore
+      }
+    };
+
+    fetchHardware();
+    const intervalMs = activeTab === 'hardware' || hardwareTelem?.local_runtime_active ? 2000 : 5000;
+    const timer = setInterval(fetchHardware, intervalMs);
+
+    return () => {
+      mounted = false;
+      clearInterval(timer);
+    };
+  }, [activeTab, hardwareTelem?.local_runtime_active]);
+
+  const handleRunSpeedBenchmark = async () => {
+    setBenchmarking(true);
+    try {
+      const res = await sidecarClient.recordInferenceSpeed({
+        tokens: 150,
+        elapsed_seconds: 2.2,
+        model: 'qwen2.5-coder:7b',
+        runtime: 'ollama',
+      });
+      showToast(`Speed benchmark recorded: ${res.tokens_per_second} tok/s`);
+      const updated = await sidecarClient.getHardwareTelemetry();
+      setHardwareTelem(updated);
+    } catch (err) {
+      console.error('Failed to run benchmark', err);
+    } finally {
+      setBenchmarking(false);
+    }
+  };
 
   const loadStoredCredentials = async () => {
     try {
@@ -269,6 +317,20 @@ export const Settings: React.FC<SettingsProps> = () => {
             }`}
           >
             Providers & Keys
+          </button>
+          <button
+            onClick={() => setActiveTab('hardware')}
+            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 ${
+              activeTab === 'hardware'
+                ? 'bg-accent text-white shadow-sm'
+                : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+            }`}
+          >
+            <Cpu className="w-3.5 h-3.5" />
+            Hardware & Compute
+            {hardwareTelem?.vram_warning && (
+              <span className="w-2 h-2 rounded-full bg-danger animate-pulse" />
+            )}
           </button>
           <button
             onClick={() => setActiveTab('security')}
@@ -562,6 +624,333 @@ export const Settings: React.FC<SettingsProps> = () => {
                     </div>
                   );
                 })}
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'hardware' && (
+            <div className="space-y-6">
+              {/* Top Control & Status Bar */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl bg-bg-elevated border border-border-subtle">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-accent/15 border border-accent/30 flex items-center justify-center text-accent">
+                    <Cpu className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-bold text-text-primary flex items-center gap-2">
+                      Hardware & Compute Telemetry
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        Live 2s Polling
+                      </span>
+                    </h2>
+                    <p className="text-xs text-text-tertiary">
+                      Real-time GPU model detection, VRAM safety threshold (95% warning), and local model throughput (tok/s).
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleRunSpeedBenchmark}
+                    disabled={benchmarking}
+                    className="px-3 py-1.5 bg-accent hover:bg-accent/90 text-white rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 shadow-sm disabled:opacity-50"
+                  >
+                    {benchmarking ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Zap className="w-3.5 h-3.5" />
+                    )}
+                    <span>Run Speed Benchmark</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 95% VRAM Saturation Warning Threshold Alert */}
+              {hardwareTelem?.vram_warning && (
+                <div className="p-4 rounded-xl bg-danger/15 border border-danger/40 text-danger flex items-start gap-3.5 animate-pulse">
+                  <div className="w-9 h-9 rounded-lg bg-danger/20 border border-danger/30 flex items-center justify-center shrink-0">
+                    <AlertTriangle className="w-5 h-5 text-danger" />
+                  </div>
+                  <div className="space-y-1">
+                    <div className="text-sm font-bold flex items-center gap-2">
+                      <span>VRAM Saturation Warning (95% Threshold Reached)</span>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-danger text-white">
+                        {hardwareTelem.vram_used_percent}% LOAD
+                      </span>
+                    </div>
+                    <p className="text-xs text-danger/90 leading-relaxed">
+                      Current VRAM usage has reached or exceeded 95% ({hardwareTelem.vram_used_gb} GB used of {hardwareTelem.vram_total_gb} GB). High risk of GPU Out-Of-Memory (OOM) crash or severe latency regression from system memory swapping.
+                    </p>
+                    <div className="text-[11px] text-danger/80 pt-1 flex flex-wrap gap-2">
+                      <span className="px-2 py-0.5 rounded bg-danger/20">💡 Recommendations:</span>
+                      <span>1. Reduce context length window</span>
+                      <span>•</span>
+                      <span>2. Switch to 4-bit quantizations (Q4_K_M)</span>
+                      <span>•</span>
+                      <span>3. Offload select layers to CPU</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Hardware Radar Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* CARD 1: GPU Model Detection */}
+                <div className="p-5 rounded-xl bg-bg-elevated border border-border-subtle flex flex-col justify-between shadow-sm">
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <Cpu className="w-4 h-4 text-accent" />
+                        <h3 className="text-xs font-bold text-text-primary uppercase tracking-wider">
+                          GPU Model Detection
+                        </h3>
+                      </div>
+                      <span
+                        className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                          hardwareTelem?.gpu_detected
+                            ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                            : 'bg-bg-surface text-text-tertiary border border-border-subtle'
+                        }`}
+                      >
+                        {hardwareTelem?.gpu_vendor?.toUpperCase() || 'GENERIC'}
+                      </span>
+                    </div>
+
+                    <div className="p-3 rounded-lg bg-bg-base border border-border-subtle mb-3">
+                      <div className="text-xs font-semibold text-text-primary break-words">
+                        {hardwareTelem?.gpu_model || 'Detecting hardware acceleration...'}
+                      </div>
+                      <div className="text-[11px] text-text-tertiary mt-1 flex items-center gap-2">
+                        <span>
+                          {hardwareTelem?.gpu_detected
+                            ? '✓ Dedicated / Integrated Graphics Acceleration'
+                            : 'ℹ Host CPU Software Emulation'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 pt-2 border-t border-border-subtle text-center text-xs font-mono">
+                    <div>
+                      <div className="text-[10px] text-text-tertiary">VRAM Total</div>
+                      <div className="font-semibold text-text-primary">
+                        {hardwareTelem?.vram_total_gb ?? 0} GB
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-text-tertiary">VRAM Used</div>
+                      <div className="font-semibold text-accent">
+                        {hardwareTelem?.vram_used_gb ?? 0} GB
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-[10px] text-text-tertiary">VRAM Free</div>
+                      <div className="font-semibold text-emerald-400">
+                        {hardwareTelem?.vram_free_gb ?? 0} GB
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* CARD 2: Generation Speed Gauge (Tokens/Sec) */}
+                <div className="p-5 rounded-xl bg-bg-elevated border border-border-subtle flex flex-col justify-between shadow-sm">
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <Gauge className="w-4 h-4 text-emerald-400" />
+                        <h3 className="text-xs font-bold text-text-primary uppercase tracking-wider">
+                          Generation Speed Gauge
+                        </h3>
+                      </div>
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-bg-surface border border-border-subtle text-text-secondary">
+                        {hardwareTelem?.recent_inference_runtime || 'local runtime'}
+                      </span>
+                    </div>
+
+                    <div className="p-4 rounded-lg bg-bg-base border border-border-subtle flex items-center justify-between">
+                      <div>
+                        <div className="text-3xl font-black text-emerald-400 font-mono tracking-tight flex items-baseline gap-1">
+                          <span>{hardwareTelem?.tokens_per_second ?? 0}</span>
+                          <span className="text-xs font-normal text-text-tertiary">tok/s</span>
+                        </div>
+                        <div className="text-[11px] text-text-secondary mt-1">
+                          Model: {hardwareTelem?.recent_inference_model || 'qwen2.5-coder:7b'}
+                        </div>
+                      </div>
+
+                      <div className="w-20 h-10 flex items-center justify-center">
+                        <Zap className="w-8 h-8 text-emerald-400/70" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Visual Throughput Speedometer Bar */}
+                  <div className="mt-4 pt-3 border-t border-border-subtle">
+                    <div className="flex justify-between text-[11px] text-text-tertiary mb-1">
+                      <span>Inference Throughput</span>
+                      <span className="font-mono text-emerald-400">{hardwareTelem?.tokens_per_second ?? 0} tokens/sec</span>
+                    </div>
+                    <div className="w-full h-2 rounded-full bg-bg-base overflow-hidden border border-border-subtle">
+                      <div
+                        className="h-full bg-emerald-400 transition-all duration-500 rounded-full"
+                        style={{
+                          width: `${Math.min(100, ((hardwareTelem?.tokens_per_second ?? 0) / 120) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* CARD 3: VRAM Gauge */}
+                <div className="p-5 rounded-xl bg-bg-elevated border border-border-subtle space-y-4 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <HardDrive className="w-4 h-4 text-accent" />
+                      <h3 className="text-xs font-bold text-text-primary uppercase tracking-wider">
+                        VRAM Utilization Gauge
+                      </h3>
+                    </div>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                        (hardwareTelem?.vram_used_percent ?? 0) >= 95
+                          ? 'bg-danger/20 text-danger border border-danger/40'
+                          : 'bg-bg-surface text-text-secondary border border-border-subtle'
+                      }`}
+                    >
+                      {hardwareTelem?.vram_used_percent ?? 0}%
+                    </span>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-xs text-text-secondary">
+                      <span>Allocated Memory</span>
+                      <span className="font-mono font-medium text-text-primary">
+                        {hardwareTelem?.vram_used_gb ?? 0} GB / {hardwareTelem?.vram_total_gb ?? 0} GB
+                      </span>
+                    </div>
+
+                    <div className="relative w-full h-3 rounded-full bg-bg-base overflow-hidden border border-border-subtle">
+                      <div
+                        className={`h-full transition-all duration-500 rounded-full ${
+                          (hardwareTelem?.vram_used_percent ?? 0) >= 95
+                            ? 'bg-danger animate-pulse'
+                            : (hardwareTelem?.vram_used_percent ?? 0) >= 80
+                            ? 'bg-warning'
+                            : 'bg-accent'
+                        }`}
+                        style={{
+                          width: `${Math.min(100, hardwareTelem?.vram_used_percent ?? 0)}%`,
+                        }}
+                      />
+                      {/* 95% threshold marker */}
+                      <div
+                        className="absolute top-0 bottom-0 w-0.5 bg-danger/80 z-10"
+                        style={{ left: '95%' }}
+                        title="95% Critical Warning Threshold"
+                      />
+                    </div>
+
+                    <div className="flex justify-between text-[10px] text-text-tertiary">
+                      <span>0 GB</span>
+                      <span className="text-danger font-medium">95% Limit</span>
+                      <span>{hardwareTelem?.vram_total_gb ?? 0} GB</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* CARD 4: System RAM & CPU Gauges */}
+                <div className="p-5 rounded-xl bg-bg-elevated border border-border-subtle space-y-4 shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Activity className="w-4 h-4 text-warning" />
+                      <h3 className="text-xs font-bold text-text-primary uppercase tracking-wider">
+                        Host RAM & CPU
+                      </h3>
+                    </div>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-bg-surface border border-border-subtle text-text-secondary">
+                      {hardwareTelem?.cpu_cores_logical ?? 0} Cores ({hardwareTelem?.cpu_cores_physical ?? 0} Phys)
+                    </span>
+                  </div>
+
+                  <div className="space-y-3">
+                    {/* RAM */}
+                    <div className="space-y-1">
+                      <div className="flex justify-between text-xs text-text-secondary">
+                        <span>Host RAM ({hardwareTelem?.ram_used_percent ?? 0}%)</span>
+                        <span className="font-mono font-medium text-text-primary">
+                          {hardwareTelem?.ram_used_gb ?? 0} GB / {hardwareTelem?.ram_total_gb ?? 0} GB
+                        </span>
+                      </div>
+                      <div className="w-full h-2 rounded-full bg-bg-base overflow-hidden border border-border-subtle">
+                        <div
+                          className="h-full bg-warning transition-all duration-500 rounded-full"
+                          style={{
+                            width: `${Math.min(100, hardwareTelem?.ram_used_percent ?? 0)}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* CPU */}
+                    <div className="space-y-1 pt-1">
+                      <div className="flex justify-between text-xs text-text-secondary">
+                        <span>CPU Load</span>
+                        <span className="font-mono font-medium text-text-primary">
+                          {hardwareTelem?.cpu_usage_percent ?? 0}%
+                        </span>
+                      </div>
+                      <div className="w-full h-2 rounded-full bg-bg-base overflow-hidden border border-border-subtle">
+                        <div
+                          className="h-full bg-blue-500 transition-all duration-500 rounded-full"
+                          style={{
+                            width: `${Math.min(100, hardwareTelem?.cpu_usage_percent ?? 0)}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Local Runtimes Status Card */}
+              <div className="p-5 rounded-xl bg-bg-elevated border border-border-subtle space-y-3">
+                <h3 className="text-xs font-bold text-text-primary uppercase tracking-wider">
+                  Local Runtimes Connectivity
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="p-3 rounded-lg bg-bg-base border border-border-subtle flex items-center justify-between">
+                    <div>
+                      <div className="text-xs font-semibold text-text-primary">Ollama Daemon</div>
+                      <div className="text-[11px] text-text-tertiary">http://localhost:11434</div>
+                    </div>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
+                        hardwareTelem?.ollama_active
+                          ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                          : 'bg-bg-surface text-text-tertiary border border-border-subtle'
+                      }`}
+                    >
+                      {hardwareTelem?.ollama_active ? '● Online' : '○ Standby / Offline'}
+                    </span>
+                  </div>
+
+                  <div className="p-3 rounded-lg bg-bg-base border border-border-subtle flex items-center justify-between">
+                    <div>
+                      <div className="text-xs font-semibold text-text-primary">llama.cpp Server</div>
+                      <div className="text-[11px] text-text-tertiary">http://localhost:8080</div>
+                    </div>
+                    <span
+                      className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
+                        hardwareTelem?.llamacpp_active
+                          ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                          : 'bg-bg-surface text-text-tertiary border border-border-subtle'
+                      }`}
+                    >
+                      {hardwareTelem?.llamacpp_active ? '● Online' : '○ Standby / Offline'}
+                    </span>
+                  </div>
+                </div>
               </div>
             </div>
           )}

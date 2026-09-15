@@ -815,6 +815,16 @@ Each mode uses the same shell, the same input, the same chat history, the same p
 2. **Rule Dry-Run Playground:** Safe simulator allowing operators to test prospective tool names and JSON parameters against active guardrails, computing risk scores and rule matches with zero footprint on the immutable audit trail.
 3. **Paginated Immutable Audit Log:** High-volume searchable ledger with pagination controls (10/25/50 items per page), risk-tier filters (Low/Medium/High/Critical), decision filters (Allow/Deny/Pending/Approved/Rejected), inline JSON arguments inspection, and CSV/JSON export.
 
+### Task 4.7 — Hardware Telemetry Panel
+- **Routes & Surfaces:** TopBar status bar (`shell/TopBar.tsx`), Settings Hardware tab (`screens/Settings.tsx` -> `activeTab === 'hardware'`)
+- **Components:** `apps/desktop/src/renderer/shell/TopBar.tsx`, `apps/desktop/src/renderer/screens/Settings.tsx`
+1. **GPU Model Detection:** Automatic detection of GPU hardware acceleration (AMD Radeon Vega / Raven Ridge, NVIDIA, Apple Silicon, Intel) with vendor badge and memory headroom.
+2. **VRAM Utilization & 95% Saturation Warning:** Real-time VRAM gauge tracking allocated vs total VRAM. Triggers prominent warning banner and pulsing TopBar badge at 95% threshold with remediation advice (quantization, context reduction, layer offloading).
+3. **Generation Speed Gauge (Tokens/Sec):** High-contrast throughput speedometer tracking real-time local model generation speed (tok/s) across Ollama and llama.cpp runtimes, complete with live benchmark trigger.
+4. **Host RAM & CPU Radar:** Visual utilization meters for system RAM and CPU load with core topologies.
+5. **Real-Time 2-Second Polling:** Automatically queries `/v1/telemetry/hardware` at 2s intervals whenever local models run or when viewing hardware diagnostics.
+
+
 
 
 

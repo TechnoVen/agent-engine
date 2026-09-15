@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ChevronDown,
   Check,
@@ -6,8 +6,12 @@ import {
   Zap,
   Brain,
   WifiOff,
+  Cpu,
+  AlertTriangle,
+  Gauge,
 } from 'lucide-react';
-import { Mode, ModelTier, ModelTierOption, SidecarHealth } from '../types';
+import { Mode, ModelTier, ModelTierOption, SidecarHealth, HardwareTelemetry } from '../types';
+import { sidecarClient } from '../api/client';
 
 interface TopBarProps {
   activeMode: Mode;
@@ -44,6 +48,30 @@ export const TopBar: React.FC<TopBarProps> = ({
   health,
 }) => {
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
+  const [telemetry, setTelemetry] = useState<HardwareTelemetry | null>(null);
+
+  // Poll hardware telemetry (every 2s when local models run, 5s otherwise)
+  useEffect(() => {
+    let mounted = true;
+    const fetchTelem = async () => {
+      try {
+        const data = await sidecarClient.getHardwareTelemetry();
+        if (mounted) setTelemetry(data);
+      } catch {
+        // ignore
+      }
+    };
+
+    fetchTelem();
+    const intervalMs =
+      telemetry?.local_runtime_active || activeModel === 'instant' ? 2000 : 5000;
+    const timer = setInterval(fetchTelem, intervalMs);
+
+    return () => {
+      mounted = false;
+      clearInterval(timer);
+    };
+  }, [activeModel, telemetry?.local_runtime_active]);
 
   const currentModel = MODEL_OPTIONS.find((m) => m.id === activeModel) || MODEL_OPTIONS[0];
 
@@ -105,8 +133,44 @@ export const TopBar: React.FC<TopBarProps> = ({
         </h1>
       </div>
 
-      {/* Right: Model Tier Dropdown & Sidecar Status */}
+      {/* Right: Hardware Telemetry Widget, Model Tier Dropdown & Sidecar Status */}
       <div className="flex items-center gap-3">
+        {/* Hardware Telemetry Compact Status Bar */}
+        {telemetry && (
+          <div
+            className="hidden sm:flex items-center gap-2 px-2.5 py-1 bg-bg-base border border-border-subtle rounded-md text-xs font-mono"
+            title={`GPU: ${telemetry.gpu_model}\nVRAM: ${telemetry.vram_used_gb}G / ${telemetry.vram_total_gb}G (${telemetry.vram_used_percent}%)\nRAM: ${telemetry.ram_used_gb}G / ${telemetry.ram_total_gb}G (${telemetry.ram_used_percent}%)\nCPU: ${telemetry.cpu_usage_percent}%`}
+          >
+            {/* 95% VRAM Saturation Warning */}
+            {telemetry.vram_warning ? (
+              <div className="flex items-center gap-1 text-danger font-bold animate-pulse px-1.5 py-0.5 rounded bg-danger/15 border border-danger/30">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                <span>VRAM {telemetry.vram_used_percent}% CRITICAL</span>
+              </div>
+            ) : telemetry.gpu_detected ? (
+              <div className="flex items-center gap-1 text-text-secondary">
+                <Cpu className="w-3.5 h-3.5 text-accent" />
+                <span>VRAM {telemetry.vram_used_percent}%</span>
+              </div>
+            ) : null}
+
+            {/* Local Inference Speed Throughput */}
+            {telemetry.tokens_per_second > 0 && (
+              <div className="flex items-center gap-1 text-emerald-400 font-medium border-l border-border-subtle pl-2">
+                <Gauge className="w-3.5 h-3.5 text-emerald-400" />
+                <span>{telemetry.tokens_per_second} tok/s</span>
+              </div>
+            )}
+
+            {/* RAM / CPU Indicators */}
+            <div className="flex items-center gap-1.5 text-text-tertiary border-l border-border-subtle pl-2 text-[11px]">
+              <span>CPU {telemetry.cpu_usage_percent}%</span>
+              <span>•</span>
+              <span>RAM {telemetry.ram_used_percent}%</span>
+            </div>
+          </div>
+        )}
+
         {/* Model Tier Selector */}
         <div className="relative">
           <button
@@ -182,3 +246,4 @@ export const TopBar: React.FC<TopBarProps> = ({
     </header>
   );
 };
+

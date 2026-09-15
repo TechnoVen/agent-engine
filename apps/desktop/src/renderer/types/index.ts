@@ -469,5 +469,39 @@ export interface CostMetrics {
   }>;
 }
 
+export interface HardwareTelemetry {
+  cpu_usage_percent: number;
+  cpu_cores_logical: number;
+  cpu_cores_physical: number;
+  ram_used_percent: number;
+  ram_used_gb: number;
+  ram_total_gb: number;
+  ram_available_gb: number;
+  gpu_detected: boolean;
+  gpu_model: string;
+  gpu_vendor: string;
+  vram_used_percent: number;
+  vram_used_gb: number;
+  vram_total_gb: number;
+  vram_free_gb: number;
+  vram_warning: boolean;
+  vram_warning_threshold?: number;
+  tokens_per_second: number;
+  recent_inference_runtime?: string | null;
+  recent_inference_model?: string | null;
+  ollama_active: boolean;
+  llamacpp_active: boolean;
+  local_runtime_active: boolean;
+  timestamp?: string;
+}
+
+export interface SpeedRecordPayload {
+  tokens: number;
+  elapsed_seconds: number;
+  model?: string;
+  runtime?: string;
+}
+
+
 
 

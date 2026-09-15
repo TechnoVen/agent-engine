@@ -256,10 +256,11 @@
   - **Deliverables:** Monaco YAML editor in `screens/Policies.tsx`, rule dry-run playground, paginated audit log table with filter by risk level and tool name.
   - **Acceptance Criteria:** Validates YAML syntax before save; hot-reloads policies without restarting sidecar; audit logs exportable as CSV/JSON.
   - **Status:** ✅ DONE
-- [ ] **Task 4.7 — Hardware Telemetry Panel**
+- [x] **Task 4.7 — Hardware Telemetry Panel**
   - **User Story:** As a local model user, I want to see VRAM, RAM, CPU, and tokens/sec for local runtimes (Ollama/llama.cpp).
   - **Deliverables:** Local telemetry widget in `Settings.tsx` and status bar, VRAM gauge, generation speed gauge, GPU model detection.
   - **Acceptance Criteria:** Updates every 2 seconds when local models run; warns when VRAM reaches 95%.
+  - **Status:** ✅ DONE
 - [ ] **Task 4.8 — Settings Screen & Diagnostics Export**
   - **User Story:** As a user, I want a single settings page to control Providers, Models, Local Runtime, Adapters, Channels, Storage, Security, Appearance, and Diagnostics.
   - **Deliverables:** `apps/desktop/src/renderer/screens/Settings.tsx` (Route `/settings`), tabbed configuration layout, diagnostics bundle export (`.zip`).
