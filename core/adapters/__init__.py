@@ -15,6 +15,7 @@ from core.adapters.base import (
 )
 from core.adapters.claude_code import ClaudeCodeAdapter
 from core.adapters.codex import CodexAdapter
+from core.adapters.goose import GooseAdapter
 from core.adapters.mock import MockAgentAdapter
 from core.adapters.openclaw import OpenClawAdapter
 from core.adapters.registry import (
@@ -29,6 +30,7 @@ __all__ = [
     "MockAgentAdapter",
     "ClaudeCodeAdapter",
     "CodexAdapter",
+    "GooseAdapter",
     "OpenClawAdapter",
     "AdapterCapability",
     "AdapterHealthStatus",

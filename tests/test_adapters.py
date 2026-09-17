@@ -489,3 +489,67 @@ async def test_openclaw_adapter():
     openclaw_in_reg = reg.get("openclaw")
     assert openclaw_in_reg is not None
     assert openclaw_in_reg.adapter_id == "openclaw"
+
+
+@pytest.mark.anyio
+async def test_goose_adapter():
+    """Verify Task 5.5: GooseAdapter lifecycle, ACP protocol framing, execution, and streaming."""
+    from core.adapters.goose import GooseAdapter
+
+    adapter = GooseAdapter()
+    assert adapter.adapter_id == "goose"
+    assert adapter.protocol == "acp"
+    assert "terminal" in [c.value for c in adapter.capabilities]
+    assert "file_edit" in [c.value for c in adapter.capabilities]
+
+    # Initialize & health probe
+    assert adapter.initialize() is True
+    health = adapter.health_check()
+    assert health.status in (AdapterHealthStatus.HEALTHY, AdapterHealthStatus.DEGRADED)
+    assert health.latency_ms >= 0
+
+    # ACP Frame encoding & decoding
+    frame = adapter.encode_acp_frame(
+        action="inspect_workspace",
+        payload={"path": "/workspace"},
+        session_id="session_42",
+    )
+    assert frame["protocol"] == "acp/1.0"
+    assert frame["action"] == "inspect_workspace"
+    assert frame["session_id"] == "session_42"
+
+    decoded = adapter.decode_acp_frame(frame)
+    assert decoded["action"] == "inspect_workspace"
+    assert decoded["session_id"] == "session_42"
+    assert decoded["payload"]["path"] == "/workspace"
+
+    # Execution & ACP Metadata
+    req = AdapterExecutionRequest(
+        prompt="Run cargo check and inspect compilation errors",
+        context={"command": "cargo check", "cwd": "apps/desktop"},
+        tools=[{"name": "execute_command"}],
+    )
+    resp = await adapter.execute(req)
+    assert resp.adapter_id == "goose"
+    assert "Goose" in resp.content
+    assert resp.usage["total_tokens"] > 0
+    assert len(resp.tool_calls) == 1
+    assert resp.tool_calls[0]["name"] == "execute_command"
+    assert resp.tool_calls[0]["arguments"]["command"] == "cargo check"
+    assert "acp_frame" in resp.metadata
+    assert resp.metadata["acp_frame"]["protocol"] == "acp/1.0"
+
+    # Streaming test
+    chunks = []
+    async for chunk in adapter.stream(req):
+        chunks.append(chunk)
+
+    assert any(c.chunk_type == "token" for c in chunks)
+    assert any(c.chunk_type == "tool_call" for c in chunks)
+    assert any(c.chunk_type == "done" for c in chunks)
+
+    # Global registry integration
+    reg = get_adapter_registry()
+    goose_in_reg = reg.get("goose")
+    assert goose_in_reg is not None
+    assert goose_in_reg.adapter_id == "goose"

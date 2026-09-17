@@ -156,9 +156,11 @@ def get_adapter_registry() -> AdapterRegistry:
         _GLOBAL_ADAPTER_REGISTRY = AdapterRegistry()
         from core.adapters.claude_code import ClaudeCodeAdapter
         from core.adapters.codex import CodexAdapter
+        from core.adapters.goose import GooseAdapter
         from core.adapters.openclaw import OpenClawAdapter
 
         _GLOBAL_ADAPTER_REGISTRY.register(ClaudeCodeAdapter())
         _GLOBAL_ADAPTER_REGISTRY.register(CodexAdapter())
         _GLOBAL_ADAPTER_REGISTRY.register(OpenClawAdapter())
+        _GLOBAL_ADAPTER_REGISTRY.register(GooseAdapter())
     return _GLOBAL_ADAPTER_REGISTRY

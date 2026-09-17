@@ -294,8 +294,11 @@
   - **User Story:** As an operator, I want an omnichannel messaging adapter that bridges Agent Engine sessions to WhatsApp and Telegram bots and dynamic templates with bidirectional normalization.
   - **Deliverables:** `core/adapters/openclaw.py` (`OpenClawAdapter` with inbound webhook normalization for Telegram and WhatsApp, outbound formatting, template routing, spend tracking via `CostTracker`, streaming generator), registered in `AdapterRegistry`, and integration tests in `tests/test_adapters.py`.
   - **Acceptance Criteria:** Normalizes Telegram and WhatsApp webhook updates, formats outbound channel payloads, routes template executions, emits streaming chunks, records cost; test count strictly increases (265 → 266); 100% of monorepo tests pass (266/266).
+- [x] **Task 5.5 — Goose Adapter (ACP)**
+  - **User Story:** As an integration engineer, I want an adapter for Block's Goose developer agent implementing the Agent Communication Protocol (ACP) and CLI bridge to execute terminal commands and workspace tools.
+  - **Deliverables:** `core/adapters/goose.py` (`GooseAdapter` with ACP frame encoder/decoder, Goose CLI detection and subprocess execution, terminal tool calling, Law 1 spend ledger integration via `CostTracker`, and streaming generator), registered in `AdapterRegistry`, and integration tests in `tests/test_adapters.py`.
+  - **Acceptance Criteria:** Encodes and decodes ACP message frames, executes commands, emits stream events, tracks spend, handles graceful termination; test count strictly increases (266 → 267); 100% of monorepo tests pass (267/267).
   - **Status:** ✅ DONE
-- [ ] **Task 5.5 — Goose Adapter (ACP)**
 - [ ] **Task 5.6 — Hermes, Cursor, Windsurf Adapters (MCP fallback)**
 
 ---
