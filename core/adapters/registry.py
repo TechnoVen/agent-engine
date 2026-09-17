@@ -154,4 +154,7 @@ def get_adapter_registry() -> AdapterRegistry:
     global _GLOBAL_ADAPTER_REGISTRY
     if _GLOBAL_ADAPTER_REGISTRY is None:
         _GLOBAL_ADAPTER_REGISTRY = AdapterRegistry()
+        from core.adapters.claude_code import ClaudeCodeAdapter
+
+        _GLOBAL_ADAPTER_REGISTRY.register(ClaudeCodeAdapter())
     return _GLOBAL_ADAPTER_REGISTRY

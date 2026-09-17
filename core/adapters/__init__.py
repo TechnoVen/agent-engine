@@ -13,6 +13,7 @@ from core.adapters.base import (
     AdapterStreamChunk,
     AgentAdapter,
 )
+from core.adapters.claude_code import ClaudeCodeAdapter
 from core.adapters.mock import MockAgentAdapter
 from core.adapters.registry import (
     AdapterDisabledError,
@@ -24,6 +25,7 @@ from core.adapters.registry import (
 __all__ = [
     "AgentAdapter",
     "MockAgentAdapter",
+    "ClaudeCodeAdapter",
     "AdapterCapability",
     "AdapterHealthStatus",
     "AdapterHealth",

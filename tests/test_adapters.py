@@ -285,3 +285,49 @@ def test_adapters_schema_and_client_integration():
     assert "interface AdapterHealth" in types_ts
     assert "interface AdapterExecutionRequest" in types_ts
     assert "interface AdapterExecutionResponse" in types_ts
+
+
+@pytest.mark.anyio
+async def test_claude_code_adapter():
+    """Verify Task 5.2: ClaudeCodeAdapter lifecycle, tool call extraction, and streaming."""
+    from core.adapters.claude_code import ClaudeCodeAdapter
+
+    adapter = ClaudeCodeAdapter()
+    assert adapter.adapter_id == "claude-code"
+    assert adapter.protocol == "cli_subprocess"
+    assert "tools" in [c.value for c in adapter.capabilities]
+    assert "file_edit" in [c.value for c in adapter.capabilities]
+
+    # Initialize & health probe
+    assert adapter.initialize() is True
+    health = adapter.health_check()
+    assert health.status in (AdapterHealthStatus.HEALTHY, AdapterHealthStatus.DEGRADED)
+    assert health.latency_ms >= 0
+
+    # Execution (simulated / fallback)
+    req = AdapterExecutionRequest(
+        prompt="Please edit auth.py to fix secret leakage",
+        context={"target_file": "core/security/auth.py"},
+    )
+    resp = await adapter.execute(req)
+    assert resp.adapter_id == "claude-code"
+    assert len(resp.content) > 0
+    assert len(resp.tool_calls) == 1
+    assert resp.tool_calls[0]["name"] == "edit_file"
+    assert resp.tool_calls[0]["arguments"]["path"] == "core/security/auth.py"
+    assert resp.usage["total_tokens"] > 0
+
+    # Streaming
+    chunks = []
+    async for chunk in adapter.stream(req):
+        chunks.append(chunk)
+
+    assert any(c.chunk_type == "token" for c in chunks)
+    assert any(c.chunk_type == "tool_call" for c in chunks)
+    assert any(c.chunk_type == "done" for c in chunks)
+
+    # Global registry integration
+    reg = get_adapter_registry()
+    claude_in_reg = reg.get("claude-code")
+    assert claude_in_reg is not None
+    assert claude_in_reg.adapter_id == "claude-code"

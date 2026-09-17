@@ -280,7 +280,11 @@
   - **Deliverables:** `core/adapters/base.py` (`AgentAdapter` ABC, `AdapterExecutionRequest`, `AdapterExecutionResponse`, `AdapterStreamChunk`, `AdapterHealth`), `core/adapters/registry.py` (`AdapterRegistry` singleton, dynamic registration, AppSettings gating), `core/adapters/mock.py` (`MockAgentAdapter` deterministic reference), sidecar FastAPI endpoints (`GET /v1/adapters`, `GET /v1/adapters/{id}`, `POST /v1/adapters/{id}/execute`, `POST /v1/adapters/{id}/stream`, `POST /v1/adapters/{id}/test`), shared OpenAPI schemas, desktop API client (`client.ts`), and unit/integration test suite `tests/test_adapters.py`.
   - **Acceptance Criteria:** Adapters follow common lifecycle (`initialize`, `health_check`, `execute`, `stream`, `stop`); disabled adapters in settings fail closed with 403; test count strictly increases (256 → 263); 100% of monorepo tests pass (263/263).
   - **Status:** ✅ DONE
-- [ ] **Task 5.2 — Claude Code Adapter**
+- [x] **Task 5.2 — Claude Code Adapter**
+  - **User Story:** As a developer, I want to invoke Anthropic's Claude Code CLI tool via Agent Engine, enabling terminal commands, workspace edits, and tool-call normalization with subprocess lifecycle supervision.
+  - **Deliverables:** `core/adapters/claude_code.py` (`ClaudeCodeAdapter` with CLI detection, key resolution, subprocess execution, output parsing, streaming generator, process termination), registered in `AdapterRegistry`, and integration tests in `tests/test_adapters.py`.
+  - **Acceptance Criteria:** Adapts Claude Code execution, extracts tool/edit calls, streams chunks, terminates cleanly on stop, falls back deterministically when binary or key is missing; test count strictly increases (263 → 264); 100% of monorepo tests pass (264/264).
+  - **Status:** ✅ DONE
 - [ ] **Task 5.3 — Codex Adapter**
 - [ ] **Task 5.4 — OpenClaw Adapter** (WhatsApp & Telegram personal messaging)
 - [ ] **Task 5.5 — Goose Adapter (ACP)**
