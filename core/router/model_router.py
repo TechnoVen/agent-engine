@@ -11,8 +11,10 @@ from core.router.circuit_breaker import CircuitBreaker
 from core.router.config import RouterConfigFile, load_router_config
 from core.router.health import HealthProber
 
-# Ensure core.models is importable
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Ensure core.models and repo root are importable
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 load_dotenv()
 
