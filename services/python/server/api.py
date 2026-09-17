@@ -74,6 +74,7 @@ from core.telemetry import (
 )
 from core.skills import (
     MultiToolSkillDiscovery,
+    SkillCollectionManager,
     SkillEditor,
     SkillFormat,
     SkillSource,
@@ -292,6 +293,39 @@ class ValidateSkillResponse(BaseModel):
     errors: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
     parsed_metadata: Optional[Dict[str, Any]] = None
+
+
+class SkillCollectionInfo(BaseModel):
+    id: str
+    name: str
+    description: str = ""
+    tags: List[str] = Field(default_factory=list)
+    skill_ids: List[str] = Field(default_factory=list)
+    created_at: str
+    updated_at: str
+
+
+class CreateSkillCollectionRequest(BaseModel):
+    name: str
+    description: str = ""
+    tags: List[str] = Field(default_factory=list)
+    skill_ids: List[str] = Field(default_factory=list)
+    collection_id: Optional[str] = None
+
+
+class UpdateSkillCollectionRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    tags: Optional[List[str]] = None
+
+
+class AddSkillToCollectionRequest(BaseModel):
+    skill_id: str
+
+
+class SkillSearchResult(BaseModel):
+    skill: SkillInfo
+    score: float
 
 
 class ExecuteSkillRequest(BaseModel):
@@ -1472,6 +1506,215 @@ async def create_skill(req: CreateSkillRequest):
         )
     except FileExistsError as e:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@v1_router.get("/skills/search", response_model=List[SkillSearchResult])
+async def search_skills_endpoint(
+    q: str = Query(default="", description="Search query string"),
+    source: Optional[str] = Query(default=None, description="Filter by tool source"),
+    tag: Optional[str] = Query(default=None, description="Filter by tag"),
+    category: Optional[str] = Query(default=None, description="Filter by category"),
+):
+    """Full-text search across discovered skills with relevance scoring."""
+    manager = SkillCollectionManager()
+    src = None
+    if source:
+        try:
+            src = SkillSource(source)
+        except Exception:
+            src = None
+
+    results = manager.search_skills(query=q, source=src, tag=tag, category=category)
+    response_items = []
+    for skill, score in results:
+        info = SkillInfo(
+            id=skill.id,
+            name=skill.metadata.name,
+            category=skill.metadata.category,
+            description=skill.metadata.description,
+            inputs=skill.metadata.inputs,
+            outputs=skill.metadata.outputs,
+            source=skill.metadata.source_tool.value,
+            author=skill.metadata.author,
+            version=skill.metadata.version,
+            tags=skill.metadata.tags,
+            tools=skill.metadata.tools,
+            format=skill.format.value,
+            file_path=skill.path,
+            content=skill.content,
+            is_readonly=skill.is_readonly,
+        )
+        response_items.append(SkillSearchResult(skill=info, score=score))
+    return response_items
+
+
+@v1_router.get("/skills/collections", response_model=List[SkillCollectionInfo])
+async def list_skill_collections(tag: Optional[str] = None):
+    """List all user and curated skill collections."""
+    manager = SkillCollectionManager()
+    colls = manager.list_collections(tag=tag)
+    return [
+        SkillCollectionInfo(
+            id=c.id,
+            name=c.name,
+            description=c.description,
+            tags=c.tags,
+            skill_ids=c.skill_ids,
+            created_at=c.created_at,
+            updated_at=c.updated_at,
+        )
+        for c in colls
+    ]
+
+
+@v1_router.post("/skills/collections", response_model=SkillCollectionInfo)
+async def create_skill_collection(req: CreateSkillCollectionRequest):
+    """Create a new skill collection."""
+    manager = SkillCollectionManager()
+    try:
+        c = manager.create_collection(
+            name=req.name,
+            description=req.description,
+            tags=req.tags,
+            skill_ids=req.skill_ids,
+            collection_id=req.collection_id,
+        )
+        return SkillCollectionInfo(
+            id=c.id,
+            name=c.name,
+            description=c.description,
+            tags=c.tags,
+            skill_ids=c.skill_ids,
+            created_at=c.created_at,
+            updated_at=c.updated_at,
+        )
+    except FileExistsError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@v1_router.get("/skills/collections/{collection_id}", response_model=SkillCollectionInfo)
+async def get_skill_collection(collection_id: str):
+    """Get a specific skill collection."""
+    manager = SkillCollectionManager()
+    c = manager.get_collection(collection_id)
+    if not c:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Collection '{collection_id}' not found.",
+        )
+    return SkillCollectionInfo(
+        id=c.id,
+        name=c.name,
+        description=c.description,
+        tags=c.tags,
+        skill_ids=c.skill_ids,
+        created_at=c.created_at,
+        updated_at=c.updated_at,
+    )
+
+
+@v1_router.put("/skills/collections/{collection_id}", response_model=SkillCollectionInfo)
+async def update_skill_collection(collection_id: str, req: UpdateSkillCollectionRequest):
+    """Update metadata of a skill collection."""
+    manager = SkillCollectionManager()
+    try:
+        c = manager.update_collection(
+            collection_id=collection_id,
+            name=req.name,
+            description=req.description,
+            tags=req.tags,
+        )
+        return SkillCollectionInfo(
+            id=c.id,
+            name=c.name,
+            description=c.description,
+            tags=c.tags,
+            skill_ids=c.skill_ids,
+            created_at=c.created_at,
+            updated_at=c.updated_at,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@v1_router.delete("/skills/collections/{collection_id}")
+async def delete_skill_collection(collection_id: str):
+    """Delete a skill collection."""
+    manager = SkillCollectionManager()
+    deleted = manager.delete_collection(collection_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Collection '{collection_id}' not found.",
+        )
+    return {"success": True, "collection_id": collection_id}
+
+
+@v1_router.get("/skills/collections/{collection_id}/skills", response_model=List[SkillInfo])
+async def get_collection_member_skills(collection_id: str):
+    """Retrieve full SkillInfo entities for all members of a collection."""
+    manager = SkillCollectionManager()
+    try:
+        skills = manager.get_collection_skills(collection_id)
+        return [
+            SkillInfo(
+                id=s.id,
+                name=s.metadata.name,
+                category=s.metadata.category,
+                description=s.metadata.description,
+                inputs=s.metadata.inputs,
+                outputs=s.metadata.outputs,
+                source=s.metadata.source_tool.value,
+                author=s.metadata.author,
+                version=s.metadata.version,
+                tags=s.metadata.tags,
+                tools=s.metadata.tools,
+                format=s.format.value,
+                file_path=s.path,
+                content=s.content,
+                is_readonly=s.is_readonly,
+            )
+            for s in skills
+        ]
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@v1_router.post("/skills/collections/{collection_id}/skills")
+async def add_skill_to_collection_endpoint(collection_id: str, req: AddSkillToCollectionRequest):
+    """Add a skill to a collection."""
+    manager = SkillCollectionManager()
+    try:
+        manager.add_skill_to_collection(collection_id, req.skill_id)
+        return {"success": True, "collection_id": collection_id, "skill_id": req.skill_id}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@v1_router.delete("/skills/collections/{collection_id}/skills/{skill_id}")
+async def remove_skill_from_collection_endpoint(collection_id: str, skill_id: str):
+    """Remove a skill from a collection."""
+    manager = SkillCollectionManager()
+    try:
+        removed = manager.remove_skill_from_collection(collection_id, skill_id)
+        if not removed:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Skill '{skill_id}' not found in collection '{collection_id}'.",
+            )
+        return {"success": True, "collection_id": collection_id, "skill_id": skill_id}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 

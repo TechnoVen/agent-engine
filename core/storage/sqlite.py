@@ -217,6 +217,24 @@ class SQLiteBackend(StorageBackend):
                     );
                     CREATE INDEX IF NOT EXISTS idx_tasks_room_status ON room_tasks(room_id, status);
                     CREATE INDEX IF NOT EXISTS idx_tasks_parent ON room_tasks(parent_task_id);
+
+                    CREATE TABLE IF NOT EXISTS skill_collections (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        description TEXT NOT NULL DEFAULT '',
+                        tags TEXT NOT NULL DEFAULT '[]',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+
+                    CREATE TABLE IF NOT EXISTS collection_skills (
+                        collection_id TEXT NOT NULL,
+                        skill_id TEXT NOT NULL,
+                        added_at TEXT NOT NULL,
+                        PRIMARY KEY (collection_id, skill_id),
+                        FOREIGN KEY (collection_id) REFERENCES skill_collections(id) ON DELETE CASCADE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_collection_skills_skill ON collection_skills(skill_id);
                 """)
                 conn.commit()
 

@@ -461,3 +461,231 @@ def test_skill_editor_api_endpoints():
 
     # Confirm 404 after deletion
     assert client.get(f"/v1/skills/{unique_id}").status_code == 404
+
+
+def test_skill_collection_manager_crud(tmp_path):
+    """Verify SkillCollectionManager CRUD and tag filtering."""
+    from core.skills.collections import SkillCollectionManager
+
+    db_file = str(tmp_path / "test_skills.db")
+    mgr = SkillCollectionManager(db_path=db_file)
+
+    # 1. Create collection
+    coll = mgr.create_collection(
+        name="Data Science Toolkit",
+        description="Core skills for data analysis and ML",
+        tags=["python", "data", "ml"],
+        skill_ids=["sql_gen", "chart_builder"],
+        collection_id="ds_toolkit",
+    )
+    assert coll.id == "ds_toolkit"
+    assert coll.name == "Data Science Toolkit"
+    assert coll.tags == ["python", "data", "ml"]
+    assert "sql_gen" in coll.skill_ids
+
+    # 2. Get collection
+    fetched = mgr.get_collection("ds_toolkit")
+    assert fetched is not None
+    assert fetched.name == "Data Science Toolkit"
+    assert len(fetched.skill_ids) == 2
+
+    # 3. List collections with tag filter
+    all_colls = mgr.list_collections()
+    assert len(all_colls) == 1
+
+    ml_colls = mgr.list_collections(tag="ml")
+    assert len(ml_colls) == 1
+
+    web_colls = mgr.list_collections(tag="frontend")
+    assert len(web_colls) == 0
+
+    # 4. Update collection
+    updated = mgr.update_collection(
+        "ds_toolkit",
+        name="Advanced Data Science Toolkit",
+        description="Updated description",
+        tags=["python", "ai"],
+    )
+    assert updated.name == "Advanced Data Science Toolkit"
+    assert updated.tags == ["python", "ai"]
+
+    # 5. Delete collection
+    assert mgr.delete_collection("ds_toolkit") is True
+    assert mgr.get_collection("ds_toolkit") is None
+
+
+def test_skill_collection_member_skills(tmp_path):
+    """Verify adding, removing, and resolving member skills in collections."""
+    from core.skills.collections import SkillCollectionManager
+    from core.skills.discovery import MultiToolSkillDiscovery
+    from core.skills.models import Skill, SkillMetadata, SkillSource
+
+    db_file = str(tmp_path / "members.db")
+
+    # Mock discovery
+    discovery = MultiToolSkillDiscovery(agent_engine_dirs=[])
+    m1 = SkillMetadata(id="skill_a", name="Skill Alpha", source_tool=SkillSource.AGENT_ENGINE)
+    m2 = SkillMetadata(id="skill_b", name="Skill Beta", source_tool=SkillSource.CURSOR)
+    discovery.discover_all = lambda workspace_dir=None: [  # type: ignore
+        Skill(id="skill_a", metadata=m1, content="alpha"),
+        Skill(id="skill_b", metadata=m2, content="beta"),
+    ]
+    discovery.get_skill = lambda s_id, workspace_dir=None: next(  # type: ignore
+        (s for s in discovery.discover_all() if s.id == s_id), None
+    )
+
+    mgr = SkillCollectionManager(db_path=db_file, discovery=discovery)
+    mgr.create_collection(name="Bundle 1", collection_id="b1")
+
+    # Add skills
+    assert mgr.add_skill_to_collection("b1", "skill_a") is True
+    assert mgr.add_skill_to_collection("b1", "skill_b") is True
+
+    coll = mgr.get_collection("b1")
+    assert len(coll.skill_ids) == 2
+
+    # Resolve member skills
+    skills = mgr.get_collection_skills("b1")
+    assert len(skills) == 2
+    assert {s.id for s in skills} == {"skill_a", "skill_b"}
+
+    # Remove a skill
+    assert mgr.remove_skill_from_collection("b1", "skill_a") is True
+    remaining = mgr.get_collection_skills("b1")
+    assert len(remaining) == 1
+    assert remaining[0].id == "skill_b"
+
+
+def test_skill_search_scoring():
+    """Verify search scoring and ranking algorithm."""
+    from core.skills.collections import SkillCollectionManager
+    from core.skills.discovery import MultiToolSkillDiscovery
+    from core.skills.models import Skill, SkillMetadata
+
+    # Create distinct skills for testing
+    m_exact = SkillMetadata(
+        id="deploy_docker", name="Deploy Docker Container", tags=["docker", "devops"]
+    )
+    m_fuzzy = SkillMetadata(
+        id="kubernetes_orchestrator",
+        name="K8s Orchestrator",
+        tags=["devops"],
+        description="Deploys to cluster",
+    )
+    m_other = SkillMetadata(id="generate_sql", name="Generate SQL", tags=["data"])
+
+    discovery = MultiToolSkillDiscovery(agent_engine_dirs=[])
+    discovery.discover_all = lambda workspace_dir=None: [  # type: ignore
+        Skill(id="deploy_docker", metadata=m_exact, content="run docker build and push"),
+        Skill(
+            id="kubernetes_orchestrator", metadata=m_fuzzy, content="manage pods and deployments"
+        ),
+        Skill(id="generate_sql", metadata=m_other, content="select * from table"),
+    ]
+
+    mgr = SkillCollectionManager(db_path=":memory:", discovery=discovery)
+
+    # Exact ID search
+    res1 = mgr.search_skills("deploy_docker")
+    assert len(res1) >= 1
+    assert res1[0][0].id == "deploy_docker"
+    assert res1[0][1] >= 100.0
+
+    # Token match in name/tags/content
+    res2 = mgr.search_skills("docker")
+    assert len(res2) >= 1
+    assert res2[0][0].id == "deploy_docker"
+
+    # Tag filter search
+    res3 = mgr.search_skills("", tag="devops")
+    assert len(res3) == 2
+    ids = {s.id for s, _ in res3}
+    assert "deploy_docker" in ids
+    assert "kubernetes_orchestrator" in ids
+
+
+def test_skill_collection_api_endpoints():
+    """Verify Collection REST endpoints."""
+    from fastapi.testclient import TestClient
+    from services.python.server.api import app
+
+    client = TestClient(app)
+
+    unique_coll_id = f"coll_api_{int(time.time() * 1000)}"
+
+    # 1. POST /v1/skills/collections
+    create_resp = client.post(
+        "/v1/skills/collections",
+        json={
+            "collection_id": unique_coll_id,
+            "name": "Integration Collection",
+            "description": "Created during API test",
+            "tags": ["test", "api"],
+            "skill_ids": ["summarize_meeting_notes"],
+        },
+    )
+    assert create_resp.status_code == 200
+    c_data = create_resp.json()
+    assert c_data["id"] == unique_coll_id
+    assert "summarize_meeting_notes" in c_data["skill_ids"]
+
+    # 2. GET /v1/skills/collections
+    list_resp = client.get("/v1/skills/collections")
+    assert list_resp.status_code == 200
+    all_colls = list_resp.json()
+    assert any(c["id"] == unique_coll_id for c in all_colls)
+
+    # 3. GET /v1/skills/collections/{id}
+    get_resp = client.get(f"/v1/skills/collections/{unique_coll_id}")
+    assert get_resp.status_code == 200
+    assert get_resp.json()["name"] == "Integration Collection"
+
+    # 4. PUT /v1/skills/collections/{id}
+    put_resp = client.put(
+        f"/v1/skills/collections/{unique_coll_id}",
+        json={"name": "Renamed Collection", "description": "Updated"},
+    )
+    assert put_resp.status_code == 200
+    assert put_resp.json()["name"] == "Renamed Collection"
+
+    # 5. GET /v1/skills/collections/{id}/skills
+    skills_resp = client.get(f"/v1/skills/collections/{unique_coll_id}/skills")
+    assert skills_resp.status_code == 200
+    member_skills = skills_resp.json()
+    assert len(member_skills) >= 1
+    assert any(s["id"] == "summarize_meeting_notes" for s in member_skills)
+
+    # 6. DELETE /v1/skills/collections/{id}/skills/{skill_id}
+    rem_resp = client.delete(
+        f"/v1/skills/collections/{unique_coll_id}/skills/summarize_meeting_notes"
+    )
+    assert rem_resp.status_code == 200
+    assert rem_resp.json()["success"] is True
+
+    # 7. DELETE /v1/skills/collections/{id}
+    del_resp = client.delete(f"/v1/skills/collections/{unique_coll_id}")
+    assert del_resp.status_code == 200
+    assert del_resp.json()["success"] is True
+
+    # Confirm 404
+    assert client.get(f"/v1/skills/collections/{unique_coll_id}").status_code == 404
+
+
+def test_skill_search_api_endpoint():
+    """Verify GET /v1/skills/search endpoint."""
+    from fastapi.testclient import TestClient
+    from services.python.server.api import app
+
+    client = TestClient(app)
+
+    # Search for "meeting" which matches summarize_meeting_notes
+    resp = client.get("/v1/skills/search?q=meeting")
+    assert resp.status_code == 200
+    results = resp.json()
+    assert isinstance(results, list)
+    assert len(results) >= 1
+    top = results[0]
+    assert "skill" in top
+    assert "score" in top
+    assert top["score"] > 0
+    assert "meeting" in top["skill"]["name"].lower() or "meeting" in top["skill"]["id"].lower()

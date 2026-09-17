@@ -120,6 +120,193 @@ paths:
               schema:
                 $ref: '#/components/schemas/SkillInfo'
 
+  /skills/search:
+    get:
+      summary: Full-text search across discovered skills
+      operationId: searchSkills
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+        - name: source
+          in: query
+          schema:
+            type: string
+        - name: tag
+          in: query
+          schema:
+            type: string
+        - name: category
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Search results with relevance scores
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SkillSearchResult'
+
+  /skills/collections:
+    get:
+      summary: List all skill collections
+      operationId: listSkillCollections
+      parameters:
+        - name: tag
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of skill collections
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SkillCollectionInfo'
+    post:
+      summary: Create a new skill collection
+      operationId: createSkillCollection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSkillCollectionRequest'
+      responses:
+        '200':
+          description: Created collection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillCollectionInfo'
+
+  /skills/collections/{collection_id}:
+    get:
+      summary: Get details of a skill collection
+      operationId: getSkillCollection
+      parameters:
+        - name: collection_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Collection details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillCollectionInfo'
+    put:
+      summary: Update a skill collection
+      operationId: updateSkillCollection
+      parameters:
+        - name: collection_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSkillCollectionRequest'
+      responses:
+        '200':
+          description: Updated collection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillCollectionInfo'
+    delete:
+      summary: Delete a skill collection
+      operationId: deleteSkillCollection
+      parameters:
+        - name: collection_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Deletion confirmation
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /skills/collections/{collection_id}/skills:
+    get:
+      summary: List member skills of a collection
+      operationId: getCollectionMemberSkills
+      parameters:
+        - name: collection_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Member skills
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SkillInfo'
+    post:
+      summary: Add a skill to a collection
+      operationId: addSkillToCollection
+      parameters:
+        - name: collection_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddSkillToCollectionRequest'
+      responses:
+        '200':
+          description: Confirmation
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /skills/collections/{collection_id}/skills/{skill_id}:
+    delete:
+      summary: Remove a skill from a collection
+      operationId: removeSkillFromCollection
+      parameters:
+        - name: collection_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: skill_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Removal confirmation
+          content:
+            application/json:
+              schema:
+                type: object
+
   /skills/{skill_id}:
     get:
       summary: Get details and content of a skill
@@ -2317,6 +2504,76 @@ components:
             type: string
         parsed_metadata:
           type: object
+
+    SkillCollectionInfo:
+      type: object
+      required: [id, name, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        skill_ids:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+        updated_at:
+          type: string
+
+    CreateSkillCollectionRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        skill_ids:
+          type: array
+          items:
+            type: string
+        collection_id:
+          type: string
+
+    UpdateSkillCollectionRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+
+    AddSkillToCollectionRequest:
+      type: object
+      required: [skill_id]
+      properties:
+        skill_id:
+          type: string
+
+    SkillSearchResult:
+      type: object
+      required: [skill, score]
+      properties:
+        skill:
+          $ref: '#/components/schemas/SkillInfo'
+        score:
+          type: number
 
     WorkflowInfo:
       type: object
