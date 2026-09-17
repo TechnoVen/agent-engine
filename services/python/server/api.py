@@ -3466,6 +3466,38 @@ async def update_room_task(room_id: str, task_id: str, req: UpdateRoomTaskReques
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
 
+# ---------------------------------------------------------------------------
+# Team Collaboration Channels (/v1/channels/...)
+# ---------------------------------------------------------------------------
+
+
+@v1_router.post("/channels/slack/events")
+async def slack_events_webhook(request: Request):
+    """Incoming webhook for Slack Events API and Socket Mode verification."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON")
+
+    # Handle Slack URL verification challenge
+    if body.get("type") == "url_verification":
+        return {"challenge": body.get("challenge", "")}
+
+    reg = get_adapter_registry()
+    adapter = reg.get("slack")
+    if not adapter:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Slack adapter not found")
+
+    normalized = adapter.normalize_inbound(body)
+    return {
+        "status": "received",
+        "normalized": normalized,
+        "envelope_ack": adapter.handle_socket_mode_envelope(body)
+        if body.get("envelope_id")
+        else None,
+    }
+
+
 # Mount router to FastAPI app
 
 

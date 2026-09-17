@@ -164,6 +164,7 @@ def get_adapter_registry() -> AdapterRegistry:
             WindsurfAdapter,
         )
         from core.adapters.openclaw import OpenClawAdapter
+        from core.adapters.slack import SlackAdapter
 
         _GLOBAL_ADAPTER_REGISTRY.register(ClaudeCodeAdapter())
         _GLOBAL_ADAPTER_REGISTRY.register(CodexAdapter())
@@ -173,4 +174,5 @@ def get_adapter_registry() -> AdapterRegistry:
         _GLOBAL_ADAPTER_REGISTRY.register(WindsurfAdapter())
         _GLOBAL_ADAPTER_REGISTRY.register(HermesAdapter())
         _GLOBAL_ADAPTER_REGISTRY.register(MCPFallbackAdapter())
+        _GLOBAL_ADAPTER_REGISTRY.register(SlackAdapter())
     return _GLOBAL_ADAPTER_REGISTRY

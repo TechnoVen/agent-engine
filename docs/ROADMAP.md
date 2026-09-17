@@ -323,7 +323,9 @@
 
 ## Phase 5C — Native Team Collaboration Channels (No Switch) (Milestone M4)
 
-- [ ] **Task 5C.1 — Slack Adapter** (`core/adapters/slack.py` - native Slack Socket Mode bridge)
+- [x] **Task 5C.1 — Slack Adapter** (`core/adapters/slack.py` - native Slack Socket Mode bridge)
+  - **Acceptance Criteria:** `SlackAdapter(AgentAdapter)`, native Socket Mode WebSocket frame handling and envelope acks, Events API & slash command normalization, `<@U...>` mention stripping, Block Kit outbound formatting, Law 1/2 spend tracking, `/v1/channels/slack/events` webhook; test count strictly increases (281 → 286); 100% of monorepo tests pass (286/286).
+  - **Status:** ✅ DONE
 - [ ] **Task 5C.2 — Microsoft Teams Adapter** (`core/adapters/teams.py` - native Bot Framework HTTP listener)
 - [ ] **Task 5C.3 — Discord Adapter** (`core/adapters/discord.py` - native Discord Gateway WebSocket)
 - [ ] **Task 5C.4 — Mattermost Adapter** (`core/adapters/mattermost.py` - native Mattermost WebSocket client)

@@ -59,8 +59,17 @@ class AdapterSettings:
 class ChannelSettings:
     slack_enabled: bool = False
     slack_webhook_url: Optional[str] = None
+    slack_bot_token: Optional[str] = None
+    slack_app_token: Optional[str] = None
+    teams_enabled: bool = False
+    teams_app_id: Optional[str] = None
+    teams_webhook_url: Optional[str] = None
     discord_enabled: bool = False
     discord_webhook_url: Optional[str] = None
+    discord_bot_token: Optional[str] = None
+    mattermost_enabled: bool = False
+    mattermost_url: Optional[str] = None
+    mattermost_bot_token: Optional[str] = None
     telegram_enabled: bool = False
     telegram_bot_token: Optional[str] = None
     whatsapp_enabled: bool = False
