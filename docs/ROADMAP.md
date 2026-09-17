@@ -290,7 +290,11 @@
   - **Deliverables:** `core/adapters/codex.py` (`CodexAdapter` with key discovery, CLI detection, Law 1 spend ledger integration via `CostTracker`, patch and code-block parsing, streaming chunk generator, subprocess management), registered in `AdapterRegistry`, and integration tests in `tests/test_adapters.py`.
   - **Acceptance Criteria:** Executes code generation requests, records per-request cost to ledger, extracts unified diffs and code blocks into tool calls, streams incremental tokens, terminates cleanly; test count strictly increases (264 → 265); 100% of monorepo tests pass (265/265).
   - **Status:** ✅ DONE
-- [ ] **Task 5.4 — OpenClaw Adapter** (WhatsApp & Telegram personal messaging)
+- [x] **Task 5.4 — OpenClaw Adapter** (WhatsApp & Telegram personal messaging)
+  - **User Story:** As an operator, I want an omnichannel messaging adapter that bridges Agent Engine sessions to WhatsApp and Telegram bots and dynamic templates with bidirectional normalization.
+  - **Deliverables:** `core/adapters/openclaw.py` (`OpenClawAdapter` with inbound webhook normalization for Telegram and WhatsApp, outbound formatting, template routing, spend tracking via `CostTracker`, streaming generator), registered in `AdapterRegistry`, and integration tests in `tests/test_adapters.py`.
+  - **Acceptance Criteria:** Normalizes Telegram and WhatsApp webhook updates, formats outbound channel payloads, routes template executions, emits streaming chunks, records cost; test count strictly increases (265 → 266); 100% of monorepo tests pass (266/266).
+  - **Status:** ✅ DONE
 - [ ] **Task 5.5 — Goose Adapter (ACP)**
 - [ ] **Task 5.6 — Hermes, Cursor, Windsurf Adapters (MCP fallback)**
 

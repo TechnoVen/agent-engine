@@ -16,6 +16,7 @@ from core.adapters.base import (
 from core.adapters.claude_code import ClaudeCodeAdapter
 from core.adapters.codex import CodexAdapter
 from core.adapters.mock import MockAgentAdapter
+from core.adapters.openclaw import OpenClawAdapter
 from core.adapters.registry import (
     AdapterDisabledError,
     AdapterNotFoundError,
@@ -28,6 +29,7 @@ __all__ = [
     "MockAgentAdapter",
     "ClaudeCodeAdapter",
     "CodexAdapter",
+    "OpenClawAdapter",
     "AdapterCapability",
     "AdapterHealthStatus",
     "AdapterHealth",

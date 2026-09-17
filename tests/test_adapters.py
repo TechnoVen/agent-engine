@@ -387,3 +387,105 @@ async def test_codex_adapter():
     codex_in_reg = reg.get("codex")
     assert codex_in_reg is not None
     assert codex_in_reg.adapter_id == "codex"
+
+
+@pytest.mark.anyio
+async def test_openclaw_adapter():
+    """Verify Task 5.4: OpenClawAdapter lifecycle, normalization, template routing, and streaming."""
+    from core.adapters.openclaw import OpenClawAdapter
+
+    adapter = OpenClawAdapter()
+    assert adapter.adapter_id == "openclaw"
+    assert adapter.protocol == "omnichannel-webhook"
+    assert "tools" in [c.value for c in adapter.capabilities]
+    assert "streaming" in [c.value for c in adapter.capabilities]
+
+    # Initialize & health check
+    assert adapter.initialize() is True
+    health = adapter.health_check()
+    assert health.status in (AdapterHealthStatus.HEALTHY, AdapterHealthStatus.DEGRADED)
+    assert health.latency_ms >= 0
+
+    # Inbound normalization: Telegram
+    tg_raw = {
+        "message": {
+            "message_id": 42,
+            "from": {"id": 12345, "username": "nadir"},
+            "chat": {"id": 67890},
+            "text": "Summarize weekly report",
+            "date": 1726500000,
+        }
+    }
+    tg_norm = adapter.normalize_inbound(tg_raw, channel="telegram")
+    assert tg_norm["channel"] == "telegram"
+    assert tg_norm["message_id"] == "42"
+    assert tg_norm["sender_name"] == "nadir"
+    assert tg_norm["text"] == "Summarize weekly report"
+
+    # Inbound normalization: WhatsApp
+    wa_raw = {
+        "entry": [
+            {
+                "changes": [
+                    {
+                        "value": {
+                            "contacts": [{"profile": {"name": "Alice"}}],
+                            "messages": [
+                                {
+                                    "id": "wamid.ABC123",
+                                    "from": "15550001111",
+                                    "text": {"body": "Deploy production"},
+                                    "timestamp": 1726500100,
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        ]
+    }
+    wa_norm = adapter.normalize_inbound(wa_raw, channel="whatsapp")
+    assert wa_norm["channel"] == "whatsapp"
+    assert wa_norm["message_id"] == "wamid.ABC123"
+    assert wa_norm["sender_name"] == "Alice"
+    assert wa_norm["text"] == "Deploy production"
+
+    # Outbound formatting
+    tg_out = adapter.format_outbound("Here is the answer", channel="telegram", recipient_id="67890")
+    assert tg_out["method"] == "sendMessage"
+    assert tg_out["chat_id"] == "67890"
+
+    wa_out = adapter.format_outbound(
+        "Here is the answer", channel="whatsapp", recipient_id="15550001111"
+    )
+    assert wa_out["messaging_product"] == "whatsapp"
+    assert wa_out["to"] == "15550001111"
+
+    # Execution & Cost Tracking
+    req = AdapterExecutionRequest(
+        prompt="Send notification to team",
+        context={"channel": "telegram", "chat_id": "67890"},
+        tools=[{"name": "send_channel_message"}],
+    )
+    resp = await adapter.execute(req)
+    assert resp.adapter_id == "openclaw"
+    assert "OpenClaw" in resp.content
+    assert resp.usage["total_tokens"] > 0
+    assert "cost_usd" in resp.metadata
+    assert len(resp.tool_calls) == 1
+    assert resp.tool_calls[0]["name"] == "send_channel_message"
+
+    # Streaming test
+    chunks = []
+    async for chunk in adapter.stream(req):
+        chunks.append(chunk)
+
+    assert any(c.chunk_type == "token" for c in chunks)
+    assert any(c.chunk_type == "tool_call" for c in chunks)
+    assert any(c.chunk_type == "done" for c in chunks)
+
+    # Global registry integration
+    reg = get_adapter_registry()
+    openclaw_in_reg = reg.get("openclaw")
+    assert openclaw_in_reg is not None
+    assert openclaw_in_reg.adapter_id == "openclaw"
