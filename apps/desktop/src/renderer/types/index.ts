@@ -627,6 +627,89 @@ export interface AdapterExecutionResponse {
   metadata?: Record<string, any>;
 }
 
+// Collaborative Rooms (Phase 5B - Milestone M4)
+export type RoomRole = 'admin' | 'member' | 'viewer' | 'agent';
+export type RoomTaskStatus = 'pending' | 'in_progress' | 'completed' | 'blocked' | 'failed' | 'cancelled';
+export type RoomTaskPriority = 'low' | 'medium' | 'high' | 'urgent';
+
+export interface CollaborativeRoom {
+  room_id: string;
+  project_id: string;
+  name: string;
+  description: string;
+  topic: string;
+  status: string;
+  policy_id?: string | null;
+  active_adapters: string[];
+  session_ids: string[];
+  created_at: string;
+  updated_at: string;
+  metadata?: Record<string, any>;
+}
+
+export interface CreateRoomPayload {
+  project_id: string;
+  name: string;
+  description?: string;
+  topic?: string;
+  policy_id?: string;
+  active_adapters?: string[];
+  metadata?: Record<string, any>;
+}
+
+export interface RoomParticipant {
+  room_id: string;
+  participant_id: string;
+  name: string;
+  role: RoomRole;
+  participant_type: 'human' | 'agent';
+  adapter_type?: string | null;
+  permissions: string[];
+  joined_at: string;
+  metadata?: Record<string, any>;
+}
+
+export interface AddRoomParticipantPayload {
+  participant_id: string;
+  name?: string;
+  role?: RoomRole;
+  participant_type?: 'human' | 'agent';
+  adapter_type?: string;
+  permissions?: string[];
+  metadata?: Record<string, any>;
+}
+
+export interface RoomTask {
+  task_id: string;
+  room_id: string;
+  title: string;
+  description: string;
+  status: RoomTaskStatus;
+  priority: RoomTaskPriority;
+  assigned_to?: string | null;
+  assigned_adapter?: string | null;
+  parent_task_id?: string | null;
+  dependencies: string[];
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  result?: Record<string, any> | null;
+  metadata?: Record<string, any>;
+}
+
+export interface CreateRoomTaskPayload {
+  title: string;
+  description?: string;
+  priority?: RoomTaskPriority;
+  assigned_to?: string;
+  assigned_adapter?: string;
+  parent_task_id?: string;
+  dependencies?: string[];
+  created_by?: string;
+  metadata?: Record<string, any>;
+}
+
+
 
 
 

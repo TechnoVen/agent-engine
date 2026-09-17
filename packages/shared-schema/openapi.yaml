@@ -533,6 +533,310 @@ paths:
               schema:
                 type: object
 
+  /rooms:
+    post:
+      summary: Create collaborative room
+      operationId: createRoom
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRoomRequest'
+      responses:
+        '201':
+          description: Created collaborative room
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollaborativeRoom'
+    get:
+      summary: List collaborative rooms
+      operationId: listRooms
+      parameters:
+        - name: project_id
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of collaborative rooms
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CollaborativeRoom'
+
+  /rooms/{room_id}:
+    get:
+      summary: Get room details
+      operationId: getRoom
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Collaborative room details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollaborativeRoom'
+    patch:
+      summary: Update room
+      operationId: updateRoom
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRoomRequest'
+      responses:
+        '200':
+          description: Updated collaborative room
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollaborativeRoom'
+    delete:
+      summary: Delete room
+      operationId: deleteRoom
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Room deleted
+
+  /rooms/{room_id}/context:
+    get:
+      summary: Build ADR-014 dynamic context overlay
+      operationId: getRoomContext
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: prompt
+          in: query
+          schema:
+            type: string
+        - name: project_instructions
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Context overlay object
+
+  /rooms/{room_id}/participants:
+    post:
+      summary: Add participant to room
+      operationId: addRoomParticipant
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddRoomParticipantRequest'
+      responses:
+        '201':
+          description: Added participant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomParticipant'
+    get:
+      summary: List participants in room
+      operationId: listRoomParticipants
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of participants
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RoomParticipant'
+
+  /rooms/{room_id}/participants/{participant_id}:
+    delete:
+      summary: Remove participant from room
+      operationId: removeRoomParticipant
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: participant_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: requested_by
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Participant removed
+
+  /rooms/{room_id}/tasks:
+    post:
+      summary: Create workflow task in room
+      operationId: createRoomTask
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRoomTaskRequest'
+      responses:
+        '201':
+          description: Created task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomTask'
+    get:
+      summary: List workflow tasks in room
+      operationId: listRoomTasks
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: assigned_to
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of workflow tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RoomTask'
+
+  /rooms/{room_id}/tasks/{task_id}:
+    get:
+      summary: Get task details
+      operationId: getRoomTask
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Task details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomTask'
+    patch:
+      summary: Update task status or result
+      operationId: updateRoomTask
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRoomTaskRequest'
+      responses:
+        '200':
+          description: Updated task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomTask'
+
+  /rooms/{room_id}/tasks/{task_id}/claim:
+    post:
+      summary: Claim task for execution
+      operationId: claimRoomTask
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClaimRoomTaskRequest'
+      responses:
+        '200':
+          description: Claimed task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomTask'
 
   /telemetry/cost:
     get:
@@ -3402,6 +3706,222 @@ components:
           type: string
         sha256:
           type: string
+
+    CollaborativeRoom:
+      type: object
+      required: [room_id, project_id, name, status, created_at, updated_at]
+      properties:
+        room_id:
+          type: string
+        project_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        topic:
+          type: string
+        status:
+          type: string
+        policy_id:
+          type: string
+          nullable: true
+        active_adapters:
+          type: array
+          items:
+            type: string
+        session_ids:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        metadata:
+          type: object
+
+    CreateRoomRequest:
+      type: object
+      required: [project_id, name]
+      properties:
+        project_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        topic:
+          type: string
+        policy_id:
+          type: string
+        active_adapters:
+          type: array
+          items:
+            type: string
+        metadata:
+          type: object
+
+    UpdateRoomRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        topic:
+          type: string
+        status:
+          type: string
+        policy_id:
+          type: string
+        active_adapters:
+          type: array
+          items:
+            type: string
+        metadata:
+          type: object
+
+    RoomParticipant:
+      type: object
+      required: [room_id, participant_id, name, role, participant_type, joined_at]
+      properties:
+        room_id:
+          type: string
+        participant_id:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+          enum: [admin, member, viewer, agent]
+        participant_type:
+          type: string
+          enum: [human, agent]
+        adapter_type:
+          type: string
+          nullable: true
+        permissions:
+          type: array
+          items:
+            type: string
+        joined_at:
+          type: string
+        metadata:
+          type: object
+
+    AddRoomParticipantRequest:
+      type: object
+      required: [participant_id]
+      properties:
+        participant_id:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+          default: member
+        participant_type:
+          type: string
+          default: human
+        adapter_type:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+        metadata:
+          type: object
+
+    RoomTask:
+      type: object
+      required: [task_id, room_id, title, status, priority, created_by, created_at, updated_at]
+      properties:
+        task_id:
+          type: string
+        room_id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [pending, in_progress, completed, blocked, failed, cancelled]
+        priority:
+          type: string
+          enum: [low, medium, high, urgent]
+        assigned_to:
+          type: string
+          nullable: true
+        assigned_adapter:
+          type: string
+          nullable: true
+        parent_task_id:
+          type: string
+          nullable: true
+        dependencies:
+          type: array
+          items:
+            type: string
+        created_by:
+          type: string
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        result:
+          type: object
+          nullable: true
+        metadata:
+          type: object
+
+    CreateRoomTaskRequest:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        priority:
+          type: string
+          default: medium
+        assigned_to:
+          type: string
+        assigned_adapter:
+          type: string
+        parent_task_id:
+          type: string
+        dependencies:
+          type: array
+          items:
+            type: string
+        created_by:
+          type: string
+          default: human
+        metadata:
+          type: object
+
+    UpdateRoomTaskRequest:
+      type: object
+      properties:
+        status:
+          type: string
+        result:
+          type: object
+        updated_by:
+          type: string
+
+    ClaimRoomTaskRequest:
+      type: object
+      required: [participant_id]
+      properties:
+        participant_id:
+          type: string
+        adapter_type:
+          type: string
+
 
 
 

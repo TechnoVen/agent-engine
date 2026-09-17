@@ -196,6 +196,27 @@ class SQLiteBackend(StorageBackend):
                     );
                     CREATE INDEX IF NOT EXISTS idx_participants_room ON room_participants(room_id);
                     CREATE INDEX IF NOT EXISTS idx_participants_role ON room_participants(role);
+
+                    CREATE TABLE IF NOT EXISTS room_tasks (
+                        task_id TEXT PRIMARY KEY,
+                        room_id TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        description TEXT NOT NULL DEFAULT '',
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        priority TEXT NOT NULL DEFAULT 'medium',
+                        assigned_to TEXT,
+                        assigned_adapter TEXT,
+                        parent_task_id TEXT,
+                        dependencies TEXT NOT NULL DEFAULT '[]',
+                        created_by TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        result TEXT,
+                        metadata TEXT NOT NULL DEFAULT '{}',
+                        FOREIGN KEY (room_id) REFERENCES collaborative_rooms(room_id) ON DELETE CASCADE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_tasks_room_status ON room_tasks(room_id, status);
+                    CREATE INDEX IF NOT EXISTS idx_tasks_parent ON room_tasks(parent_task_id);
                 """)
                 conn.commit()
 
@@ -1650,6 +1671,186 @@ class SQLiteBackend(StorageBackend):
                 cursor.execute(
                     "DELETE FROM room_participants WHERE room_id = ? AND participant_id = ?",
                     (room_id, participant_id),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def create_room_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                now_iso = datetime.now(timezone.utc).isoformat()
+                created_at = task.get("created_at") or now_iso
+                updated_at = task.get("updated_at") or now_iso
+                deps = task.get("dependencies") or []
+                if not isinstance(deps, str):
+                    deps = json.dumps(deps)
+                meta = task.get("metadata") or {}
+                if not isinstance(meta, str):
+                    meta = json.dumps(meta)
+                res = task.get("result")
+                if res is not None and not isinstance(res, str):
+                    res = json.dumps(res)
+
+                cursor.execute(
+                    """
+                    INSERT INTO room_tasks (
+                        task_id, room_id, title, description, status, priority,
+                        assigned_to, assigned_adapter, parent_task_id, dependencies,
+                        created_by, created_at, updated_at, result, metadata
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(task_id) DO UPDATE SET
+                        title = excluded.title,
+                        description = excluded.description,
+                        status = excluded.status,
+                        priority = excluded.priority,
+                        assigned_to = excluded.assigned_to,
+                        assigned_adapter = excluded.assigned_adapter,
+                        parent_task_id = excluded.parent_task_id,
+                        dependencies = excluded.dependencies,
+                        updated_at = excluded.updated_at,
+                        result = excluded.result,
+                        metadata = excluded.metadata
+                    """,
+                    (
+                        task["task_id"],
+                        task["room_id"],
+                        task["title"],
+                        task.get("description", ""),
+                        task.get("status", "pending"),
+                        task.get("priority", "medium"),
+                        task.get("assigned_to"),
+                        task.get("assigned_adapter"),
+                        task.get("parent_task_id"),
+                        deps,
+                        task.get("created_by", "human"),
+                        created_at,
+                        updated_at,
+                        res,
+                        meta,
+                    ),
+                )
+                conn.commit()
+                found = self.get_room_task(task["room_id"], task["task_id"])
+                return found if found is not None else task
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_room_task(self, room_id: str, task_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM room_tasks WHERE room_id = ? AND task_id = ?",
+                    (room_id, task_id),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                data = dict(row)
+                data["dependencies"] = json.loads(data.get("dependencies") or "[]")
+                data["metadata"] = json.loads(data.get("metadata") or "{}")
+                if data.get("result"):
+                    try:
+                        data["result"] = json.loads(data["result"])
+                    except Exception:
+                        pass
+                return data
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_room_tasks(
+        self,
+        room_id: str,
+        status: Optional[str] = None,
+        assigned_to: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                sql = "SELECT * FROM room_tasks WHERE room_id = ?"
+                params: List[Any] = [room_id]
+                if status:
+                    sql += " AND status = ?"
+                    params.append(status)
+                if assigned_to:
+                    sql += " AND assigned_to = ?"
+                    params.append(assigned_to)
+                sql += " ORDER BY created_at ASC"
+
+                cursor.execute(sql, tuple(params))
+                rows = cursor.fetchall()
+                results = []
+                for row in rows:
+                    data = dict(row)
+                    data["dependencies"] = json.loads(data.get("dependencies") or "[]")
+                    data["metadata"] = json.loads(data.get("metadata") or "{}")
+                    if data.get("result"):
+                        try:
+                            data["result"] = json.loads(data["result"])
+                        except Exception:
+                            pass
+                    results.append(data)
+                return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def update_room_task(
+        self, room_id: str, task_id: str, updates: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                set_clauses: List[str] = []
+                params: List[Any] = []
+
+                for k, v in updates.items():
+                    if k in ("room_id", "task_id", "created_at", "created_by"):
+                        continue
+                    if (
+                        k in ("dependencies", "metadata", "result")
+                        and v is not None
+                        and not isinstance(v, str)
+                    ):
+                        v = json.dumps(v)
+                    set_clauses.append(f"{k} = ?")
+                    params.append(v)
+
+                if not set_clauses:
+                    return self.get_room_task(room_id, task_id)
+
+                set_clauses.append("updated_at = ?")
+                params.append(datetime.now(timezone.utc).isoformat())
+                params.append(room_id)
+                params.append(task_id)
+
+                sql = f"UPDATE room_tasks SET {', '.join(set_clauses)} WHERE room_id = ? AND task_id = ?"
+                cursor.execute(sql, tuple(params))
+                conn.commit()
+                return self.get_room_task(room_id, task_id)
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def delete_room_task(self, room_id: str, task_id: str) -> bool:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "DELETE FROM room_tasks WHERE room_id = ? AND task_id = ?",
+                    (room_id, task_id),
                 )
                 conn.commit()
                 return cursor.rowcount > 0

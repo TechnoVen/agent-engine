@@ -54,6 +54,11 @@ from core.safety import (
 from core.security import get_credential_manager, mask_secret
 from core.storage import get_storage_backend
 from core.updater import get_update_manager
+from core.rooms import (
+    RoomGovernance,
+    RoomProjectMapper,
+    RoomTaskManager,
+)
 
 
 from core.session import (
@@ -979,6 +984,59 @@ class UpdateCheckResponse(BaseModel):
     download_url: Optional[str] = None
     signature: Optional[str] = None
     sha256: Optional[str] = None
+
+
+class CreateRoomRequest(BaseModel):
+    project_id: str
+    name: str
+    description: str = ""
+    topic: str = ""
+    policy_id: Optional[str] = None
+    active_adapters: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class UpdateRoomRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    topic: Optional[str] = None
+    status: Optional[str] = None
+    policy_id: Optional[str] = None
+    active_adapters: Optional[List[str]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class AddRoomParticipantRequest(BaseModel):
+    participant_id: str
+    name: Optional[str] = None
+    role: str = "member"
+    participant_type: str = "human"
+    adapter_type: Optional[str] = None
+    permissions: Optional[List[str]] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class CreateRoomTaskRequest(BaseModel):
+    title: str
+    description: str = ""
+    priority: str = "medium"
+    assigned_to: Optional[str] = None
+    assigned_adapter: Optional[str] = None
+    parent_task_id: Optional[str] = None
+    dependencies: List[str] = Field(default_factory=list)
+    created_by: str = "human"
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class UpdateRoomTaskRequest(BaseModel):
+    status: Optional[str] = None
+    result: Optional[Dict[str, Any]] = None
+    updated_by: Optional[str] = None
+
+
+class ClaimRoomTaskRequest(BaseModel):
+    participant_id: str
+    adapter_type: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -3161,6 +3219,251 @@ async def test_adapter_endpoint(adapter_id: str):
             "version": getattr(adapter, "version", None),
             "details": {"error": str(e)},
         }
+
+
+# ---------------------------------------------------------------------------
+# Collaborative Rooms Endpoints (/v1/rooms/...)
+# ---------------------------------------------------------------------------
+
+
+@v1_router.post("/rooms", status_code=status.HTTP_201_CREATED)
+async def create_room(req: CreateRoomRequest):
+    """Create a new collaborative room overlay on a project."""
+    backend = get_storage_backend()
+    mapper = RoomProjectMapper(storage=backend)
+    room = mapper.create_room(
+        project_id=req.project_id,
+        name=req.name,
+        description=req.description,
+        topic=req.topic,
+        policy_id=req.policy_id,
+        active_adapters=req.active_adapters,
+        metadata=req.metadata,
+    )
+    return room.to_dict()
+
+
+@v1_router.get("/rooms")
+async def list_rooms(
+    project_id: Optional[str] = Query(None),
+    status_filter: Optional[str] = Query(None, alias="status"),
+):
+    """List collaborative rooms, optionally filtered by project or status."""
+    backend = get_storage_backend()
+    mapper = RoomProjectMapper(storage=backend)
+    rooms = mapper.list_rooms(project_id=project_id, status=status_filter)
+    return [r.to_dict() for r in rooms]
+
+
+@v1_router.get("/rooms/{room_id}")
+async def get_room(room_id: str):
+    """Fetch details for a specific collaborative room."""
+    backend = get_storage_backend()
+    mapper = RoomProjectMapper(storage=backend)
+    room = mapper.get_room(room_id)
+    if not room:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Room '{room_id}' not found",
+        )
+    return room.to_dict()
+
+
+@v1_router.patch("/rooms/{room_id}")
+async def update_room(room_id: str, req: UpdateRoomRequest):
+    """Update room attributes."""
+    backend = get_storage_backend()
+    mapper = RoomProjectMapper(storage=backend)
+    updates = req.model_dump(exclude_unset=True)
+    updated = mapper.update_room(room_id, **updates)
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Room '{room_id}' not found",
+        )
+    return updated.to_dict()
+
+
+@v1_router.delete("/rooms/{room_id}")
+async def delete_room(room_id: str):
+    """Delete a collaborative room."""
+    backend = get_storage_backend()
+    mapper = RoomProjectMapper(storage=backend)
+    deleted = mapper.delete_room(room_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Room '{room_id}' not found",
+        )
+    return {"deleted": True, "room_id": room_id}
+
+
+@v1_router.get("/rooms/{room_id}/context")
+async def get_room_context(
+    room_id: str,
+    prompt: str = Query(""),
+    project_instructions: str = Query(""),
+):
+    """Build ADR-014 dynamic context overlay for the room."""
+    backend = get_storage_backend()
+    mapper = RoomProjectMapper(storage=backend)
+    try:
+        context = mapper.build_room_context(
+            room_id=room_id,
+            prompt=prompt,
+            project_instructions=project_instructions,
+        )
+        return context
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@v1_router.post("/rooms/{room_id}/participants", status_code=status.HTTP_201_CREATED)
+async def add_room_participant(room_id: str, req: AddRoomParticipantRequest):
+    """Add or register a participant (human or agent) in the room."""
+    backend = get_storage_backend()
+    gov = RoomGovernance(storage=backend)
+    try:
+        participant = gov.add_participant(
+            room_id=room_id,
+            participant_id=req.participant_id,
+            name=req.name,
+            role=req.role,
+            participant_type=req.participant_type,
+            adapter_type=req.adapter_type,
+            permissions=req.permissions,
+            metadata=req.metadata,
+        )
+        return participant.to_dict()
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@v1_router.get("/rooms/{room_id}/participants")
+async def list_room_participants(room_id: str):
+    """List all participants registered in the room."""
+    backend = get_storage_backend()
+    gov = RoomGovernance(storage=backend)
+    participants = gov.list_participants(room_id)
+    return [p.to_dict() for p in participants]
+
+
+@v1_router.delete("/rooms/{room_id}/participants/{participant_id}")
+async def remove_room_participant(
+    room_id: str,
+    participant_id: str,
+    requested_by: Optional[str] = Query(None),
+):
+    """Remove a participant from the room."""
+    backend = get_storage_backend()
+    gov = RoomGovernance(storage=backend)
+    req_by = requested_by or participant_id
+    try:
+        removed = gov.remove_participant(
+            room_id=room_id,
+            participant_id=participant_id,
+            requested_by_id=req_by,
+        )
+        if not removed:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Participant '{participant_id}' not found in room '{room_id}'",
+            )
+        return {"removed": True, "participant_id": participant_id}
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+
+
+@v1_router.post("/rooms/{room_id}/tasks", status_code=status.HTTP_201_CREATED)
+async def create_room_task(room_id: str, req: CreateRoomTaskRequest):
+    """Create a task object as a workflow step in the room."""
+    backend = get_storage_backend()
+    gov = RoomGovernance(storage=backend)
+    task_mgr = RoomTaskManager(storage=backend, governance=gov)
+    try:
+        task = task_mgr.create_task(
+            room_id=room_id,
+            title=req.title,
+            description=req.description,
+            priority=req.priority,
+            assigned_to=req.assigned_to,
+            assigned_adapter=req.assigned_adapter,
+            parent_task_id=req.parent_task_id,
+            dependencies=req.dependencies,
+            created_by=req.created_by,
+            metadata=req.metadata,
+        )
+        return task.to_dict()
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+
+@v1_router.get("/rooms/{room_id}/tasks")
+async def list_room_tasks(
+    room_id: str,
+    status_filter: Optional[str] = Query(None, alias="status"),
+    assigned_to: Optional[str] = Query(None),
+):
+    """List tasks in the room."""
+    backend = get_storage_backend()
+    gov = RoomGovernance(storage=backend)
+    task_mgr = RoomTaskManager(storage=backend, governance=gov)
+    tasks = task_mgr.list_tasks(room_id=room_id, status=status_filter, assigned_to=assigned_to)
+    return [t.to_dict() for t in tasks]
+
+
+@v1_router.get("/rooms/{room_id}/tasks/{task_id}")
+async def get_room_task(room_id: str, task_id: str):
+    """Fetch details for a task in the room."""
+    backend = get_storage_backend()
+    gov = RoomGovernance(storage=backend)
+    task_mgr = RoomTaskManager(storage=backend, governance=gov)
+    task = task_mgr.get_task(room_id, task_id)
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task '{task_id}' not found in room '{room_id}'",
+        )
+    return task.to_dict()
+
+
+@v1_router.post("/rooms/{room_id}/tasks/{task_id}/claim")
+async def claim_room_task(room_id: str, task_id: str, req: ClaimRoomTaskRequest):
+    """Claim a task for execution."""
+    backend = get_storage_backend()
+    gov = RoomGovernance(storage=backend)
+    task_mgr = RoomTaskManager(storage=backend, governance=gov)
+    try:
+        task = task_mgr.claim_task(
+            room_id=room_id,
+            task_id=task_id,
+            participant_id=req.participant_id,
+            adapter_type=req.adapter_type,
+        )
+        return task.to_dict()
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@v1_router.patch("/rooms/{room_id}/tasks/{task_id}")
+async def update_room_task(room_id: str, task_id: str, req: UpdateRoomTaskRequest):
+    """Update task status or completion result."""
+    backend = get_storage_backend()
+    gov = RoomGovernance(storage=backend)
+    task_mgr = RoomTaskManager(storage=backend, governance=gov)
+    try:
+        task = task_mgr.update_task_status(
+            room_id=room_id,
+            task_id=task_id,
+            status=req.status or "completed",
+            result=req.result,
+            updated_by=req.updated_by,
+        )
+        return task.to_dict()
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
 
 
 # Mount router to FastAPI app

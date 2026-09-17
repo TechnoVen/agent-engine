@@ -12,6 +12,12 @@ from core.rooms.roles import (
     RoomParticipant,
     RoomRole,
 )
+from core.rooms.tasks import (
+    RoomTask,
+    RoomTaskManager,
+    RoomTaskPriority,
+    RoomTaskStatus,
+)
 
 __all__ = [
     "CollaborativeRoom",
@@ -20,4 +26,8 @@ __all__ = [
     "RoomParticipant",
     "RoomGovernance",
     "DEFAULT_ROLE_PERMISSIONS",
+    "RoomTask",
+    "RoomTaskStatus",
+    "RoomTaskPriority",
+    "RoomTaskManager",
 ]

@@ -33,6 +33,12 @@ import {
   AdapterHealth,
   AdapterExecutionRequest,
   AdapterExecutionResponse,
+  CollaborativeRoom,
+  CreateRoomPayload,
+  RoomParticipant,
+  AddRoomParticipantPayload,
+  RoomTask,
+  CreateRoomTaskPayload,
 } from '../types';
 
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
@@ -1219,7 +1225,168 @@ class SidecarClient {
       return false;
     }
   }
+
+  // Collaborative Rooms (Phase 5B - Milestone M4)
+  async createRoom(payload: CreateRoomPayload): Promise<CollaborativeRoom> {
+    const res = await fetch(`${this.base}/v1/rooms`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to create room: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async listRooms(projectId?: string, status?: string): Promise<CollaborativeRoom[]> {
+    const params = new URLSearchParams();
+    if (projectId) params.append('project_id', projectId);
+    if (status) params.append('status', status);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    const res = await fetch(`${this.base}/v1/rooms${query}`);
+    if (!res.ok) {
+      throw new Error(`Failed to list rooms: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async getRoom(roomId: string): Promise<CollaborativeRoom> {
+    const res = await fetch(`${this.base}/v1/rooms/${roomId}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to get room: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async updateRoom(roomId: string, updates: Partial<CreateRoomPayload & { status: string }>): Promise<CollaborativeRoom> {
+    const res = await fetch(`${this.base}/v1/rooms/${roomId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to update room: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async deleteRoom(roomId: string): Promise<boolean> {
+    const res = await fetch(`${this.base}/v1/rooms/${roomId}`, {
+      method: 'DELETE',
+    });
+    return res.ok;
+  }
+
+  async getRoomContext(roomId: string, prompt: string = '', projectInstructions: string = ''): Promise<Record<string, any>> {
+    const params = new URLSearchParams();
+    if (prompt) params.append('prompt', prompt);
+    if (projectInstructions) params.append('project_instructions', projectInstructions);
+    const res = await fetch(`${this.base}/v1/rooms/${roomId}/context?${params.toString()}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to get room context: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async addRoomParticipant(roomId: string, payload: AddRoomParticipantPayload): Promise<RoomParticipant> {
+    const res = await fetch(`${this.base}/v1/rooms/${roomId}/participants`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to add room participant: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async listRoomParticipants(roomId: string): Promise<RoomParticipant[]> {
+    const res = await fetch(`${this.base}/v1/rooms/${roomId}/participants`);
+    if (!res.ok) {
+      throw new Error(`Failed to list room participants: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async removeRoomParticipant(roomId: string, participantId: string, requestedBy?: string): Promise<boolean> {
+    const query = requestedBy ? `?requested_by=${encodeURIComponent(requestedBy)}` : '';
+    const res = await fetch(`${this.base}/v1/rooms/${roomId}/participants/${participantId}${query}`, {
+      method: 'DELETE',
+    });
+    return res.ok;
+  }
+
+  async createRoomTask(roomId: string, payload: CreateRoomTaskPayload): Promise<RoomTask> {
+    const res = await fetch(`${this.base}/v1/rooms/${roomId}/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to create room task: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async listRoomTasks(roomId: string, status?: string, assignedTo?: string): Promise<RoomTask[]> {
+    const params = new URLSearchParams();
+    if (status) params.append('status', status);
+    if (assignedTo) params.append('assigned_to', assignedTo);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    const res = await fetch(`${this.base}/v1/rooms/${roomId}/tasks${query}`);
+    if (!res.ok) {
+      throw new Error(`Failed to list room tasks: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async getRoomTask(roomId: string, taskId: string): Promise<RoomTask> {
+    const res = await fetch(`${this.base}/v1/rooms/${roomId}/tasks/${taskId}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to get room task: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async claimRoomTask(roomId: string, taskId: string, participantId: string, adapterType?: string): Promise<RoomTask> {
+    const res = await fetch(`${this.base}/v1/rooms/${roomId}/tasks/${taskId}/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ participant_id: participantId, adapter_type: adapterType }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to claim room task: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async updateRoomTask(
+    roomId: string,
+    taskId: string,
+    payload: { status?: string; result?: Record<string, any>; updated_by?: string }
+  ): Promise<RoomTask> {
+    const res = await fetch(`${this.base}/v1/rooms/${roomId}/tasks/${taskId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to update room task: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
 }
+
 
 export const DEFAULT_SKILLS_CATALOG: SkillItem[] = [
   {

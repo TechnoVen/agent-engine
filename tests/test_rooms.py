@@ -8,16 +8,23 @@ Covers:
 from pathlib import Path
 import tempfile
 
+from fastapi.testclient import TestClient
 import pytest
 
+from core.adapters.mock import MockAgentAdapter
 from core.rooms import (
     CollaborativeRoom,
     RoomGovernance,
     RoomParticipant,
     RoomProjectMapper,
     RoomRole,
+    RoomTask,
+    RoomTaskManager,
+    RoomTaskPriority,
+    RoomTaskStatus,
 )
 from core.storage.sqlite import SQLiteBackend
+from services.python.server.api import app
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -347,3 +354,328 @@ def test_room_governance_rbac_and_role_change(temp_sqlite):
         is True
     )
     assert gov.get_participant(room.room_id, "viewer_user") is None
+
+
+def test_room_task_domain_model():
+    """Verify RoomTask serialization, deserialization, and enum conversions."""
+    task = RoomTask(
+        task_id="rtask_101",
+        room_id="room_alpha",
+        title="Implement DSPy signature",
+        description="Write typed signatures for intent parser",
+        status=RoomTaskStatus.PENDING,
+        priority=RoomTaskPriority.HIGH,
+        assigned_to="agent_codex",
+        assigned_adapter="codex",
+        parent_task_id=None,
+        dependencies=["rtask_100"],
+        created_by="alice",
+        metadata={"milestone": "M4"},
+    )
+
+    data = task.to_dict()
+    assert data["task_id"] == "rtask_101"
+    assert data["status"] == "pending"
+    assert data["priority"] == "high"
+    assert data["dependencies"] == ["rtask_100"]
+    assert data["assigned_adapter"] == "codex"
+
+    rebuilt = RoomTask.from_dict(data)
+    assert rebuilt.task_id == task.task_id
+    assert rebuilt.status == RoomTaskStatus.PENDING
+    assert rebuilt.priority == RoomTaskPriority.HIGH
+    assert rebuilt.metadata["milestone"] == "M4"
+
+
+def test_room_task_manager_lifecycle_and_dependencies(temp_sqlite):
+    """Verify RoomTaskManager task creation, dependencies blocking, claiming, and unblocking."""
+    mapper = RoomProjectMapper(storage=temp_sqlite)
+    gov = RoomGovernance(storage=temp_sqlite)
+    mgr = RoomTaskManager(storage=temp_sqlite, governance=gov)
+
+    room = mapper.create_room(project_id="p-alpha", name="Workflow Room")
+    gov.add_participant(room_id=room.room_id, participant_id="worker_bob", role=RoomRole.MEMBER)
+
+    # 1. Create root task (no dependencies -> PENDING)
+    t1 = mgr.create_task(
+        room_id=room.room_id,
+        title="Step 1: Database Schema",
+        description="Migrate SQLite tables",
+        created_by="alice",
+    )
+    assert t1.status == RoomTaskStatus.PENDING
+
+    # 2. Create dependent task (depends on t1 -> BLOCKED)
+    t2 = mgr.create_task(
+        room_id=room.room_id,
+        title="Step 2: Backend API",
+        description="Expose FastAPI endpoints",
+        dependencies=[t1.task_id],
+        created_by="alice",
+    )
+    assert t2.status == RoomTaskStatus.BLOCKED
+
+    # 3. Attempting to claim blocked task raises ValueError
+    with pytest.raises(ValueError, match="dependencies are not yet completed"):
+        mgr.claim_task(
+            room_id=room.room_id,
+            task_id=t2.task_id,
+            participant_id="worker_bob",
+        )
+
+    # 4. Claim root task
+    claimed_t1 = mgr.claim_task(
+        room_id=room.room_id,
+        task_id=t1.task_id,
+        participant_id="worker_bob",
+    )
+    assert claimed_t1.status == RoomTaskStatus.IN_PROGRESS
+    assert claimed_t1.assigned_to == "worker_bob"
+
+    # 5. Complete root task -> auto unblock downstream t2
+    completed_t1 = mgr.update_task_status(
+        room_id=room.room_id,
+        task_id=t1.task_id,
+        status=RoomTaskStatus.COMPLETED,
+        result={"tables_created": 3},
+    )
+    assert completed_t1.status == RoomTaskStatus.COMPLETED
+
+    # Check that t2 has been automatically unblocked to PENDING
+    re_t2 = mgr.get_task(room_id=room.room_id, task_id=t2.task_id)
+    assert re_t2.status == RoomTaskStatus.PENDING
+
+    # 6. Now claim t2
+    claimed_t2 = mgr.claim_task(
+        room_id=room.room_id,
+        task_id=t2.task_id,
+        participant_id="worker_bob",
+    )
+    assert claimed_t2.status == RoomTaskStatus.IN_PROGRESS
+
+
+@pytest.mark.anyio
+async def test_room_task_manager_adapter_dispatch(temp_sqlite):
+    """Verify autonomous agent adapter execution dispatch for workflow steps."""
+    mapper = RoomProjectMapper(storage=temp_sqlite)
+    gov = RoomGovernance(storage=temp_sqlite)
+    mgr = RoomTaskManager(storage=temp_sqlite, governance=gov)
+
+    room = mapper.create_room(project_id="p-alpha", name="Dispatch Room")
+    gov.add_participant(
+        room_id=room.room_id,
+        participant_id="mock-agent",
+        role=RoomRole.AGENT,
+        participant_type="agent",
+        adapter_type="mock-agent",
+    )
+
+    task = mgr.create_task(
+        room_id=room.room_id,
+        title="Generate test summary",
+        description="Echo input and calculate progress",
+        created_by="system",
+    )
+
+    mock_adapter = MockAgentAdapter(adapter_id="mock-agent", name="Mock Agent")
+    mock_adapter.initialize()
+
+    result = await mgr.dispatch_task_to_adapter(
+        room_id=room.room_id,
+        task_id=task.task_id,
+        adapter=mock_adapter,
+        prompt="Execute step: Echo calculate 2 + 2",
+    )
+
+    assert "Echo [mock-agent]" in result.get("content", "")
+
+    # Task should now be COMPLETED with result attached
+    completed_task = mgr.get_task(room.room_id, task.task_id)
+    assert completed_task.status == RoomTaskStatus.COMPLETED
+    assert completed_task.assigned_to == "mock-agent"
+    assert completed_task.result is not None
+
+
+def test_room_rest_api_contract():
+    """Verify full FastAPI REST API contract for Collaborative Rooms, participants, and tasks."""
+    client = TestClient(app)
+
+    # 1. Create Room
+    create_payload = {
+        "project_id": "p-api-test",
+        "name": "API Review Room",
+        "description": "Validating /v1/rooms REST endpoints",
+        "topic": "Phase 5B verification",
+        "active_adapters": ["claude-code"],
+        "metadata": {"test": True},
+    }
+    res = client.post("/v1/rooms", json=create_payload)
+    assert res.status_code == 201
+    room = res.json()
+    room_id = room["room_id"]
+    assert room["name"] == "API Review Room"
+
+    # 2. Get Room
+    res = client.get(f"/v1/rooms/{room_id}")
+    assert res.status_code == 200
+    assert res.json()["room_id"] == room_id
+
+    # 3. List Rooms
+    res = client.get("/v1/rooms?project_id=p-api-test")
+    assert res.status_code == 200
+    rooms = res.json()
+    assert any(r["room_id"] == room_id for r in rooms)
+
+    # 4. Patch Room
+    res = client.patch(
+        f"/v1/rooms/{room_id}",
+        json={"topic": "Updated Topic", "description": "New description"},
+    )
+    assert res.status_code == 200
+    assert res.json()["topic"] == "Updated Topic"
+
+    # 5. Room Context Overlay (ADR-014)
+    res = client.get(
+        f"/v1/rooms/{room_id}/context?prompt=TestPrompt&project_instructions=DoCleanCode"
+    )
+    assert res.status_code == 200
+    ctx = res.json()
+    assert "[Project Instructions]: DoCleanCode" in ctx["augmented_prompt"]
+
+    # 6. Add Participant
+    res = client.post(
+        f"/v1/rooms/{room_id}/participants",
+        json={
+            "participant_id": "user_api_1",
+            "name": "Tester",
+            "role": "admin",
+        },
+    )
+    assert res.status_code == 201
+    assert res.json()["role"] == "admin"
+
+    # 7. List Participants
+    res = client.get(f"/v1/rooms/{room_id}/participants")
+    assert res.status_code == 200
+    assert len(res.json()) >= 1
+
+    # 8. Create Task
+    task_res = client.post(
+        f"/v1/rooms/{room_id}/tasks",
+        json={
+            "title": "API Test Task",
+            "description": "Task created via REST API",
+            "priority": "high",
+        },
+    )
+    assert task_res.status_code == 201
+    task = task_res.json()
+    task_id = task["task_id"]
+    assert task["status"] == "pending"
+
+    # 9. Claim Task
+    claim_res = client.post(
+        f"/v1/rooms/{room_id}/tasks/{task_id}/claim",
+        json={"participant_id": "user_api_1"},
+    )
+    assert claim_res.status_code == 200
+    assert claim_res.json()["status"] == "in_progress"
+
+    # 10. Update Task
+    update_res = client.patch(
+        f"/v1/rooms/{room_id}/tasks/{task_id}",
+        json={"status": "completed", "result": {"success": True}},
+    )
+    assert update_res.status_code == 200
+    assert update_res.json()["status"] == "completed"
+
+    # 11. Delete Participant (self-leave)
+    del_part = client.delete(f"/v1/rooms/{room_id}/participants/user_api_1?requested_by=user_api_1")
+    assert del_part.status_code == 200
+    assert del_part.json()["removed"] is True
+
+    # 12. Delete Room
+    del_room = client.delete(f"/v1/rooms/{room_id}")
+    assert del_room.status_code == 200
+    assert del_room.json()["deleted"] is True
+
+
+def test_room_task_filtering_and_subtasks(temp_sqlite):
+    """Verify task query filtering by status and assignee, plus subtask relationships."""
+    mapper = RoomProjectMapper(storage=temp_sqlite)
+    mgr = RoomTaskManager(storage=temp_sqlite)
+
+    room = mapper.create_room(project_id="p-alpha", name="Subtask Room")
+
+    # Parent Task
+    parent = mgr.create_task(
+        room_id=room.room_id,
+        title="Parent Workflow",
+        description="Coordinates subtasks",
+        created_by="lead",
+    )
+
+    # Subtasks
+    sub1 = mgr.create_task(
+        room_id=room.room_id,
+        title="Subtask 1: Parse AST",
+        parent_task_id=parent.task_id,
+        assigned_to="developer_1",
+        created_by="lead",
+    )
+    sub2 = mgr.create_task(
+        room_id=room.room_id,
+        title="Subtask 2: Verify Lint",
+        parent_task_id=parent.task_id,
+        assigned_to="developer_2",
+        created_by="lead",
+    )
+
+    # Filter by assignee
+    dev1_tasks = mgr.list_tasks(room_id=room.room_id, assigned_to="developer_1")
+    assert len(dev1_tasks) == 1
+    assert dev1_tasks[0].task_id == sub1.task_id
+    assert dev1_tasks[0].parent_task_id == parent.task_id
+    assert sub2.parent_task_id == parent.task_id
+
+    # Filter by status
+    mgr.update_task_status(
+        room_id=room.room_id, task_id=sub1.task_id, status=RoomTaskStatus.COMPLETED
+    )
+    completed_tasks = mgr.list_tasks(room_id=room.room_id, status=RoomTaskStatus.COMPLETED)
+    assert len(completed_tasks) == 1
+    assert completed_tasks[0].task_id == sub1.task_id
+
+
+@pytest.mark.anyio
+async def test_room_task_adapter_failure_handling(temp_sqlite):
+    """Verify adapter failure transitions task to FAILED status and records error metadata."""
+    mapper = RoomProjectMapper(storage=temp_sqlite)
+    mgr = RoomTaskManager(storage=temp_sqlite)
+
+    room = mapper.create_room(project_id="p-alpha", name="Failure Test Room")
+
+    task = mgr.create_task(
+        room_id=room.room_id,
+        title="Crashing task",
+        created_by="test",
+    )
+
+    class FailingAdapter:
+        adapter_id = "failing-adapter"
+        name = "Failing Adapter"
+
+        async def execute(self, req):
+            raise RuntimeError("Simulated network timeout")
+
+    failing = FailingAdapter()
+    with pytest.raises(RuntimeError, match="Simulated network timeout"):
+        await mgr.dispatch_task_to_adapter(
+            room_id=room.room_id,
+            task_id=task.task_id,
+            adapter=failing,
+        )
+
+    failed_task = mgr.get_task(room_id=room.room_id, task_id=task.task_id)
+    assert failed_task.status == RoomTaskStatus.FAILED
+    assert "Simulated network timeout" in failed_task.result["error"]

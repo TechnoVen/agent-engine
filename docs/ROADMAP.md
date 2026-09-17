@@ -315,7 +315,9 @@
 - [x] **Task 5B.2 — Room Roles & Governance** (`core/rooms/roles.py` - admin, member, viewer room permissions)
   - **Acceptance Criteria:** `RoomRole` enum (`ADMIN`, `MEMBER`, `VIEWER`, `AGENT`), `RoomParticipant` model, `RoomGovernance` RBAC manager (`can_perform`, `add_participant`, `remove_participant`, `change_role`), thread-safe SQLite `room_participants` persistence with CASCADE deletion; test count strictly increases (272 → 275); 100% of monorepo tests pass (275/275).
   - **Status:** ✅ DONE
-- [ ] **Task 5B.3 — Task Objects as Workflow Steps** (`core/rooms/tasks.py` - persistent task queue for humans and agents)
+- [x] **Task 5B.3 — Task Objects as Workflow Steps** (`core/rooms/tasks.py` - persistent task queue for humans and agents)
+  - **Acceptance Criteria:** `RoomTask` domain model, `RoomTaskStatus`, `RoomTaskPriority`, `RoomTaskManager` (dependency resolution, claiming, automatic unblocking, and adapter dispatch), thread-safe SQLite `room_tasks` persistence, `/v1/rooms` REST API endpoints, OpenAPI specification, desktop TypeScript client integration; test count strictly increases (275 → 281); 100% of monorepo tests pass (281/281).
+  - **Status:** ✅ DONE
 
 ---
 
