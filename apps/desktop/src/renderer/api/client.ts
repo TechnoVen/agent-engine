@@ -1018,8 +1018,13 @@ class SidecarClient {
       channels: {
         slack_enabled: false,
         slack_webhook_url: null,
+        teams_enabled: false,
+        teams_app_id: null,
+        teams_webhook_url: null,
         discord_enabled: false,
         discord_webhook_url: null,
+        mattermost_enabled: false,
+        mattermost_url: null,
         telegram_enabled: false,
         telegram_bot_token: null,
         whatsapp_enabled: false,
@@ -1136,6 +1141,34 @@ class SidecarClient {
       message: 'Network or client error probing adapter',
       latency_ms: 0,
     };
+  }
+
+  async sendSlackEvent(payload: Record<string, any>): Promise<any> {
+    try {
+      const res = await fetch(`${this.base}/v1/channels/slack/events`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) return await res.json();
+    } catch (err) {
+      console.error('Failed to send Slack event:', err);
+    }
+    return null;
+  }
+
+  async sendTeamsActivity(payload: Record<string, any>): Promise<any> {
+    try {
+      const res = await fetch(`${this.base}/v1/channels/teams/activities`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) return await res.json();
+    } catch (err) {
+      console.error('Failed to send Teams activity:', err);
+    }
+    return null;
   }
 
 

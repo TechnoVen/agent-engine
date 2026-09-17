@@ -3498,6 +3498,26 @@ async def slack_events_webhook(request: Request):
     }
 
 
+@v1_router.post("/channels/teams/activities")
+async def teams_activities_webhook(request: Request):
+    """Incoming webhook for Microsoft Teams Bot Framework Activities."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON")
+
+    reg = get_adapter_registry()
+    adapter = reg.get("teams")
+    if not adapter:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Teams adapter not found")
+
+    normalized = adapter.normalize_inbound(body)
+    return {
+        "status": "received",
+        "normalized": normalized,
+    }
+
+
 # Mount router to FastAPI app
 
 

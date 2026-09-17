@@ -63,6 +63,8 @@ class ChannelSettings:
     slack_app_token: Optional[str] = None
     teams_enabled: bool = False
     teams_app_id: Optional[str] = None
+    teams_app_password: Optional[str] = None
+    teams_tenant_id: Optional[str] = None
     teams_webhook_url: Optional[str] = None
     discord_enabled: bool = False
     discord_webhook_url: Optional[str] = None

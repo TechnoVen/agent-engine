@@ -533,6 +533,42 @@ paths:
               schema:
                 type: object
 
+  /channels/slack/events:
+    post:
+      summary: Incoming webhook for Slack Events API and Socket Mode verification
+      operationId: slackEventsWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Event processed or URL challenge answered
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /channels/teams/activities:
+    post:
+      summary: Incoming webhook for Microsoft Teams Bot Framework Activities
+      operationId: teamsActivitiesWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Bot activity received and normalized
+          content:
+            application/json:
+              schema:
+                type: object
+
   /rooms:
     post:
       summary: Create collaborative room

@@ -165,6 +165,7 @@ def get_adapter_registry() -> AdapterRegistry:
         )
         from core.adapters.openclaw import OpenClawAdapter
         from core.adapters.slack import SlackAdapter
+        from core.adapters.teams import TeamsAdapter
 
         _GLOBAL_ADAPTER_REGISTRY.register(ClaudeCodeAdapter())
         _GLOBAL_ADAPTER_REGISTRY.register(CodexAdapter())
@@ -175,4 +176,5 @@ def get_adapter_registry() -> AdapterRegistry:
         _GLOBAL_ADAPTER_REGISTRY.register(HermesAdapter())
         _GLOBAL_ADAPTER_REGISTRY.register(MCPFallbackAdapter())
         _GLOBAL_ADAPTER_REGISTRY.register(SlackAdapter())
+        _GLOBAL_ADAPTER_REGISTRY.register(TeamsAdapter())
     return _GLOBAL_ADAPTER_REGISTRY

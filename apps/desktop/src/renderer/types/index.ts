@@ -532,8 +532,19 @@ export interface AdapterSettingsConfig {
 export interface ChannelSettingsConfig {
   slack_enabled: boolean;
   slack_webhook_url?: string | null;
+  slack_bot_token?: string | null;
+  slack_app_token?: string | null;
+  teams_enabled: boolean;
+  teams_app_id?: string | null;
+  teams_app_password?: string | null;
+  teams_tenant_id?: string | null;
+  teams_webhook_url?: string | null;
   discord_enabled: boolean;
   discord_webhook_url?: string | null;
+  discord_bot_token?: string | null;
+  mattermost_enabled: boolean;
+  mattermost_url?: string | null;
+  mattermost_bot_token?: string | null;
   telegram_enabled: boolean;
   telegram_bot_token?: string | null;
   whatsapp_enabled: boolean;

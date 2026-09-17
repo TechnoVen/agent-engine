@@ -31,6 +31,7 @@ from core.adapters.registry import (
     get_adapter_registry,
 )
 from core.adapters.slack import SlackAdapter
+from core.adapters.teams import TeamsAdapter
 
 __all__ = [
     "AgentAdapter",
@@ -40,6 +41,7 @@ __all__ = [
     "GooseAdapter",
     "OpenClawAdapter",
     "SlackAdapter",
+    "TeamsAdapter",
     "CursorAdapter",
     "WindsurfAdapter",
     "HermesAdapter",
