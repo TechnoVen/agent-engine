@@ -473,6 +473,29 @@ class StorageBackend(ABC):
         """Delete a scheduled task by ID."""
         return False
 
+    # --- 9. COLLABORATIVE ROOMS ---
+    def create_room(self, room: Dict[str, Any]) -> Dict[str, Any]:
+        """Create and persist a collaborative room."""
+        return room
+
+    def get_room(self, room_id: str) -> Optional[Dict[str, Any]]:
+        """Get a collaborative room by ID."""
+        return None
+
+    def list_rooms(
+        self, project_id: Optional[str] = None, status: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """List collaborative rooms, optionally filtered by project or status."""
+        return []
+
+    def update_room(self, room_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update a collaborative room."""
+        return None
+
+    def delete_room(self, room_id: str) -> bool:
+        """Delete or archive a collaborative room."""
+        return False
+
 
 # Backward-compatible and semantic alias
 StorageRepository = StorageBackend

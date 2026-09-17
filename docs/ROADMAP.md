@@ -309,7 +309,9 @@
 
 ## Phase 5B — Native Collaborative Rooms (Milestone M4)
 
-- [ ] **Task 5B.1 — Room ↔ Project Mapping** (`core/rooms/mapper.py` - collaborative multi-agent overlay on projects)
+- [x] **Task 5B.1 — Room ↔ Project Mapping** (`core/rooms/mapper.py` - collaborative multi-agent overlay on projects)
+  - **Acceptance Criteria:** `CollaborativeRoom` domain model, `RoomProjectMapper` with project context overlay injection (ADR-014), SQLite schema & thread-safe storage CRUD; test count strictly increases (268 → 272); 100% of monorepo tests pass (272/272).
+  - **Status:** ✅ DONE
 - [ ] **Task 5B.2 — Room Roles & Governance** (`core/rooms/roles.py` - admin, member, viewer room permissions)
 - [ ] **Task 5B.3 — Task Objects as Workflow Steps** (`core/rooms/tasks.py` - persistent task queue for humans and agents)
 

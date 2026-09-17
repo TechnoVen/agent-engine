@@ -9,6 +9,7 @@ import os
 import sqlite3
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -162,6 +163,23 @@ class SQLiteBackend(StorageBackend):
                         created_at TEXT NOT NULL
                     );
                     CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_status ON scheduled_tasks(status);
+
+                    CREATE TABLE IF NOT EXISTS collaborative_rooms (
+                        room_id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        description TEXT NOT NULL DEFAULT '',
+                        topic TEXT NOT NULL DEFAULT '',
+                        status TEXT NOT NULL DEFAULT 'active',
+                        policy_id TEXT,
+                        active_adapters TEXT NOT NULL DEFAULT '[]',
+                        session_ids TEXT NOT NULL DEFAULT '[]',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        metadata TEXT NOT NULL DEFAULT '{}'
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_rooms_project ON collaborative_rooms(project_id);
+                    CREATE INDEX IF NOT EXISTS idx_rooms_status ON collaborative_rooms(status);
                 """)
                 conn.commit()
 
@@ -1329,6 +1347,157 @@ class SQLiteBackend(StorageBackend):
             try:
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM scheduled_tasks WHERE id = ?", (task_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    # --- 9. COLLABORATIVE ROOMS ---
+
+    def create_room(self, room: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                now_iso = datetime.now(timezone.utc).isoformat()
+                room_id = room.get("room_id") or f"room_{uuid.uuid4().hex[:10]}"
+                created_at = room.get("created_at") or now_iso
+                updated_at = room.get("updated_at") or now_iso
+
+                active_adapters = room.get("active_adapters") or []
+                if not isinstance(active_adapters, str):
+                    active_adapters = json.dumps(active_adapters)
+
+                session_ids = room.get("session_ids") or []
+                if not isinstance(session_ids, str):
+                    session_ids = json.dumps(session_ids)
+
+                meta = room.get("metadata") or {}
+                if not isinstance(meta, str):
+                    meta = json.dumps(meta)
+
+                cursor.execute(
+                    """
+                    INSERT INTO collaborative_rooms (
+                        room_id, project_id, name, description, topic, status,
+                        policy_id, active_adapters, session_ids, created_at, updated_at, metadata
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        room_id,
+                        room.get("project_id", "default"),
+                        room.get("name", "Untitled Room"),
+                        room.get("description", ""),
+                        room.get("topic", ""),
+                        room.get("status", "active"),
+                        room.get("policy_id"),
+                        active_adapters,
+                        session_ids,
+                        created_at,
+                        updated_at,
+                        meta,
+                    ),
+                )
+                conn.commit()
+                return self.get_room(room_id) or room
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_room(self, room_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM collaborative_rooms WHERE room_id = ?", (room_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                data = dict(row)
+                data["active_adapters"] = json.loads(data.get("active_adapters") or "[]")
+                data["session_ids"] = json.loads(data.get("session_ids") or "[]")
+                data["metadata"] = json.loads(data.get("metadata") or "{}")
+                return data
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_rooms(
+        self, project_id: Optional[str] = None, status: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                query = "SELECT * FROM collaborative_rooms"
+                params: List[Any] = []
+                clauses: List[str] = []
+
+                if project_id:
+                    clauses.append("project_id = ?")
+                    params.append(project_id)
+                if status:
+                    clauses.append("status = ?")
+                    params.append(status)
+
+                if clauses:
+                    query += " WHERE " + " AND ".join(clauses)
+                query += " ORDER BY updated_at DESC"
+
+                cursor.execute(query, tuple(params))
+                rows = cursor.fetchall()
+                results = []
+                for row in rows:
+                    data = dict(row)
+                    data["active_adapters"] = json.loads(data.get("active_adapters") or "[]")
+                    data["session_ids"] = json.loads(data.get("session_ids") or "[]")
+                    data["metadata"] = json.loads(data.get("metadata") or "{}")
+                    results.append(data)
+                return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def update_room(self, room_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                set_clauses: List[str] = []
+                params: List[Any] = []
+
+                for k, v in updates.items():
+                    if k in ("room_id", "created_at"):
+                        continue
+                    if k in ("active_adapters", "session_ids", "metadata") and not isinstance(
+                        v, str
+                    ):
+                        v = json.dumps(v)
+                    set_clauses.append(f"{k} = ?")
+                    params.append(v)
+
+                if not set_clauses:
+                    return self.get_room(room_id)
+
+                set_clauses.append("updated_at = ?")
+                params.append(datetime.now(timezone.utc).isoformat())
+                params.append(room_id)
+
+                sql = f"UPDATE collaborative_rooms SET {', '.join(set_clauses)} WHERE room_id = ?"
+                cursor.execute(sql, tuple(params))
+                conn.commit()
+                return self.get_room(room_id)
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def delete_room(self, room_id: str) -> bool:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM collaborative_rooms WHERE room_id = ?", (room_id,))
                 conn.commit()
                 return cursor.rowcount > 0
             finally:
