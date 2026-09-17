@@ -72,6 +72,12 @@ from core.telemetry import (
     get_cost_tracker,
     get_hardware_telemetry_tracker,
 )
+from core.skills import (
+    MultiToolSkillDiscovery,
+    SkillEditor,
+    SkillFormat,
+    SkillSource,
+)
 from core.templates import TemplateManager
 from server.watcher import apply_staged_patch, get_staged_patches, reject_staged_patch
 
@@ -237,6 +243,55 @@ class SkillInfo(BaseModel):
     description: str = ""
     inputs: List[str] = Field(default_factory=list)
     outputs: List[str] = Field(default_factory=list)
+    source: Optional[str] = None
+    author: Optional[str] = None
+    version: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
+    tools: List[str] = Field(default_factory=list)
+    format: Optional[str] = None
+    file_path: Optional[str] = None
+    content: Optional[str] = None
+    is_readonly: bool = False
+
+
+class CreateSkillRequest(BaseModel):
+    name: str
+    description: str = ""
+    content: str = ""
+    skill_id: Optional[str] = None
+    source: str = "agent-engine"
+    author: str = "local"
+    version: str = "1.0.0"
+    category: str = "General"
+    tags: List[str] = Field(default_factory=list)
+    inputs: List[str] = Field(default_factory=list)
+    outputs: List[str] = Field(default_factory=list)
+    tools: List[str] = Field(default_factory=list)
+    format: str = "markdown"
+
+
+class UpdateSkillRequest(BaseModel):
+    content: Optional[str] = None
+    name: Optional[str] = None
+    description: Optional[str] = None
+    version: Optional[str] = None
+    tags: Optional[List[str]] = None
+    inputs: Optional[List[str]] = None
+    outputs: Optional[List[str]] = None
+    tools: Optional[List[str]] = None
+    category: Optional[str] = None
+
+
+class ValidateSkillRequest(BaseModel):
+    content: str
+    format: str = "markdown"
+
+
+class ValidateSkillResponse(BaseModel):
+    valid: bool
+    errors: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+    parsed_metadata: Optional[Dict[str, Any]] = None
 
 
 class ExecuteSkillRequest(BaseModel):
@@ -1279,24 +1334,273 @@ async def list_agents():
 
 
 @v1_router.get("/skills", response_model=List[SkillInfo])
-async def list_skills():
-    """List available skill templates from the catalog."""
-    templates = TemplateManager.list_templates()
-    skills_list = []
-    for t in templates:
-        in_fields = list(t.inputs.keys()) if isinstance(t.inputs, dict) else t.inputs
-        out_fields = list(t.outputs.keys()) if isinstance(t.outputs, dict) else t.outputs
-        skills_list.append(
-            SkillInfo(
-                id=t.id,
-                name=t.name,
-                category=t.category,
-                description=t.description,
-                inputs=in_fields,
-                outputs=out_fields,
+async def list_skills(
+    source: Optional[str] = None,
+    category: Optional[str] = None,
+    search: Optional[str] = None,
+    tag: Optional[str] = None,
+):
+    """List available skills and templates discovered across developer tools."""
+    discovery = MultiToolSkillDiscovery()
+    skills_map: Dict[str, SkillInfo] = {}
+
+    try:
+        discovered = discovery.discover_all()
+        for s in discovered:
+            skills_map[s.id] = SkillInfo(
+                id=s.id,
+                name=s.metadata.name,
+                category=s.metadata.category,
+                description=s.metadata.description,
+                inputs=s.metadata.inputs,
+                outputs=s.metadata.outputs,
+                source=s.metadata.source_tool.value,
+                author=s.metadata.author,
+                version=s.metadata.version,
+                tags=s.metadata.tags,
+                tools=s.metadata.tools,
+                format=s.format.value,
+                file_path=s.path,
+                content=s.content,
+                is_readonly=s.is_readonly,
             )
+    except Exception as e:
+        logger.warning(f"Error during multi-tool skill discovery: {e}")
+
+    try:
+        templates = TemplateManager.list_templates()
+        for t in templates:
+            if t.id not in skills_map:
+                in_fields = list(t.inputs.keys()) if isinstance(t.inputs, dict) else t.inputs
+                out_fields = list(t.outputs.keys()) if isinstance(t.outputs, dict) else t.outputs
+                skills_map[t.id] = SkillInfo(
+                    id=t.id,
+                    name=t.name,
+                    category=t.category,
+                    description=t.description,
+                    inputs=in_fields,
+                    outputs=out_fields,
+                    source=SkillSource.AGENT_ENGINE.value,
+                    author="agent-engine",
+                    version="1.0.0",
+                    tags=t.tags or [],
+                    format="json",
+                    content=t.to_json(),
+                    is_readonly=True,
+                )
+    except Exception as e:
+        logger.warning(f"Error loading template skills: {e}")
+
+    results = list(skills_map.values())
+
+    if source:
+        results = [s for s in results if (s.source or "").lower() == source.lower()]
+    if category:
+        results = [s for s in results if (s.category or "").lower() == category.lower()]
+    if tag:
+        results = [s for s in results if tag.lower() in [t.lower() for t in s.tags]]
+    if search:
+        q = search.lower()
+        results = [
+            s
+            for s in results
+            if q in s.name.lower()
+            or q in (s.description or "").lower()
+            or any(q in t.lower() for t in s.tags)
+            or q in (s.content or "").lower()
+        ]
+
+    return results
+
+
+@v1_router.post("/skills/validate", response_model=ValidateSkillResponse)
+async def validate_skill_content(req: ValidateSkillRequest):
+    """Validate raw skill markdown/frontmatter or JSON structure."""
+    editor = SkillEditor()
+    fmt = SkillFormat.JSON if req.format.lower() == "json" else SkillFormat.MARKDOWN
+    res = editor.validate_content(req.content, format=fmt)
+    return ValidateSkillResponse(
+        valid=res.valid,
+        errors=res.errors,
+        warnings=res.warnings,
+        parsed_metadata=res.parsed_metadata,
+    )
+
+
+@v1_router.post("/skills/create", response_model=SkillInfo)
+async def create_skill(req: CreateSkillRequest):
+    """Create a new skill and write it to the canonical tool directory."""
+    editor = SkillEditor()
+    try:
+        src = SkillSource(req.source)
+    except Exception:
+        src = SkillSource.AGENT_ENGINE
+
+    fmt = SkillFormat.JSON if req.format.lower() == "json" else SkillFormat.MARKDOWN
+    try:
+        skill = editor.create_skill(
+            source=src,
+            name=req.name,
+            description=req.description,
+            content=req.content,
+            skill_id=req.skill_id,
+            author=req.author,
+            version=req.version,
+            tags=req.tags,
+            inputs=req.inputs,
+            outputs=req.outputs,
+            tools=req.tools,
+            format=fmt,
+            extra={"category": req.category},
         )
-    return skills_list
+        return SkillInfo(
+            id=skill.id,
+            name=skill.metadata.name,
+            category=skill.metadata.category,
+            description=skill.metadata.description,
+            inputs=skill.metadata.inputs,
+            outputs=skill.metadata.outputs,
+            source=skill.metadata.source_tool.value,
+            author=skill.metadata.author,
+            version=skill.metadata.version,
+            tags=skill.metadata.tags,
+            tools=skill.metadata.tools,
+            format=skill.format.value,
+            file_path=skill.path,
+            content=skill.content,
+            is_readonly=skill.is_readonly,
+        )
+    except FileExistsError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@v1_router.get("/skills/{skill_id}", response_model=SkillInfo)
+async def get_skill(skill_id: str):
+    """Get full details and raw content of a specific skill."""
+    editor = SkillEditor()
+    skill = editor.get_skill(skill_id)
+    if skill:
+        return SkillInfo(
+            id=skill.id,
+            name=skill.metadata.name,
+            category=skill.metadata.category,
+            description=skill.metadata.description,
+            inputs=skill.metadata.inputs,
+            outputs=skill.metadata.outputs,
+            source=skill.metadata.source_tool.value,
+            author=skill.metadata.author,
+            version=skill.metadata.version,
+            tags=skill.metadata.tags,
+            tools=skill.metadata.tools,
+            format=skill.format.value,
+            file_path=skill.path,
+            content=skill.content,
+            is_readonly=skill.is_readonly,
+        )
+
+    template = TemplateManager.get_template(skill_id)
+    if template:
+        in_fields = (
+            list(template.inputs.keys()) if isinstance(template.inputs, dict) else template.inputs
+        )
+        out_fields = (
+            list(template.outputs.keys())
+            if isinstance(template.outputs, dict)
+            else template.outputs
+        )
+        return SkillInfo(
+            id=template.id,
+            name=template.name,
+            category=template.category,
+            description=template.description,
+            inputs=in_fields,
+            outputs=out_fields,
+            source=SkillSource.AGENT_ENGINE.value,
+            author="agent-engine",
+            version="1.0.0",
+            tags=template.tags or [],
+            format="json",
+            content=template.to_json(),
+            is_readonly=True,
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Skill '{skill_id}' not found.",
+    )
+
+
+@v1_router.put("/skills/{skill_id}", response_model=SkillInfo)
+async def update_skill(skill_id: str, req: UpdateSkillRequest):
+    """Update an existing skill in place."""
+    editor = SkillEditor()
+    meta_updates = {}
+    if req.name is not None:
+        meta_updates["name"] = req.name
+    if req.description is not None:
+        meta_updates["description"] = req.description
+    if req.version is not None:
+        meta_updates["version"] = req.version
+    if req.tags is not None:
+        meta_updates["tags"] = req.tags
+    if req.inputs is not None:
+        meta_updates["inputs"] = req.inputs
+    if req.outputs is not None:
+        meta_updates["outputs"] = req.outputs
+    if req.tools is not None:
+        meta_updates["tools"] = req.tools
+    if req.category is not None:
+        meta_updates["category"] = req.category
+
+    try:
+        updated = editor.update_skill(
+            skill_id=skill_id,
+            content=req.content,
+            metadata_updates=meta_updates or None,
+        )
+        return SkillInfo(
+            id=updated.id,
+            name=updated.metadata.name,
+            category=updated.metadata.category,
+            description=updated.metadata.description,
+            inputs=updated.metadata.inputs,
+            outputs=updated.metadata.outputs,
+            source=updated.metadata.source_tool.value,
+            author=updated.metadata.author,
+            version=updated.metadata.version,
+            tags=updated.metadata.tags,
+            tools=updated.metadata.tools,
+            format=updated.format.value,
+            file_path=updated.path,
+            content=updated.content,
+            is_readonly=updated.is_readonly,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@v1_router.delete("/skills/{skill_id}")
+async def delete_skill(skill_id: str):
+    """Delete an editable skill file."""
+    editor = SkillEditor()
+    try:
+        deleted = editor.delete_skill(skill_id)
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Skill '{skill_id}' not found.",
+            )
+        return {"success": True, "skill_id": skill_id}
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 
 
 @v1_router.post("/skills", response_model=ExecuteSkillResponse)

@@ -181,11 +181,13 @@ class MultiToolSkillDiscovery:
                     tools=tools,
                     source_tool=source_tool,
                 )
+                is_ro = "configs/templates" in str(file_path) or "configs/codex" in str(file_path)
                 return Skill(
                     id=skill_id,
                     metadata=metadata,
                     content=content,
                     path=str(file_path.resolve()),
+                    is_readonly=is_ro,
                     format=SkillFormat.JSON,
                 )
             except Exception as e:
@@ -218,11 +220,13 @@ class MultiToolSkillDiscovery:
             extra=fm,
         )
 
+        is_ro = "configs/templates" in str(file_path) or "configs/codex" in str(file_path)
         return Skill(
             id=slug_id,
             metadata=metadata,
             content=body or content,
             path=str(file_path.resolve()),
+            is_readonly=is_ro,
             format=SkillFormat.MARKDOWN,
         )
 
@@ -234,14 +238,13 @@ class MultiToolSkillDiscovery:
         """Discover all skills belonging to a specific tool source."""
         skills: List[Skill] = []
         resolved = self._resolve_paths(source_tool, workspace_dir=workspace_dir)
-
         for target in resolved:
             if target.is_file():
                 skill = self._parse_file_as_skill(target, source_tool)
                 if skill:
                     skills.append(skill)
             elif target.is_dir():
-                for ext in ("*.json", "*.md", "*.markdown", "*.yaml", "*.yml"):
+                for ext in ("*.json", "*.md", "*.markdown", "*.yaml", "*.yml", "*.mdc"):
                     for file_path in target.glob(ext):
                         skill = self._parse_file_as_skill(file_path, source_tool)
                         if skill:

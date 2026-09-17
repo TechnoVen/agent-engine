@@ -6,6 +6,7 @@ Covers:
 """
 
 from pathlib import Path
+import time
 
 from core.skills.discovery import MultiToolSkillDiscovery
 from core.skills.models import SkillFormat, SkillSource
@@ -220,3 +221,243 @@ def test_skill_model_serialization():
     assert d["id"] == "s1"
     assert d["metadata"]["source_tool"] == "claude-code"
     assert d["metadata"]["tags"] == ["a", "b"]
+
+
+def test_skill_editor_validation_markdown():
+    """Verify SkillEditor Markdown/YAML frontmatter validator."""
+    from core.skills.editor import SkillEditor
+    from core.skills.models import SkillFormat
+
+    editor = SkillEditor()
+
+    # Valid markdown with frontmatter
+    valid_md = """---
+name: Valid Skill
+description: A well-formed skill for testing
+version: 1.2.0
+author: tester
+tags: [unit, test]
+inputs: [query]
+outputs: [response]
+---
+
+You are a helpful test assistant.
+"""
+    res = editor.validate_content(valid_md, format=SkillFormat.MARKDOWN)
+    assert res.valid is True
+    assert len(res.errors) == 0
+    assert res.parsed_metadata is not None
+    assert res.parsed_metadata["name"] == "Valid Skill"
+
+    # Empty content
+    res_empty = editor.validate_content("   ", format=SkillFormat.MARKDOWN)
+    assert res_empty.valid is False
+    assert any("empty" in e.lower() for e in res_empty.errors)
+
+    # Missing name in frontmatter
+    invalid_md = """---
+description: No name here
+inputs: [query]
+---
+
+Body instructions.
+"""
+    res_noname = editor.validate_content(invalid_md, format=SkillFormat.MARKDOWN)
+    assert res_noname.valid is False
+    assert any("name" in e.lower() for e in res_noname.errors)
+
+    # Malformed YAML
+    bad_yaml = """---
+name: Broken
+description: [unclosed list
+---
+"""
+    res_bad = editor.validate_content(bad_yaml, format=SkillFormat.MARKDOWN)
+    assert res_bad.valid is False
+    assert any("yaml" in e.lower() for e in res_bad.errors)
+
+
+def test_skill_editor_validation_json():
+    """Verify SkillEditor JSON validator."""
+    from core.skills.editor import SkillEditor
+    from core.skills.models import SkillFormat
+
+    editor = SkillEditor()
+
+    # Valid JSON
+    valid_json = (
+        '{"name": "JSON Skill", "description": "Desc", "inputs": ["text"], "outputs": ["result"]}'
+    )
+    res = editor.validate_content(valid_json, format=SkillFormat.JSON)
+    assert res.valid is True
+    assert len(res.errors) == 0
+
+    # Malformed JSON syntax
+    res_bad = editor.validate_content('{"name": unquoted}', format=SkillFormat.JSON)
+    assert res_bad.valid is False
+    assert any("syntax" in e.lower() for e in res_bad.errors)
+
+
+def test_skill_editor_crud_lifecycle(tmp_path):
+    """Verify complete CRUD lifecycle via SkillEditor with atomic writing."""
+    from core.skills.discovery import MultiToolSkillDiscovery
+    from core.skills.editor import SkillEditor
+    from core.skills.models import SkillSource
+
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+
+    discovery = MultiToolSkillDiscovery(
+        agent_engine_dirs=[ws / "data" / "skills"],
+        cursor_dirs=[ws / ".cursor" / "rules"],
+    )
+    editor = SkillEditor(workspace_root=ws, home_dir=home, discovery=discovery)
+
+    # 1. Create skill (agent-engine markdown)
+    skill = editor.create_skill(
+        source=SkillSource.AGENT_ENGINE,
+        name="Unit Testing Skill",
+        description="A skill created by automated tests",
+        content="Execute tests and report coverage.",
+        author="pytest",
+        version="1.0.0",
+        tags=["ci", "testing"],
+        inputs=["code"],
+        outputs=["report"],
+    )
+    assert skill.id == "unit_testing_skill"
+    assert skill.path is not None
+    assert Path(skill.path).exists()
+    assert "Execute tests and report coverage." in skill.content
+
+    # Duplicate creation raises FileExistsError
+    import pytest
+
+    with pytest.raises(FileExistsError):
+        editor.create_skill(
+            source=SkillSource.AGENT_ENGINE,
+            name="Unit Testing Skill",
+            description="Duplicate",
+            content="Duplicate",
+        )
+
+    # 2. Read / Get skill
+    fetched = editor.get_skill("unit_testing_skill")
+    assert fetched is not None
+    assert fetched.id == "unit_testing_skill"
+    assert fetched.metadata.name == "Unit Testing Skill"
+    assert fetched.metadata.tags == ["ci", "testing"]
+
+    # 3. Update skill
+    updated = editor.update_skill(
+        skill_id="unit_testing_skill",
+        content="New instructions: run with verbose output.",
+        metadata_updates={"version": "1.1.0", "description": "Updated description"},
+    )
+    assert updated.metadata.version == "1.1.0"
+    assert updated.metadata.description == "Updated description"
+    assert "verbose output" in updated.content
+
+    # 4. Delete skill
+    deleted = editor.delete_skill("unit_testing_skill")
+    assert deleted is True
+    assert not Path(skill.path).exists()
+    assert editor.get_skill("unit_testing_skill") is None
+
+
+def test_skill_editor_tool_targets(tmp_path):
+    """Verify tool-specific target directory routing."""
+    from core.skills.editor import SkillEditor
+    from core.skills.models import SkillSource
+
+    ws = tmp_path / "ws"
+    home = tmp_path / "home"
+    editor = SkillEditor(workspace_root=ws, home_dir=home)
+
+    assert editor.get_tool_target_dir(SkillSource.AGENT_ENGINE) == ws / "data" / "skills"
+    assert editor.get_tool_target_dir(SkillSource.CLAUDE_CODE) == home / ".claude" / "commands"
+    assert editor.get_tool_target_dir(SkillSource.CURSOR) == ws / ".cursor" / "rules"
+    assert editor.get_tool_target_dir(SkillSource.CODEX) == ws / ".codex" / "skills"
+    assert editor.get_tool_target_dir(SkillSource.GOOSE) == home / ".config" / "goose" / "skills"
+
+
+def test_skill_editor_api_endpoints():
+    """Verify Skill Editor FastAPI endpoints: validate, create, get, update, delete."""
+    from fastapi.testclient import TestClient
+    from services.python.server.api import app
+
+    client = TestClient(app)
+
+    # 1. POST /v1/skills/validate
+    val_resp = client.post(
+        "/v1/skills/validate",
+        json={
+            "content": "---\nname: Test Valid\ndescription: OK\n---\nHello",
+            "format": "markdown",
+        },
+    )
+    assert val_resp.status_code == 200
+    assert val_resp.json()["valid"] is True
+
+    val_bad = client.post(
+        "/v1/skills/validate",
+        json={"content": "   ", "format": "markdown"},
+    )
+    assert val_bad.status_code == 200
+    assert val_bad.json()["valid"] is False
+
+    # 2. GET /v1/skills
+    list_resp = client.get("/v1/skills")
+    assert list_resp.status_code == 200
+    skills = list_resp.json()
+    assert isinstance(skills, list)
+    assert len(skills) >= 1
+
+    # 3. GET /v1/skills/{skill_id} for prebuilt template
+    prebuilt_resp = client.get("/v1/skills/summarize_meeting_notes")
+    assert prebuilt_resp.status_code == 200
+    pb_data = prebuilt_resp.json()
+    assert pb_data["id"] == "summarize_meeting_notes"
+    assert pb_data["is_readonly"] is True
+
+    # 4. POST /v1/skills/create
+    unique_id = f"api_test_skill_{int(time.time() * 1000)}"
+    create_resp = client.post(
+        "/v1/skills/create",
+        json={
+            "skill_id": unique_id,
+            "name": "API Created Skill",
+            "description": "Created via REST API test",
+            "content": "Follow instructions carefully.",
+            "source": "agent-engine",
+            "tags": ["api", "test"],
+        },
+    )
+    assert create_resp.status_code == 200
+    c_data = create_resp.json()
+    assert c_data["id"] == unique_id
+    assert c_data["name"] == "API Created Skill"
+
+    # 5. GET /v1/skills/{skill_id}
+    fetch_resp = client.get(f"/v1/skills/{unique_id}")
+    assert fetch_resp.status_code == 200
+    assert fetch_resp.json()["id"] == unique_id
+
+    # 6. PUT /v1/skills/{skill_id}
+    put_resp = client.put(
+        f"/v1/skills/{unique_id}",
+        json={"content": "Updated content from API.", "description": "New description"},
+    )
+    assert put_resp.status_code == 200
+    assert "Updated content from API." in put_resp.json()["content"]
+    assert put_resp.json()["description"] == "New description"
+
+    # 7. DELETE /v1/skills/{skill_id}
+    del_resp = client.delete(f"/v1/skills/{unique_id}")
+    assert del_resp.status_code == 200
+    assert del_resp.json()["success"] is True
+
+    # Confirm 404 after deletion
+    assert client.get(f"/v1/skills/{unique_id}").status_code == 404

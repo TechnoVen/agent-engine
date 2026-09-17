@@ -4,6 +4,7 @@ Unified Multi-Tool Skill Management for Agent Engine (Phase 6 - Milestone M4).
 """
 
 from core.skills.discovery import MultiToolSkillDiscovery
+from core.skills.editor import SkillEditor, SkillValidationResult
 from core.skills.models import (
     Skill,
     SkillCollection,
@@ -19,4 +20,6 @@ __all__ = [
     "SkillFormat",
     "SkillCollection",
     "MultiToolSkillDiscovery",
+    "SkillEditor",
+    "SkillValidationResult",
 ]
