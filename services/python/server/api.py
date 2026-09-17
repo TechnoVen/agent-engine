@@ -23,6 +23,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from core.adapters import (
+    AdapterDisabledError,
+    AdapterExecutionRequest,
+    AdapterNotFoundError,
+    get_adapter_registry,
+)
 from core.cache import get_semantic_cache
 from core.cases import get_case_manager
 from core.config import get_feature_flags, get_settings_manager, require_flag, set_flag_override
@@ -3024,6 +3030,137 @@ async def export_diagnostics_endpoint(
         media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+# ---------------------------------------------------------------------------
+# Agent Adapters Endpoints (Task 5.1)
+# ---------------------------------------------------------------------------
+
+
+class AdapterRunPayload(BaseModel):
+    prompt: str
+    session_id: Optional[str] = None
+    context: Dict[str, Any] = Field(default_factory=dict)
+    tools: List[Dict[str, Any]] = Field(default_factory=list)
+    model: Optional[str] = None
+    temperature: float = 0.7
+    max_tokens: Optional[int] = None
+    timeout_seconds: float = 60.0
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+@v1_router.get("/adapters", response_model=List[Dict[str, Any]])
+async def list_adapters_endpoint(include_health: bool = Query(False)):
+    """List all registered agent adapters, their capabilities, and enabled status."""
+    reg = get_adapter_registry()
+    return reg.list_adapters(include_health=include_health)
+
+
+@v1_router.get("/adapters/{adapter_id}", response_model=Dict[str, Any])
+async def get_adapter_endpoint(adapter_id: str):
+    """Retrieve metadata and health status for a specific adapter."""
+    reg = get_adapter_registry()
+    adapter = reg.get(adapter_id)
+    if not adapter:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Adapter '{adapter_id}' not found",
+        )
+    meta = adapter.to_metadata_dict()
+    meta["enabled"] = reg.is_enabled(adapter_id)
+    try:
+        health = adapter.health_check()
+        meta["health"] = health.to_dict()
+    except Exception as e:
+        meta["health"] = {"status": "unavailable", "message": str(e), "latency_ms": 0.0}
+    return meta
+
+
+@v1_router.post("/adapters/{adapter_id}/execute", response_model=Dict[str, Any])
+async def execute_adapter_endpoint(adapter_id: str, payload: AdapterRunPayload):
+    """Execute a prompt through the specified agent adapter."""
+    reg = get_adapter_registry()
+    req = AdapterExecutionRequest(
+        prompt=payload.prompt,
+        session_id=payload.session_id,
+        context=payload.context,
+        tools=payload.tools,
+        model=payload.model,
+        temperature=payload.temperature,
+        max_tokens=payload.max_tokens,
+        timeout_seconds=payload.timeout_seconds,
+        metadata=payload.metadata,
+    )
+    try:
+        resp = await reg.execute(adapter_id, req)
+        return resp.to_dict()
+    except AdapterNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except AdapterDisabledError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@v1_router.post("/adapters/{adapter_id}/stream")
+async def stream_adapter_endpoint(adapter_id: str, payload: AdapterRunPayload):
+    """Stream token chunks and tool call events from the specified adapter via SSE."""
+    reg = get_adapter_registry()
+    req = AdapterExecutionRequest(
+        prompt=payload.prompt,
+        session_id=payload.session_id,
+        context=payload.context,
+        tools=payload.tools,
+        model=payload.model,
+        temperature=payload.temperature,
+        max_tokens=payload.max_tokens,
+        timeout_seconds=payload.timeout_seconds,
+        metadata=payload.metadata,
+    )
+
+    if not reg.get(adapter_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Adapter '{adapter_id}' not found",
+        )
+    if not reg.is_enabled(adapter_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Adapter '{adapter_id}' is disabled in Settings",
+        )
+
+    async def event_generator():
+        try:
+            async for chunk in reg.stream(adapter_id, req):
+                yield f"data: {json.dumps(chunk.to_dict())}\n\n"
+        except Exception as e:
+            err_data = json.dumps({"type": "error", "error": str(e)})
+            yield f"data: {err_data}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@v1_router.post("/adapters/{adapter_id}/test", response_model=Dict[str, Any])
+async def test_adapter_endpoint(adapter_id: str):
+    """Probe adapter connectivity, environment prerequisites, and latency."""
+    reg = get_adapter_registry()
+    adapter = reg.get(adapter_id)
+    if not adapter:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Adapter '{adapter_id}' not found",
+        )
+    try:
+        health = adapter.health_check()
+        return health.to_dict()
+    except Exception as e:
+        return {
+            "status": "unavailable",
+            "message": f"Test failed: {e}",
+            "latency_ms": 0.0,
+            "version": getattr(adapter, "version", None),
+            "details": {"error": str(e)},
+        }
 
 
 # Mount router to FastAPI app

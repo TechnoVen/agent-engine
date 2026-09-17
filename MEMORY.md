@@ -25,27 +25,29 @@
   - **Task 3.11:** Featured Cases Content Curation (32 curated templates in `configs/cases/`, dedicated mode screens in `apps/desktop/src/renderer/screens/Modes/`, one-click prompt injection, `core/cases.py` loader & search, FastAPI `/v1/cases` endpoints)
 
 ### Current Test Count
-- **Monorepo Tests:** `256 passed` (strictly increasing with every completed task).
+- **Monorepo Tests:** `263 passed` (strictly increasing with every completed task).
 - **Desktop Build:** `pnpm --filter @agent-engine/desktop build` passes with 0 TypeScript errors.
 - **Cargo Check:** `cargo check` in `apps/desktop/src-tauri` passes cleanly.
 
 ---
 
-## 2. Active Scope: Phase 4 — Control Dashboard (Milestone M3) — 100% COMPLETED!
+## 2. Completed Scope: Phase 4 — Control Dashboard (Milestone M3) — 100% COMPLETED!
 
-Aligned with `docs/PROJECT_REVIEW_2026-09-14.md` to remediate findings F01–F14:
-1. **Task 4.0 — Foundation Hardening & Contract Alignment:** ✅ Complete (Remediated F01, F02, F04, F05, F09, F12; 247/247 tests green)
-2. **Task 4.1 — Projects & Workspaces (Organiser):** ✅ Complete (`apps/desktop/src/renderer/screens/Projects.tsx`, `ProjectDetail.tsx`, Centered Create Project modal, context & file scoping; 248/248 tests green)
-3. **Task 4.2 — Provider Setup Panel & Keychain Storage:** ✅ Complete (`apps/desktop/src/renderer/screens/Settings.tsx`, OpenAI/Anthropic/Gemini/Ollama/vLLM/Custom cards, 1-click test button, OS keychain integration; 249/249 tests green)
-4. **Task 4.3 — End-to-End Real Execution Engine (F03):** ✅ Complete (Connected `Home.tsx` and `ModePage.tsx` to real streaming SSE, cancellation signal propagation, persisted session resumption, honest error reporting; 250/250 tests green)
-5. **Task 4.4 — Mandatory Approval Queue & Safety Execution Boundary (F06):** ✅ Complete (Centralized queue in `screens/Policies.tsx`, fail-closed evaluation, single-use operation-bound execution tokens with 60s expiry; 251/251 tests green)
-6. **Task 4.5 — Cost Dashboard (Merged 4.5 & 4.9; React in Desktop Shell):** ✅ Complete (`screens/Cost.tsx`, responsive SVG 90/9/1 donut, spend ledger, budget ceilings, Law 8 distillation pipeline, CSV/JSON export; 252/252 tests green)
-7. **Task 4.6 — Policy Editor & Immutable Audit Log:** ✅ Complete (`screens/Policies.tsx`, YAML editor with validation & hot-reload, zero-footprint dry-run playground, paginated immutable audit log with filters & CSV/JSON export; 253/253 tests green)
-8. **Task 4.7 — Hardware Telemetry Panel:** ✅ Complete (`core/telemetry/hardware.py`, `TopBar.tsx` status bar with 2s polling, `Settings.tsx` Hardware & Compute panel, GPU model detection, VRAM 95% warning threshold, tokens/sec throughput gauge; 254/254 tests green)
-9. **Task 4.8 — Settings Screen & Diagnostics Export:** ✅ Complete (`core/config/settings.py`, `core/diagnostics.py`, 9 tabs in `screens/Settings.tsx`, encrypted AES-256-GCM config at rest, 1-click diagnostics bundle export `.zip` & `.json` with credential redaction guarantee; 255/255 tests green)
-10. **Task 4.9 — Streamlit Demotion to Developer Tool & Process Lifecycle (F07, F14):** ✅ Complete (Moved `server/dashboard.py` to `tools/dev_dashboard.py` with prominent developer warning banner and F07 host privileges notice; `server/dashboard.py` deprecation shim; added `make dev-dashboard` target to `Makefile`; added `dev-dashboard` CLI in `main.py`; remediated F14 in `start_studio.sh` with pre-daemon `trap cleanup SIGINT SIGTERM EXIT` and removal of foreground `exec` replacement; 256/256 tests green)
+All tasks 4.0 through 4.9 implemented and committed with strictly increasing tests (240 → 256).
 
 ---
+
+## 3. Active Scope: Phase 5 — Agent Adapter Layer (Milestone M4)
+
+1. **Task 5.1 — Adapter Interface & Registry:** ✅ Complete
+   - `core/adapters/base.py`: `AgentAdapter` ABC, `AdapterExecutionRequest`, `AdapterExecutionResponse`, `AdapterStreamChunk`, `AdapterHealth`.
+   - `core/adapters/registry.py`: `AdapterRegistry` singleton, discovery, lifecycle, and `AppSettings.adapters` gating.
+   - `core/adapters/mock.py`: `MockAgentAdapter` reference test implementation.
+   - `services/python/server/api.py`: `GET /v1/adapters`, `GET /v1/adapters/{id}`, `POST /v1/adapters/{id}/execute`, `POST /v1/adapters/{id}/stream`, `POST /v1/adapters/{id}/test`.
+   - `packages/shared-schema/openapi.yaml`: Added paths and schemas.
+   - `apps/desktop/src/renderer/api/client.ts`: Implemented `getAdapters()`, `getAdapter()`, `executeAdapter()`, `testAdapter()`.
+   - `tests/test_adapters.py`: 7 tests passing; total monorepo tests: 263 passed.
+2. **Task 5.2 — Claude Code Adapter (⏳ NEXT)**
 
 ## 3. Critical Rules & System Nuances
 

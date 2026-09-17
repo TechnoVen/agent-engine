@@ -429,6 +429,111 @@ paths:
               schema:
                 $ref: '#/components/schemas/DiagnosticsBundleResponse'
 
+  /adapters:
+    get:
+      summary: List all registered agent adapters
+      operationId: listAdapters
+      parameters:
+        - name: include_health
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: List of agent adapters
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AdapterMetadata'
+
+  /adapters/{adapter_id}:
+    get:
+      summary: Retrieve adapter metadata and health status
+      operationId: getAdapter
+      parameters:
+        - name: adapter_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Adapter details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdapterMetadata'
+
+  /adapters/{adapter_id}/execute:
+    post:
+      summary: Execute prompt through agent adapter
+      operationId: executeAdapter
+      parameters:
+        - name: adapter_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdapterExecutionPayload'
+      responses:
+        '200':
+          description: Adapter execution response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdapterExecutionResponse'
+
+  /adapters/{adapter_id}/stream:
+    post:
+      summary: Stream tokens from agent adapter via SSE
+      operationId: streamAdapter
+      parameters:
+        - name: adapter_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdapterExecutionPayload'
+      responses:
+        '200':
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  /adapters/{adapter_id}/test:
+    post:
+      summary: Probe adapter connectivity and health
+      operationId: testAdapter
+      parameters:
+        - name: adapter_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Adapter health probe results
+          content:
+            application/json:
+              schema:
+                type: object
+
+
   /telemetry/cost:
     get:
       summary: Get token usage and cost metrics
@@ -1955,6 +2060,95 @@ components:
           type: array
           items:
             type: string
+
+    AdapterMetadata:
+      type: object
+      properties:
+        adapter_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        protocol:
+          type: string
+        version:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: string
+        enabled:
+          type: boolean
+        initialized:
+          type: boolean
+        health:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [healthy, degraded, unavailable]
+            message:
+              type: string
+            latency_ms:
+              type: number
+            version:
+              type: string
+            details:
+              type: object
+
+    AdapterExecutionPayload:
+      type: object
+      required:
+        - prompt
+      properties:
+        prompt:
+          type: string
+        session_id:
+          type: string
+        context:
+          type: object
+        tools:
+          type: array
+          items:
+            type: object
+        model:
+          type: string
+        temperature:
+          type: number
+        max_tokens:
+          type: integer
+        timeout_seconds:
+          type: number
+        metadata:
+          type: object
+
+    AdapterExecutionResponse:
+      type: object
+      properties:
+        adapter_id:
+          type: string
+        content:
+          type: string
+        tool_calls:
+          type: array
+          items:
+            type: object
+        finish_reason:
+          type: string
+        usage:
+          type: object
+          properties:
+            prompt_tokens:
+              type: integer
+            completion_tokens:
+              type: integer
+            total_tokens:
+              type: integer
+        latency_ms:
+          type: number
+        metadata:
+          type: object
 
     TierSplitInfo:
       type: object

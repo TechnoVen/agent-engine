@@ -275,7 +275,11 @@
 
 ## Phase 5 — Agent Adapter Layer (Milestone M4)
 
-- [ ] **Task 5.1 — Adapter Interface**
+- [x] **Task 5.1 — Adapter Interface & Registry**
+  - **User Story:** As an integration developer, I want a standardized adapter interface and dynamic registry to plug external coding agents and protocols into Agent Engine.
+  - **Deliverables:** `core/adapters/base.py` (`AgentAdapter` ABC, `AdapterExecutionRequest`, `AdapterExecutionResponse`, `AdapterStreamChunk`, `AdapterHealth`), `core/adapters/registry.py` (`AdapterRegistry` singleton, dynamic registration, AppSettings gating), `core/adapters/mock.py` (`MockAgentAdapter` deterministic reference), sidecar FastAPI endpoints (`GET /v1/adapters`, `GET /v1/adapters/{id}`, `POST /v1/adapters/{id}/execute`, `POST /v1/adapters/{id}/stream`, `POST /v1/adapters/{id}/test`), shared OpenAPI schemas, desktop API client (`client.ts`), and unit/integration test suite `tests/test_adapters.py`.
+  - **Acceptance Criteria:** Adapters follow common lifecycle (`initialize`, `health_check`, `execute`, `stream`, `stop`); disabled adapters in settings fail closed with 403; test count strictly increases (256 → 263); 100% of monorepo tests pass (263/263).
+  - **Status:** ✅ DONE
 - [ ] **Task 5.2 — Claude Code Adapter**
 - [ ] **Task 5.3 — Codex Adapter**
 - [ ] **Task 5.4 — OpenClaw Adapter** (WhatsApp & Telegram personal messaging)

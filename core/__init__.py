@@ -54,6 +54,7 @@ from core.eval import (
     get_golden_dataset,
 )
 from core.templates import SkillTemplate, TemplateManager, load_template_agent
+from core.adapters import AgentAdapter, AdapterRegistry, get_adapter_registry
 
 
 __all__ = [
@@ -100,4 +101,7 @@ __all__ = [
     "RatioAudit",
     "audit_pipeline",
     "profiled_step",
+    "AgentAdapter",
+    "AdapterRegistry",
+    "get_adapter_registry",
 ]

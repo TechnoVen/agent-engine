@@ -581,6 +581,53 @@ export interface DiagnosticsBundle {
   logs: string[];
 }
 
+export interface AdapterHealth {
+  status: 'healthy' | 'degraded' | 'unavailable';
+  message: string;
+  latency_ms: number;
+  version?: string | null;
+  details?: Record<string, any>;
+}
+
+export interface AdapterMetadata {
+  adapter_id: string;
+  name: string;
+  description: string;
+  protocol: string;
+  version: string;
+  capabilities: string[];
+  enabled: boolean;
+  initialized: boolean;
+  health?: AdapterHealth;
+}
+
+export interface AdapterExecutionRequest {
+  prompt: string;
+  session_id?: string;
+  context?: Record<string, any>;
+  tools?: Record<string, any>[];
+  model?: string;
+  temperature?: number;
+  max_tokens?: number;
+  timeout_seconds?: number;
+  metadata?: Record<string, any>;
+}
+
+export interface AdapterExecutionResponse {
+  adapter_id: string;
+  content: string;
+  tool_calls: Record<string, any>[];
+  finish_reason: string;
+  usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+  latency_ms: number;
+  metadata?: Record<string, any>;
+}
+
+
 
 
 

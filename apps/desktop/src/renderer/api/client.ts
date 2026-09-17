@@ -29,6 +29,10 @@ import {
   SpeedRecordPayload,
   AppSettings,
   DiagnosticsBundle,
+  AdapterMetadata,
+  AdapterHealth,
+  AdapterExecutionRequest,
+  AdapterExecutionResponse,
 } from '../types';
 
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
@@ -1063,6 +1067,69 @@ class SidecarClient {
       return await res.blob();
     }
     return await res.json();
+  }
+
+  async getAdapters(includeHealth: boolean = false): Promise<AdapterMetadata[]> {
+    try {
+      const res = await fetch(`${this.base}/v1/adapters?include_health=${includeHealth}`, {
+        headers: this.getHeaders(),
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.error('Failed to get adapters:', err);
+    }
+    return [];
+  }
+
+  async getAdapter(id: string): Promise<AdapterMetadata | null> {
+    try {
+      const res = await fetch(`${this.base}/v1/adapters/${id}`, {
+        headers: this.getHeaders(),
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.error(`Failed to get adapter ${id}:`, err);
+    }
+    return null;
+  }
+
+  async executeAdapter(id: string, req: AdapterExecutionRequest): Promise<AdapterExecutionResponse | null> {
+    try {
+      const res = await fetch(`${this.base}/v1/adapters/${id}/execute`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify(req),
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.error(`Failed to execute adapter ${id}:`, err);
+    }
+    return null;
+  }
+
+  async testAdapter(id: string): Promise<AdapterHealth> {
+    try {
+      const res = await fetch(`${this.base}/v1/adapters/${id}/test`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+      });
+      if (res.ok) {
+        return await res.json();
+      }
+    } catch (err) {
+      console.error(`Failed to test adapter ${id}:`, err);
+    }
+    return {
+      status: 'unavailable',
+      message: 'Network or client error probing adapter',
+      latency_ms: 0,
+    };
   }
 
 
