@@ -18,6 +18,7 @@ from core.adapters.base import (
 )
 from core.adapters.registry import get_adapter_registry
 from core.adapters.discord import DiscordAdapter
+from core.adapters.mattermost import MattermostAdapter
 from core.adapters.slack import SlackAdapter
 from core.adapters.teams import TeamsAdapter
 from services.python.server.api import app
@@ -609,3 +610,217 @@ def test_discord_interactions_webhook_api():
     assert discord_in_reg is not None
     assert discord_in_reg.adapter_id == "discord"
     assert discord_in_reg.protocol == "discord-gateway-ws"
+
+
+def test_mattermost_adapter_lifecycle_and_health(monkeypatch):
+    """Verify MattermostAdapter initialization, capabilities, and health check states."""
+    # 1. Unconfigured / simulation mode
+    monkeypatch.delenv("MATTERMOST_URL", raising=False)
+    monkeypatch.delenv("MATTERMOST_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("MATTERMOST_WEBHOOK_SECRET", raising=False)
+
+    adapter = MattermostAdapter()
+    assert adapter.adapter_id == "mattermost"
+    assert adapter.protocol == "mattermost-ws"
+    assert AdapterCapability.STREAMING in adapter.capabilities
+    assert AdapterCapability.TOOLS in adapter.capabilities
+    assert AdapterCapability.CANCELLATION in adapter.capabilities
+
+    assert adapter.initialize() is True
+    health = adapter.health_check()
+    assert health.status == AdapterHealthStatus.DEGRADED
+    assert health.details["configured"] is False
+    assert health.details["has_bot_token"] is False
+
+    # 2. Configured mode
+    monkeypatch.setenv("MATTERMOST_URL", "https://mattermost.internal.company.com")
+    monkeypatch.setenv("MATTERMOST_BOT_TOKEN", "mm_bot_access_token_999")
+    monkeypatch.setenv("MATTERMOST_WEBHOOK_SECRET", "mm_webhook_secret_abc")
+
+    configured_adapter = MattermostAdapter()
+    configured_adapter.initialize()
+    health_conf = configured_adapter.health_check()
+    assert health_conf.status == AdapterHealthStatus.HEALTHY
+    assert health_conf.details["has_bot_token"] is True
+    assert health_conf.details["has_url"] is True
+    assert health_conf.details["has_webhook_secret"] is True
+    assert health_conf.details["configured"] is True
+
+
+def test_mattermost_adapter_websocket_framing():
+    """Verify Mattermost WebSocket authentication challenge and frame handling."""
+    adapter = MattermostAdapter()
+    adapter.initialize()
+
+    # 1. Auth challenge payload
+    auth_payload = adapter.create_auth_challenge_payload(seq=3)
+    assert auth_payload["seq"] == 3
+    assert auth_payload["action"] == "authentication_challenge"
+    assert "token" in auth_payload["data"]
+
+    # 2. Handle Hello frame
+    hello_frame = {
+        "event": "hello",
+        "data": {"server_version": "9.5.1"},
+        "seq": 0,
+    }
+    hello_res = adapter.handle_websocket_frame(hello_frame)
+    assert hello_res["type"] == "hello"
+    assert hello_res["server_version"] == "9.5.1"
+    assert hello_res["auth_payload"]["action"] == "authentication_challenge"
+
+    # 3. Handle Auth OK frame
+    ok_frame = {"status": "OK", "seq_reply": 1}
+    ok_res = adapter.handle_websocket_frame(ok_frame)
+    assert ok_res["type"] == "auth_ok"
+    assert ok_res["seq_reply"] == 1
+
+    # 4. Handle posted event frame
+    posted_frame = {
+        "event": "posted",
+        "data": {
+            "channel_id": "c_dev_team",
+            "sender_name": "heidi",
+            "team_id": "t_eng",
+            "post": '{"id":"p_101","channel_id":"c_dev_team","user_id":"u_heidi","message":"@agent compile linux release binary","root_id":"p_root_50"}',
+        },
+        "seq": 4,
+    }
+    posted_res = adapter.handle_websocket_frame(posted_frame)
+    assert posted_res["type"] == "posted"
+    norm = posted_res["normalized"]
+    assert norm["channel"] == "mattermost"
+    assert norm["text"] == "compile linux release binary"
+    assert norm["user_name"] == "heidi"
+    assert norm["root_id"] == "p_root_50"
+
+
+def test_mattermost_adapter_normalize_inbound():
+    """Verify inbound normalization for WebSocket posts, mention stripping, and slash commands."""
+    adapter = MattermostAdapter()
+
+    # 1. WebSocket posted event with dictionary post object
+    ws_event = {
+        "event": "posted",
+        "data": {
+            "channel_id": "c_general",
+            "sender_name": "ian",
+            "team_id": "t_core",
+            "post": {
+                "id": "p_202",
+                "channel_id": "c_general",
+                "user_id": "u_ian",
+                "message": "@matterbot @lead review schema migration scripts",
+                "root_id": "p_parent_100",
+            },
+        },
+    }
+    norm_ws = adapter.normalize_inbound(ws_event)
+    assert norm_ws["channel"] == "mattermost"
+    assert norm_ws["channel_id"] == "c_general"
+    assert norm_ws["text"] == "review schema migration scripts"
+    assert norm_ws["user_id"] == "u_ian"
+    assert norm_ws["user_name"] == "ian"
+    assert norm_ws["root_id"] == "p_parent_100"
+
+    # 2. Slash command / webhook POST format
+    slash_payload = {
+        "command": "/agent",
+        "text": "run benchmark profile",
+        "channel_id": "c_bench",
+        "team_id": "t_core",
+        "user_id": "u_judy",
+        "user_name": "judy",
+    }
+    norm_slash = adapter.normalize_inbound(slash_payload)
+    assert norm_slash["channel"] == "mattermost"
+    assert norm_slash["event_type"] == "slash_command"
+    assert norm_slash["text"] == "run benchmark profile"
+    assert norm_slash["user_name"] == "judy"
+    assert norm_slash["channel_id"] == "c_bench"
+
+
+def test_mattermost_adapter_format_outbound_and_props():
+    """Verify Mattermost REST post formatting, thread root_id, and props."""
+    adapter = MattermostAdapter()
+
+    # 1. Standard thread reply post
+    out_thread = adapter.format_outbound(
+        content="Release binary compiled successfully (MD5: 7a8b9c...)",
+        channel_id="c_builds",
+        root_id="p_root_001",
+    )
+    assert out_thread["channel_id"] == "c_builds"
+    assert out_thread["message"] == "Release binary compiled successfully (MD5: 7a8b9c...)"
+    assert out_thread["root_id"] == "p_root_001"
+
+    # 2. Post with custom props
+    props = {
+        "override_username": "Agent Engine Bot",
+        "override_icon_url": "https://company/icon.png",
+    }
+    out_props = adapter.format_outbound(
+        content="System alert: load average 0.15",
+        channel_id="c_alerts",
+        props=props,
+    )
+    assert out_props["props"]["override_username"] == "Agent Engine Bot"
+    assert "root_id" not in out_props
+
+
+@pytest.mark.anyio
+async def test_mattermost_adapter_execution_and_streaming():
+    """Verify execution with Law 1/2 token budgeting and token streaming."""
+    adapter = MattermostAdapter()
+    adapter.initialize()
+
+    req = AdapterExecutionRequest(
+        prompt="Analyze telemetry cluster anomalies",
+        session_id="mattermost_sess_10",
+        context={"channel_id": "c_telemetry", "root_id": "p_parent_44"},
+    )
+
+    # 1. Execute
+    resp = await adapter.execute(req)
+    assert resp.adapter_id == "mattermost"
+    assert "Echo [mattermost]: Analyze telemetry cluster anomalies" in resp.content
+    assert resp.usage["total_tokens"] > 0
+    assert resp.metadata["channel"] == "mattermost"
+    assert resp.metadata["channel_id"] == "c_telemetry"
+    assert resp.metadata["root_id"] == "p_parent_44"
+
+    # 2. Stream
+    chunks = []
+    async for chunk in adapter.stream(req):
+        chunks.append(chunk)
+
+    assert any(c.chunk_type == "token" for c in chunks)
+    assert any(c.chunk_type == "done" for c in chunks)
+
+
+def test_mattermost_webhook_api_integration():
+    """Verify FastAPI /v1/channels/mattermost/hooks webhook endpoint."""
+    client = TestClient(app)
+
+    hook_payload = {
+        "channel_id": "c_deploy",
+        "user_name": "kevin",
+        "user_id": "u_kevin_55",
+        "text": "@agent promote staging to prod-europe",
+        "post_id": "p_hook_777",
+    }
+    resp = client.post("/v1/channels/mattermost/hooks", json=hook_payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "received"
+    assert data["normalized"]["channel"] == "mattermost"
+    assert data["normalized"]["text"] == "promote staging to prod-europe"
+    assert data["normalized"]["user_name"] == "kevin"
+    assert data["normalized"]["channel_id"] == "c_deploy"
+
+    # Global Adapter Registry verification
+    reg = get_adapter_registry()
+    mm_in_reg = reg.get("mattermost")
+    assert mm_in_reg is not None
+    assert mm_in_reg.adapter_id == "mattermost"
+    assert mm_in_reg.protocol == "mattermost-ws"

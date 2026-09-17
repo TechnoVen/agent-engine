@@ -74,6 +74,7 @@ class ChannelSettings:
     mattermost_enabled: bool = False
     mattermost_url: Optional[str] = None
     mattermost_bot_token: Optional[str] = None
+    mattermost_webhook_secret: Optional[str] = None
     telegram_enabled: bool = False
     telegram_bot_token: Optional[str] = None
     whatsapp_enabled: bool = False

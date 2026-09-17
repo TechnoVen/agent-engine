@@ -332,7 +332,9 @@
 - [x] **Task 5C.3 — Discord Adapter** (`core/adapters/discord.py` - native Discord Gateway WebSocket)
   - **Acceptance Criteria:** `DiscordAdapter(AgentAdapter)`, native Discord Gateway WebSocket (v10) framing (OP 1, OP 2, OP 10, OP 11, OP 0), inbound MESSAGE_CREATE / INTERACTION_CREATE normalization, `<@!...>` mention stripping, interaction ping response, outbound embed & reply formatting, Law 1/2 spend tracking, `/v1/channels/discord/interactions` webhook; test count strictly increases (291 → 297); 100% of monorepo tests pass (297/297).
   - **Status:** ✅ DONE
-- [ ] **Task 5C.4 — Mattermost Adapter** (`core/adapters/mattermost.py` - native Mattermost WebSocket client)
+- [x] **Task 5C.4 — Mattermost Adapter** (`core/adapters/mattermost.py` - native Mattermost WebSocket client)
+  - **Acceptance Criteria:** `MattermostAdapter(AgentAdapter)`, native Mattermost WebSocket protocol framing (authentication challenge, hello, posted events), inbound post/webhook/slash command normalization, `@...` mention stripping, thread `root_id` routing, custom props, Law 1/2 spend tracking, `/v1/channels/mattermost/hooks` webhook; test count strictly increases (297 → 303); 100% of monorepo tests pass (303/303).
+  - **Status:** ✅ DONE
 
 ---
 

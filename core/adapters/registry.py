@@ -164,6 +164,7 @@ def get_adapter_registry() -> AdapterRegistry:
             WindsurfAdapter,
         )
         from core.adapters.discord import DiscordAdapter
+        from core.adapters.mattermost import MattermostAdapter
         from core.adapters.openclaw import OpenClawAdapter
         from core.adapters.slack import SlackAdapter
         from core.adapters.teams import TeamsAdapter
@@ -179,4 +180,5 @@ def get_adapter_registry() -> AdapterRegistry:
         _GLOBAL_ADAPTER_REGISTRY.register(SlackAdapter())
         _GLOBAL_ADAPTER_REGISTRY.register(TeamsAdapter())
         _GLOBAL_ADAPTER_REGISTRY.register(DiscordAdapter())
+        _GLOBAL_ADAPTER_REGISTRY.register(MattermostAdapter())
     return _GLOBAL_ADAPTER_REGISTRY

@@ -1185,6 +1185,20 @@ class SidecarClient {
     return null;
   }
 
+  async sendMattermostHook(payload: Record<string, any>): Promise<any> {
+    try {
+      const res = await fetch(`${this.base}/v1/channels/mattermost/hooks`, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) return await res.json();
+    } catch (err) {
+      console.error('Failed to send Mattermost hook:', err);
+    }
+    return null;
+  }
+
 
   async listScheduledTasks(): Promise<ScheduledTask[]> {
     try {

@@ -587,6 +587,24 @@ paths:
               schema:
                 type: object
 
+  /channels/mattermost/hooks:
+    post:
+      summary: Incoming webhook for Mattermost slash commands, outgoing webhooks, and events
+      operationId: mattermostHooksWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Event or hook received and normalized
+          content:
+            application/json:
+              schema:
+                type: object
+
   /rooms:
     post:
       summary: Create collaborative room
