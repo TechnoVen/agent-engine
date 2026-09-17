@@ -157,10 +157,20 @@ def get_adapter_registry() -> AdapterRegistry:
         from core.adapters.claude_code import ClaudeCodeAdapter
         from core.adapters.codex import CodexAdapter
         from core.adapters.goose import GooseAdapter
+        from core.adapters.mcp_fallback import (
+            CursorAdapter,
+            HermesAdapter,
+            MCPFallbackAdapter,
+            WindsurfAdapter,
+        )
         from core.adapters.openclaw import OpenClawAdapter
 
         _GLOBAL_ADAPTER_REGISTRY.register(ClaudeCodeAdapter())
         _GLOBAL_ADAPTER_REGISTRY.register(CodexAdapter())
         _GLOBAL_ADAPTER_REGISTRY.register(OpenClawAdapter())
         _GLOBAL_ADAPTER_REGISTRY.register(GooseAdapter())
+        _GLOBAL_ADAPTER_REGISTRY.register(CursorAdapter())
+        _GLOBAL_ADAPTER_REGISTRY.register(WindsurfAdapter())
+        _GLOBAL_ADAPTER_REGISTRY.register(HermesAdapter())
+        _GLOBAL_ADAPTER_REGISTRY.register(MCPFallbackAdapter())
     return _GLOBAL_ADAPTER_REGISTRY

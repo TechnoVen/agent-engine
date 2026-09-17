@@ -16,6 +16,12 @@ from core.adapters.base import (
 from core.adapters.claude_code import ClaudeCodeAdapter
 from core.adapters.codex import CodexAdapter
 from core.adapters.goose import GooseAdapter
+from core.adapters.mcp_fallback import (
+    CursorAdapter,
+    HermesAdapter,
+    MCPFallbackAdapter,
+    WindsurfAdapter,
+)
 from core.adapters.mock import MockAgentAdapter
 from core.adapters.openclaw import OpenClawAdapter
 from core.adapters.registry import (
@@ -32,6 +38,10 @@ __all__ = [
     "CodexAdapter",
     "GooseAdapter",
     "OpenClawAdapter",
+    "CursorAdapter",
+    "WindsurfAdapter",
+    "HermesAdapter",
+    "MCPFallbackAdapter",
     "AdapterCapability",
     "AdapterHealthStatus",
     "AdapterHealth",

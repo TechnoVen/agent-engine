@@ -299,7 +299,11 @@
   - **Deliverables:** `core/adapters/goose.py` (`GooseAdapter` with ACP frame encoder/decoder, Goose CLI detection and subprocess execution, terminal tool calling, Law 1 spend ledger integration via `CostTracker`, and streaming generator), registered in `AdapterRegistry`, and integration tests in `tests/test_adapters.py`.
   - **Acceptance Criteria:** Encodes and decodes ACP message frames, executes commands, emits stream events, tracks spend, handles graceful termination; test count strictly increases (266 → 267); 100% of monorepo tests pass (267/267).
   - **Status:** ✅ DONE
-- [ ] **Task 5.6 — Hermes, Cursor, Windsurf Adapters (MCP fallback)**
+- [x] **Task 5.6 — Hermes, Cursor, Windsurf Adapters (MCP fallback)**
+  - **User Story:** As an IDE user and agent engineer, I want Cursor, Windsurf, and Hermes adapters that route tool calls and reasoning through Agent Engine's local FastMCP server with automatic fallback.
+  - **Deliverables:** `core/adapters/mcp_fallback.py` (`MCPFallbackAdapter`, `CursorAdapter`, `WindsurfAdapter`, `HermesAdapter` with direct FastMCP tool invocation, config path detection, function calling, spend tracking via `CostTracker`, streaming generator), registered in `AdapterRegistry`, and integration tests in `tests/test_adapters.py`.
+  - **Acceptance Criteria:** Bridges external IDE and agent requests to FastMCP tools (`analyze_and_fix_code`, `query_agent_memory`, `get_system_telemetry`, etc.), emits streaming chunks, tracks spend, handles health checks; test count strictly increases (267 → 268); 100% of monorepo tests pass (268/268).
+  - **Status:** ✅ DONE
 
 ---
 

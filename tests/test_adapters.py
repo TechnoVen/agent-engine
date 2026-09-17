@@ -553,3 +553,83 @@ async def test_goose_adapter():
     goose_in_reg = reg.get("goose")
     assert goose_in_reg is not None
     assert goose_in_reg.adapter_id == "goose"
+
+
+@pytest.mark.anyio
+async def test_mcp_fallback_adapters():
+    """Verify Task 5.6: MCPFallbackAdapter, CursorAdapter, WindsurfAdapter, HermesAdapter lifecycle & tool bridge."""
+    from core.adapters.mcp_fallback import (
+        CursorAdapter,
+        HermesAdapter,
+        MCPFallbackAdapter,
+        WindsurfAdapter,
+    )
+
+    # 1. Base MCP Fallback Adapter
+    mcp_adapter = MCPFallbackAdapter()
+    assert mcp_adapter.adapter_id == "mcp"
+    assert mcp_adapter.protocol == "mcp"
+    assert mcp_adapter.initialize() is True
+
+    health = mcp_adapter.health_check()
+    assert health.status in (AdapterHealthStatus.HEALTHY, AdapterHealthStatus.DEGRADED)
+
+    # Available tools catalog
+    tools = mcp_adapter.get_available_tools()
+    assert len(tools) >= 5
+    tool_names = [t["name"] for t in tools]
+    assert "get_system_telemetry" in tool_names
+    assert "query_agent_memory" in tool_names
+
+    # Direct tool invocation
+    telemetry_raw = mcp_adapter.invoke_mcp_tool("get_system_telemetry", {})
+    assert "cpu_usage_percent" in telemetry_raw or "ram_total_gb" in telemetry_raw
+
+    # Execution with tool invocation
+    telem_req = AdapterExecutionRequest(prompt="Check hardware telemetry stats")
+    resp = await mcp_adapter.execute(telem_req)
+    assert resp.adapter_id == "mcp"
+    assert len(resp.tool_calls) == 1
+    assert resp.tool_calls[0]["name"] == "get_system_telemetry"
+    assert resp.usage["total_tokens"] > 0
+    assert "cost_usd" in resp.metadata
+
+    # 2. Cursor Adapter
+    cursor_adapter = CursorAdapter()
+    assert cursor_adapter.adapter_id == "cursor"
+    assert cursor_adapter.protocol == "cursor-mcp"
+    assert cursor_adapter.initialize() is True
+    cursor_health = cursor_adapter.health_check()
+    assert "has_cursor_config" in cursor_health.details
+
+    # 3. Windsurf Adapter
+    windsurf_adapter = WindsurfAdapter()
+    assert windsurf_adapter.adapter_id == "windsurf"
+    assert windsurf_adapter.protocol == "windsurf-mcp"
+    assert windsurf_adapter.initialize() is True
+    windsurf_health = windsurf_adapter.health_check()
+    assert "has_windsurf_config" in windsurf_health.details
+
+    # 4. Hermes Adapter
+    hermes_adapter = HermesAdapter()
+    assert hermes_adapter.adapter_id == "hermes"
+    assert hermes_adapter.protocol == "hermes-function-call"
+    assert hermes_adapter.initialize() is True
+    hermes_health = hermes_adapter.health_check()
+    assert hermes_health.details.get("function_calling_enabled") is True
+
+    # Streaming test
+    chunks = []
+    async for chunk in hermes_adapter.stream(telem_req):
+        chunks.append(chunk)
+
+    assert any(c.chunk_type == "token" for c in chunks)
+    assert any(c.chunk_type == "tool_call" for c in chunks)
+    assert any(c.chunk_type == "done" for c in chunks)
+
+    # 5. Global Registry Integration
+    reg = get_adapter_registry()
+    for adapter_key in ("mcp", "cursor", "windsurf", "hermes"):
+        registered = reg.get(adapter_key)
+        assert registered is not None, f"Missing adapter {adapter_key} in registry"
+        assert registered.adapter_id == adapter_key
