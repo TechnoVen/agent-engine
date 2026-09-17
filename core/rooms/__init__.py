@@ -6,8 +6,18 @@ Part of Phase 5B (Milestone M4).
 """
 
 from core.rooms.mapper import CollaborativeRoom, RoomProjectMapper
+from core.rooms.roles import (
+    DEFAULT_ROLE_PERMISSIONS,
+    RoomGovernance,
+    RoomParticipant,
+    RoomRole,
+)
 
 __all__ = [
     "CollaborativeRoom",
     "RoomProjectMapper",
+    "RoomRole",
+    "RoomParticipant",
+    "RoomGovernance",
+    "DEFAULT_ROLE_PERMISSIONS",
 ]

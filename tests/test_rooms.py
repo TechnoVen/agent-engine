@@ -10,7 +10,13 @@ import tempfile
 
 import pytest
 
-from core.rooms import CollaborativeRoom, RoomProjectMapper
+from core.rooms import (
+    CollaborativeRoom,
+    RoomGovernance,
+    RoomParticipant,
+    RoomProjectMapper,
+    RoomRole,
+)
 from core.storage.sqlite import SQLiteBackend
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -156,3 +162,188 @@ def test_room_context_nonexistent_room(temp_sqlite):
     mapper = RoomProjectMapper(storage=temp_sqlite)
     with pytest.raises(ValueError, match="not found"):
         mapper.build_room_context("room_ghost", prompt="test")
+
+
+def test_room_role_permissions_matrix():
+    """Verify RoomRole permissions matrix for ADMIN, MEMBER, VIEWER, and AGENT."""
+    admin = RoomParticipant(
+        room_id="room_1",
+        participant_id="user_admin",
+        name="Lead Engineer",
+        role=RoomRole.ADMIN,
+    )
+    assert admin.has_permission("manage_room")
+    assert admin.has_permission("change_roles")
+    assert admin.has_permission("manage_participants")
+    assert admin.has_permission("execute_tasks")
+
+    member = RoomParticipant(
+        room_id="room_1",
+        participant_id="user_member",
+        name="Developer",
+        role=RoomRole.MEMBER,
+    )
+    assert member.has_permission("create_tasks")
+    assert member.has_permission("execute_tasks")
+    assert not member.has_permission("manage_room")
+    assert not member.has_permission("change_roles")
+
+    viewer = RoomParticipant(
+        room_id="room_1",
+        participant_id="user_viewer",
+        name="Auditor",
+        role=RoomRole.VIEWER,
+    )
+    assert viewer.has_permission("view_history")
+    assert viewer.has_permission("read_messages")
+    assert not viewer.has_permission("create_tasks")
+    assert not viewer.has_permission("execute_tasks")
+
+    agent = RoomParticipant(
+        room_id="room_1",
+        participant_id="agent_claude",
+        name="Claude Code Adapter",
+        role=RoomRole.AGENT,
+        participant_type="agent",
+        adapter_type="claude-code",
+    )
+    assert agent.has_permission("execute_tasks")
+    assert agent.has_permission("claim_tasks")
+    assert agent.has_permission("update_task_progress")
+    assert not agent.has_permission("manage_room")
+
+    # Custom permission grant
+    custom = RoomParticipant(
+        room_id="room_1",
+        participant_id="user_custom",
+        name="Senior Dev",
+        role=RoomRole.MEMBER,
+        permissions=["create_tasks", "custom_permission_x"],
+    )
+    assert custom.has_permission("custom_permission_x")
+
+
+def test_room_governance_add_and_list_participants(temp_sqlite):
+    """Verify RoomGovernance adds, lists, and queries room participants."""
+    mapper = RoomProjectMapper(storage=temp_sqlite)
+    gov = RoomGovernance(storage=temp_sqlite)
+
+    room = mapper.create_room(
+        project_id="p-alpha",
+        name="Dev Room",
+        description="Collaborative room for dev",
+    )
+
+    # Add Admin
+    admin = gov.add_participant(
+        room_id=room.room_id,
+        participant_id="user_1",
+        name="Alice",
+        role=RoomRole.ADMIN,
+    )
+    assert admin.role == RoomRole.ADMIN
+    assert admin.has_permission("manage_room")
+
+    # Add Agent Adapter
+    agent = gov.add_participant(
+        room_id=room.room_id,
+        participant_id="agent_1",
+        name="Claude Worker",
+        role=RoomRole.AGENT,
+        participant_type="agent",
+        adapter_type="claude-code",
+    )
+    assert agent.participant_type == "agent"
+    assert agent.adapter_type == "claude-code"
+
+    # Verify room's active_adapters was updated automatically
+    updated_room = mapper.get_room(room.room_id)
+    assert "claude-code" in updated_room.active_adapters
+
+    # List participants
+    participants = gov.list_participants(room.room_id)
+    assert len(participants) == 2
+    participant_ids = {p.participant_id for p in participants}
+    assert "user_1" in participant_ids
+    assert "agent_1" in participant_ids
+
+    # Query individual participant
+    p = gov.get_participant(room.room_id, "user_1")
+    assert p is not None
+    assert p.name == "Alice"
+
+
+def test_room_governance_rbac_and_role_change(temp_sqlite):
+    """Verify RBAC rules: changing roles, permissions, and participant removal."""
+    mapper = RoomProjectMapper(storage=temp_sqlite)
+    gov = RoomGovernance(storage=temp_sqlite)
+
+    room = mapper.create_room(
+        project_id="p-alpha",
+        name="Gov Room",
+    )
+
+    gov.add_participant(
+        room_id=room.room_id,
+        participant_id="admin_user",
+        role=RoomRole.ADMIN,
+    )
+    gov.add_participant(
+        room_id=room.room_id,
+        participant_id="regular_member",
+        role=RoomRole.MEMBER,
+    )
+    gov.add_participant(
+        room_id=room.room_id,
+        participant_id="viewer_user",
+        role=RoomRole.VIEWER,
+    )
+
+    # 1. Non-admin cannot change roles
+    with pytest.raises(PermissionError, match="does not have 'change_roles'"):
+        gov.change_role(
+            room_id=room.room_id,
+            participant_id="viewer_user",
+            new_role=RoomRole.MEMBER,
+            requested_by_id="regular_member",
+        )
+
+    # 2. Admin can change role
+    promoted = gov.change_role(
+        room_id=room.room_id,
+        participant_id="viewer_user",
+        new_role=RoomRole.MEMBER,
+        requested_by_id="admin_user",
+    )
+    assert promoted.role == RoomRole.MEMBER
+    assert promoted.has_permission("create_tasks")
+
+    # 3. Non-admin cannot remove other participant
+    with pytest.raises(PermissionError, match="does not have 'manage_participants'"):
+        gov.remove_participant(
+            room_id=room.room_id,
+            participant_id="viewer_user",
+            requested_by_id="regular_member",
+        )
+
+    # 4. Self-removal is permitted without admin
+    assert (
+        gov.remove_participant(
+            room_id=room.room_id,
+            participant_id="regular_member",
+            requested_by_id="regular_member",
+        )
+        is True
+    )
+    assert gov.get_participant(room.room_id, "regular_member") is None
+
+    # 5. Admin removal of participant
+    assert (
+        gov.remove_participant(
+            room_id=room.room_id,
+            participant_id="viewer_user",
+            requested_by_id="admin_user",
+        )
+        is True
+    )
+    assert gov.get_participant(room.room_id, "viewer_user") is None

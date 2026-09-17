@@ -180,6 +180,22 @@ class SQLiteBackend(StorageBackend):
                     );
                     CREATE INDEX IF NOT EXISTS idx_rooms_project ON collaborative_rooms(project_id);
                     CREATE INDEX IF NOT EXISTS idx_rooms_status ON collaborative_rooms(status);
+
+                    CREATE TABLE IF NOT EXISTS room_participants (
+                        room_id TEXT NOT NULL,
+                        participant_id TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        role TEXT NOT NULL,
+                        participant_type TEXT NOT NULL DEFAULT 'human',
+                        adapter_type TEXT,
+                        permissions TEXT NOT NULL DEFAULT '[]',
+                        joined_at TEXT NOT NULL,
+                        metadata TEXT NOT NULL DEFAULT '{}',
+                        PRIMARY KEY (room_id, participant_id),
+                        FOREIGN KEY (room_id) REFERENCES collaborative_rooms(room_id) ON DELETE CASCADE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_participants_room ON room_participants(room_id);
+                    CREATE INDEX IF NOT EXISTS idx_participants_role ON room_participants(role);
                 """)
                 conn.commit()
 
@@ -1498,6 +1514,143 @@ class SQLiteBackend(StorageBackend):
             try:
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM collaborative_rooms WHERE room_id = ?", (room_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def add_room_participant(self, participant: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                now_iso = datetime.now(timezone.utc).isoformat()
+                joined_at = participant.get("joined_at") or now_iso
+                perms = participant.get("permissions") or []
+                if not isinstance(perms, str):
+                    perms = json.dumps(perms)
+                meta = participant.get("metadata") or {}
+                if not isinstance(meta, str):
+                    meta = json.dumps(meta)
+
+                cursor.execute(
+                    """
+                    INSERT INTO room_participants (
+                        room_id, participant_id, name, role, participant_type, adapter_type,
+                        permissions, joined_at, metadata
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(room_id, participant_id) DO UPDATE SET
+                        name = excluded.name,
+                        role = excluded.role,
+                        participant_type = excluded.participant_type,
+                        adapter_type = excluded.adapter_type,
+                        permissions = excluded.permissions,
+                        metadata = excluded.metadata
+                    """,
+                    (
+                        participant["room_id"],
+                        participant["participant_id"],
+                        participant.get("name", participant["participant_id"]),
+                        participant.get("role", "member"),
+                        participant.get("participant_type", "human"),
+                        participant.get("adapter_type"),
+                        perms,
+                        joined_at,
+                        meta,
+                    ),
+                )
+                conn.commit()
+                res = self.get_room_participant(
+                    participant["room_id"], participant["participant_id"]
+                )
+                return res if res is not None else participant
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_room_participant(self, room_id: str, participant_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM room_participants WHERE room_id = ? AND participant_id = ?",
+                    (room_id, participant_id),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                data = dict(row)
+                data["permissions"] = json.loads(data.get("permissions") or "[]")
+                data["metadata"] = json.loads(data.get("metadata") or "{}")
+                return data
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_room_participants(self, room_id: str) -> List[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM room_participants WHERE room_id = ? ORDER BY joined_at ASC",
+                    (room_id,),
+                )
+                rows = cursor.fetchall()
+                results = []
+                for row in rows:
+                    data = dict(row)
+                    data["permissions"] = json.loads(data.get("permissions") or "[]")
+                    data["metadata"] = json.loads(data.get("metadata") or "{}")
+                    results.append(data)
+                return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def update_room_participant(
+        self, room_id: str, participant_id: str, updates: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                set_clauses: List[str] = []
+                params: List[Any] = []
+
+                for k, v in updates.items():
+                    if k in ("room_id", "participant_id", "joined_at"):
+                        continue
+                    if k in ("permissions", "metadata") and not isinstance(v, str):
+                        v = json.dumps(v)
+                    set_clauses.append(f"{k} = ?")
+                    params.append(v)
+
+                if not set_clauses:
+                    return self.get_room_participant(room_id, participant_id)
+
+                params.append(room_id)
+                params.append(participant_id)
+                sql = f"UPDATE room_participants SET {', '.join(set_clauses)} WHERE room_id = ? AND participant_id = ?"
+                cursor.execute(sql, tuple(params))
+                conn.commit()
+                return self.get_room_participant(room_id, participant_id)
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def remove_room_participant(self, room_id: str, participant_id: str) -> bool:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "DELETE FROM room_participants WHERE room_id = ? AND participant_id = ?",
+                    (room_id, participant_id),
+                )
                 conn.commit()
                 return cursor.rowcount > 0
             finally:

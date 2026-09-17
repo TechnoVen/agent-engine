@@ -496,6 +496,28 @@ class StorageBackend(ABC):
         """Delete or archive a collaborative room."""
         return False
 
+    def add_room_participant(self, participant: Dict[str, Any]) -> Dict[str, Any]:
+        """Add or update a room participant."""
+        return participant
+
+    def get_room_participant(self, room_id: str, participant_id: str) -> Optional[Dict[str, Any]]:
+        """Get a participant in a room."""
+        return None
+
+    def list_room_participants(self, room_id: str) -> List[Dict[str, Any]]:
+        """List all participants in a room."""
+        return []
+
+    def update_room_participant(
+        self, room_id: str, participant_id: str, updates: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Update participant role or metadata."""
+        return None
+
+    def remove_room_participant(self, room_id: str, participant_id: str) -> bool:
+        """Remove a participant from a room."""
+        return False
+
 
 # Backward-compatible and semantic alias
 StorageRepository = StorageBackend
