@@ -285,7 +285,11 @@
   - **Deliverables:** `core/adapters/claude_code.py` (`ClaudeCodeAdapter` with CLI detection, key resolution, subprocess execution, output parsing, streaming generator, process termination), registered in `AdapterRegistry`, and integration tests in `tests/test_adapters.py`.
   - **Acceptance Criteria:** Adapts Claude Code execution, extracts tool/edit calls, streams chunks, terminates cleanly on stop, falls back deterministically when binary or key is missing; test count strictly increases (263 → 264); 100% of monorepo tests pass (264/264).
   - **Status:** ✅ DONE
-- [ ] **Task 5.3 — Codex Adapter**
+- [x] **Task 5.3 — Codex Adapter**
+  - **User Story:** As a developer, I want to execute OpenAI Codex / GPT-4o code generation with strict Law 1 token budgeting, unified diff patch extraction, and spend ledger integration.
+  - **Deliverables:** `core/adapters/codex.py` (`CodexAdapter` with key discovery, CLI detection, Law 1 spend ledger integration via `CostTracker`, patch and code-block parsing, streaming chunk generator, subprocess management), registered in `AdapterRegistry`, and integration tests in `tests/test_adapters.py`.
+  - **Acceptance Criteria:** Executes code generation requests, records per-request cost to ledger, extracts unified diffs and code blocks into tool calls, streams incremental tokens, terminates cleanly; test count strictly increases (264 → 265); 100% of monorepo tests pass (265/265).
+  - **Status:** ✅ DONE
 - [ ] **Task 5.4 — OpenClaw Adapter** (WhatsApp & Telegram personal messaging)
 - [ ] **Task 5.5 — Goose Adapter (ACP)**
 - [ ] **Task 5.6 — Hermes, Cursor, Windsurf Adapters (MCP fallback)**

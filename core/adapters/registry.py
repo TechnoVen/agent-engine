@@ -155,6 +155,8 @@ def get_adapter_registry() -> AdapterRegistry:
     if _GLOBAL_ADAPTER_REGISTRY is None:
         _GLOBAL_ADAPTER_REGISTRY = AdapterRegistry()
         from core.adapters.claude_code import ClaudeCodeAdapter
+        from core.adapters.codex import CodexAdapter
 
         _GLOBAL_ADAPTER_REGISTRY.register(ClaudeCodeAdapter())
+        _GLOBAL_ADAPTER_REGISTRY.register(CodexAdapter())
     return _GLOBAL_ADAPTER_REGISTRY

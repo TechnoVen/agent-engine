@@ -14,6 +14,7 @@ from core.adapters.base import (
     AgentAdapter,
 )
 from core.adapters.claude_code import ClaudeCodeAdapter
+from core.adapters.codex import CodexAdapter
 from core.adapters.mock import MockAgentAdapter
 from core.adapters.registry import (
     AdapterDisabledError,
@@ -26,6 +27,7 @@ __all__ = [
     "AgentAdapter",
     "MockAgentAdapter",
     "ClaudeCodeAdapter",
+    "CodexAdapter",
     "AdapterCapability",
     "AdapterHealthStatus",
     "AdapterHealth",

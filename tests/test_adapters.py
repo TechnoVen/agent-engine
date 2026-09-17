@@ -331,3 +331,59 @@ async def test_claude_code_adapter():
     claude_in_reg = reg.get("claude-code")
     assert claude_in_reg is not None
     assert claude_in_reg.adapter_id == "claude-code"
+
+
+@pytest.mark.anyio
+async def test_codex_adapter():
+    """Verify Task 5.3: CodexAdapter lifecycle, Law 1 cost tracking, diff extraction, and streaming."""
+    from core.adapters.codex import CodexAdapter
+
+    adapter = CodexAdapter()
+    assert adapter.adapter_id == "codex"
+    assert adapter.protocol == "openai-codex"
+    assert "tools" in [c.value for c in adapter.capabilities]
+    assert "file_edit" in [c.value for c in adapter.capabilities]
+
+    # Initialize & health check
+    assert adapter.initialize() is True
+    health = adapter.health_check()
+    assert health.status in (AdapterHealthStatus.HEALTHY, AdapterHealthStatus.DEGRADED)
+    assert health.latency_ms >= 0
+
+    # Execution & Cost Tracking (Law 1)
+    req = AdapterExecutionRequest(
+        prompt="Write a python function to validate email addresses",
+        model="gpt-4o",
+        context={"target_file": "core/utils/validator.py"},
+    )
+    resp = await adapter.execute(req)
+    assert resp.adapter_id == "codex"
+    assert len(resp.content) > 0
+    assert resp.usage["total_tokens"] > 0
+    assert "cost_usd" in resp.metadata
+    assert len(resp.tool_calls) >= 1
+    assert resp.tool_calls[0]["name"] in ("create_file", "edit_file", "apply_patch")
+
+    # Direct diff patch extraction test
+    diff_text = "Here is the patch:\n```diff\n--- a/main.py\n+++ b/main.py\n@@ -1 +1 @@\n-print('hello')\n+print('world')\n```"
+    diff_calls = adapter._extract_patches(diff_text, req)
+    assert len(diff_calls) == 1
+    assert diff_calls[0]["name"] == "apply_patch"
+    assert "--- a/main.py" in diff_calls[0]["arguments"]["diff"]
+
+    # Streaming test
+    chunks = []
+    async for chunk in adapter.stream(req):
+        chunks.append(chunk)
+
+    assert any(c.chunk_type == "token" for c in chunks)
+    assert any(c.chunk_type == "tool_call" for c in chunks)
+    assert any(c.chunk_type == "done" for c in chunks)
+    done_chunk = next(c for c in chunks if c.chunk_type == "done")
+    assert done_chunk.finish_reason == "stop"
+
+    # Global registry integration
+    reg = get_adapter_registry()
+    codex_in_reg = reg.get("codex")
+    assert codex_in_reg is not None
+    assert codex_in_reg.adapter_id == "codex"
