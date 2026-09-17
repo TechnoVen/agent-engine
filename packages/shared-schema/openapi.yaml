@@ -569,6 +569,24 @@ paths:
               schema:
                 type: object
 
+  /channels/discord/interactions:
+    post:
+      summary: Incoming webhook for Discord Interactions and slash commands
+      operationId: discordInteractionsWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Interaction processed or Ping acknowledged
+          content:
+            application/json:
+              schema:
+                type: object
+
   /rooms:
     post:
       summary: Create collaborative room

@@ -3518,6 +3518,32 @@ async def teams_activities_webhook(request: Request):
     }
 
 
+@v1_router.post("/channels/discord/interactions")
+async def discord_interactions_webhook(request: Request):
+    """Incoming webhook for Discord Interactions and slash commands."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid JSON")
+
+    # Discord Interaction Type 1: PING -> reply with PONG {"type": 1}
+    if body.get("type") == 1:
+        return {"type": 1}
+
+    reg = get_adapter_registry()
+    adapter = reg.get("discord")
+    if not adapter:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Discord adapter not found"
+        )
+
+    normalized = adapter.normalize_inbound(body)
+    return {
+        "status": "received",
+        "normalized": normalized,
+    }
+
+
 # Mount router to FastAPI app
 
 

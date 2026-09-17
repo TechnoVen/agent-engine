@@ -69,6 +69,8 @@ class ChannelSettings:
     discord_enabled: bool = False
     discord_webhook_url: Optional[str] = None
     discord_bot_token: Optional[str] = None
+    discord_application_id: Optional[str] = None
+    discord_public_key: Optional[str] = None
     mattermost_enabled: bool = False
     mattermost_url: Optional[str] = None
     mattermost_bot_token: Optional[str] = None

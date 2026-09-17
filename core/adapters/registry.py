@@ -163,6 +163,7 @@ def get_adapter_registry() -> AdapterRegistry:
             MCPFallbackAdapter,
             WindsurfAdapter,
         )
+        from core.adapters.discord import DiscordAdapter
         from core.adapters.openclaw import OpenClawAdapter
         from core.adapters.slack import SlackAdapter
         from core.adapters.teams import TeamsAdapter
@@ -177,4 +178,5 @@ def get_adapter_registry() -> AdapterRegistry:
         _GLOBAL_ADAPTER_REGISTRY.register(MCPFallbackAdapter())
         _GLOBAL_ADAPTER_REGISTRY.register(SlackAdapter())
         _GLOBAL_ADAPTER_REGISTRY.register(TeamsAdapter())
+        _GLOBAL_ADAPTER_REGISTRY.register(DiscordAdapter())
     return _GLOBAL_ADAPTER_REGISTRY

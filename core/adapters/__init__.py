@@ -30,6 +30,7 @@ from core.adapters.registry import (
     AdapterRegistry,
     get_adapter_registry,
 )
+from core.adapters.discord import DiscordAdapter
 from core.adapters.slack import SlackAdapter
 from core.adapters.teams import TeamsAdapter
 
@@ -42,6 +43,7 @@ __all__ = [
     "OpenClawAdapter",
     "SlackAdapter",
     "TeamsAdapter",
+    "DiscordAdapter",
     "CursorAdapter",
     "WindsurfAdapter",
     "HermesAdapter",

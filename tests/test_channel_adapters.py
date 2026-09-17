@@ -17,6 +17,7 @@ from core.adapters.base import (
     AdapterHealthStatus,
 )
 from core.adapters.registry import get_adapter_registry
+from core.adapters.discord import DiscordAdapter
 from core.adapters.slack import SlackAdapter
 from core.adapters.teams import TeamsAdapter
 from services.python.server.api import app
@@ -377,3 +378,234 @@ def test_teams_webhook_api_integration():
     assert teams_in_reg is not None
     assert teams_in_reg.adapter_id == "teams"
     assert teams_in_reg.protocol == "bot-framework-http"
+
+
+def test_discord_adapter_lifecycle_and_health(monkeypatch):
+    """Verify DiscordAdapter initialization, capabilities, and health check states."""
+    # 1. Unconfigured / simulation mode
+    monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("DISCORD_APPLICATION_ID", raising=False)
+    monkeypatch.delenv("DISCORD_PUBLIC_KEY", raising=False)
+
+    adapter = DiscordAdapter()
+    assert adapter.adapter_id == "discord"
+    assert adapter.protocol == "discord-gateway-ws"
+    assert AdapterCapability.STREAMING in adapter.capabilities
+    assert AdapterCapability.TOOLS in adapter.capabilities
+    assert AdapterCapability.CANCELLATION in adapter.capabilities
+
+    assert adapter.initialize() is True
+    health = adapter.health_check()
+    assert health.status == AdapterHealthStatus.DEGRADED
+    assert health.details["configured"] is False
+    assert health.details["has_bot_token"] is False
+
+    # 2. Configured mode
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "discord_bot_secret_token_123")
+    monkeypatch.setenv("DISCORD_APPLICATION_ID", "123456789012345678")
+    monkeypatch.setenv("DISCORD_PUBLIC_KEY", "pubkey_hex_string_abcdef")
+
+    configured_adapter = DiscordAdapter()
+    configured_adapter.initialize()
+    health_conf = configured_adapter.health_check()
+    assert health_conf.status == AdapterHealthStatus.HEALTHY
+    assert health_conf.details["has_bot_token"] is True
+    assert health_conf.details["has_application_id"] is True
+    assert health_conf.details["has_public_key"] is True
+    assert health_conf.details["configured"] is True
+
+
+def test_discord_adapter_gateway_framing():
+    """Verify Discord Gateway WebSocket framing (OP 1, OP 2, OP 10, OP 11, OP 0)."""
+    adapter = DiscordAdapter()
+    adapter.initialize()
+
+    # 1. Heartbeat payload (OP 1)
+    hb = adapter.create_heartbeat_payload(last_sequence=42)
+    assert hb == {"op": 1, "d": 42}
+
+    # 2. Identify payload (OP 2)
+    ident = adapter.create_identify_payload(intents=513)
+    assert ident["op"] == 2
+    assert ident["d"]["intents"] == 513
+    assert ident["d"]["properties"]["os"] == "linux"
+
+    # 3. Handle Hello frame (OP 10)
+    hello_frame = {
+        "op": 10,
+        "d": {"heartbeat_interval": 45000},
+    }
+    hello_res = adapter.handle_gateway_frame(hello_frame)
+    assert hello_res["type"] == "hello"
+    assert hello_res["heartbeat_interval"] == 45000
+    assert hello_res["identify"]["op"] == 2
+
+    # 4. Handle Heartbeat request (OP 1)
+    hb_req_frame = {"op": 1}
+    hb_ack_res = adapter.handle_gateway_frame(hb_req_frame)
+    assert hb_ack_res == {"type": "heartbeat_ack", "op": 11, "d": None}
+
+    # 5. Handle Heartbeat ACK (OP 11)
+    ack_frame = {"op": 11}
+    ack_res = adapter.handle_gateway_frame(ack_frame)
+    assert ack_res == {"type": "heartbeat_ack_received", "acknowledged": True}
+
+    # 6. Handle Dispatch (OP 0) with sequence tracking
+    dispatch_frame = {
+        "op": 0,
+        "s": 105,
+        "t": "MESSAGE_CREATE",
+        "d": {
+            "id": "msg_987654",
+            "channel_id": "chan_discord_111",
+            "guild_id": "guild_discord_222",
+            "author": {"id": "usr_333", "username": "dave"},
+            "content": "<@!1234567890> generate quarterly financial review",
+            "timestamp": "2026-03-17T12:30:00Z",
+        },
+    }
+    disp_res = adapter.handle_gateway_frame(dispatch_frame)
+    assert disp_res["type"] == "dispatch"
+    assert disp_res["event"] == "MESSAGE_CREATE"
+    assert adapter._last_sequence == 105
+    norm = disp_res["normalized"]
+    assert norm["channel"] == "discord"
+    assert norm["text"] == "generate quarterly financial review"
+    assert norm["user_name"] == "dave"
+
+
+def test_discord_adapter_normalize_inbound():
+    """Verify inbound normalization for message creation, mention stripping, and ping interactions."""
+    adapter = DiscordAdapter()
+
+    # 1. MESSAGE_CREATE with mention stripping
+    raw_msg = {
+        "id": "msg_123",
+        "channel_id": "c_general",
+        "guild_id": "g_main",
+        "author": {"id": "u_999", "username": "eve", "global_name": "Eve C."},
+        "content": "<@!999000111> <@&888777> run unit tests on branch feature/v2",
+    }
+    norm_msg = adapter.normalize_inbound(raw_msg)
+    assert norm_msg["channel"] == "discord"
+    assert norm_msg["text"] == "run unit tests on branch feature/v2"
+    assert norm_msg["user_id"] == "u_999"
+    assert norm_msg["user_name"] == "Eve C."
+    assert norm_msg["channel_id"] == "c_general"
+
+    # 2. HTTP Interaction Ping (Type 1)
+    ping_payload = {"type": 1, "id": "ping_event_1"}
+    norm_ping = adapter.normalize_inbound(ping_payload)
+    assert norm_ping["event_type"] == "ping"
+    assert norm_ping["response"] == {"type": 1}
+
+    # 3. Slash Command Interaction (Type 2)
+    slash_payload = {
+        "type": 2,
+        "id": "slash_interaction_42",
+        "channel_id": "c_commands",
+        "member": {
+            "user": {"id": "u_frank", "username": "frank"},
+        },
+        "data": {
+            "name": "audit",
+            "options": [{"name": "target", "value": "production_database"}],
+        },
+    }
+    norm_slash = adapter.normalize_inbound(slash_payload)
+    assert norm_slash["channel"] == "discord"
+    assert norm_slash["user_name"] == "frank"
+    assert norm_slash["text"] == "production_database"
+
+
+def test_discord_adapter_format_outbound_and_embeds():
+    """Verify Discord REST outbound payload formatting, reply references, and rich embeds."""
+    adapter = DiscordAdapter()
+
+    # 1. Standard message with reply reference
+    std_out = adapter.format_outbound(
+        content="All 286 automated tests passed.",
+        channel_id="c_ci_cd",
+        reply_to_message_id="msg_trigger_001",
+    )
+    assert std_out["content"] == "All 286 automated tests passed."
+    assert std_out["channel_id"] == "c_ci_cd"
+    assert std_out["message_reference"]["message_id"] == "msg_trigger_001"
+
+    # 2. Rich embed format
+    embed_out = adapter.format_outbound(
+        content="Memory usage: 48MB. CPU: 1.2%.",
+        use_embed=True,
+        embed_title="Node Health Metrics",
+    )
+    assert "embeds" in embed_out
+    embed = embed_out["embeds"][0]
+    assert embed["title"] == "Node Health Metrics"
+    assert embed["description"] == "Memory usage: 48MB. CPU: 1.2%."
+    assert embed["color"] == 0x5865F2
+
+
+@pytest.mark.anyio
+async def test_discord_adapter_execution_and_streaming():
+    """Verify execution with Law 1/2 token budgeting and token streaming."""
+    adapter = DiscordAdapter()
+    adapter.initialize()
+
+    req = AdapterExecutionRequest(
+        prompt="Synthesize changelog for release v1.4.0",
+        session_id="discord_sess_50",
+        context={"channel_id": "c_releases", "reply_to_message_id": "msg_req_88"},
+    )
+
+    # 1. Execute
+    resp = await adapter.execute(req)
+    assert resp.adapter_id == "discord"
+    assert "Echo [discord]: Synthesize changelog" in resp.content
+    assert resp.usage["total_tokens"] > 0
+    assert resp.metadata["channel"] == "discord"
+    assert resp.metadata["channel_id"] == "c_releases"
+    assert resp.metadata["reply_to_message_id"] == "msg_req_88"
+
+    # 2. Stream
+    chunks = []
+    async for chunk in adapter.stream(req):
+        chunks.append(chunk)
+
+    assert any(c.chunk_type == "token" for c in chunks)
+    assert any(c.chunk_type == "done" for c in chunks)
+
+
+def test_discord_interactions_webhook_api():
+    """Verify FastAPI /v1/channels/discord/interactions webhook endpoint."""
+    client = TestClient(app)
+
+    # 1. Type 1 Ping -> PONG {"type": 1}
+    ping_resp = client.post("/v1/channels/discord/interactions", json={"type": 1})
+    assert ping_resp.status_code == 200
+    assert ping_resp.json() == {"type": 1}
+
+    # 2. Slash command interaction
+    interaction_payload = {
+        "type": 2,
+        "id": "inter_test_99",
+        "channel_id": "c_sec",
+        "member": {"user": {"id": "u_grace", "username": "grace"}},
+        "data": {
+            "name": "scan",
+            "options": [{"name": "repo", "value": "agent-engine-core"}],
+        },
+    }
+    resp = client.post("/v1/channels/discord/interactions", json=interaction_payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "received"
+    assert data["normalized"]["channel"] == "discord"
+    assert data["normalized"]["text"] == "agent-engine-core"
+    assert data["normalized"]["user_name"] == "grace"
+
+    # 3. Global Adapter Registry verification
+    reg = get_adapter_registry()
+    discord_in_reg = reg.get("discord")
+    assert discord_in_reg is not None
+    assert discord_in_reg.adapter_id == "discord"
+    assert discord_in_reg.protocol == "discord-gateway-ws"
