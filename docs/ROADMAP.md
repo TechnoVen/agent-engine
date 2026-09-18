@@ -350,7 +350,7 @@
 
 ## Phase 7 — Workflow Engine (Milestone M5)
 
-- [ ] **Task 7.1 — Workflow Schema & Runtime**
+- [x] **Task 7.1 — Workflow Schema & Runtime**
 - [ ] **Task 7.2 — Visual Workflow Builder**
 - [ ] **Task 7.3 — Human-in-the-Loop Gates**
 - [ ] **Task 7.4 — Swarm Screen (Multi-Agent Parallel Execution)**
