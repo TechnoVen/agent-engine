@@ -1,12 +1,14 @@
 # Agent Engine — Canonical Implementation Status & Capability Matrix
 
 > **Status:** Authoritative Implementation Reality  
-> **Updated:** September 18, 2026 (Stage R0 Baseline)  
+> **Updated:** September 18, 2026 (Stage R0 Baseline — Corrected per CTO Review)  
 > **Governing Release:** 0.5 Nadir Founder MVP  
 
 ---
 
 ## 1. Maturity Level Definitions
+
+The S0–S5 maturity scale applies strictly to **runtime capabilities** (execution code, integrations, and behavioral verification). Governance, specification, and architectural review tasks track operational status (`task_status: planned | in_progress | done`); their capability maturity is designated `N/A (Specification/Governance)`:
 
 | Maturity Level | Criteria | Verification Standard |
 |---|---|---|
@@ -19,9 +21,9 @@
 
 ---
 
-## 2. Legacy Capability Inventory (Phases 0.1 – 7.5)
+## 2. Implemented Legacy Capability Inventory (Phases 0.1 – 7.5)
 
-Every task from the legacy Phase 0–15 roadmap is inventoried below with its canonical destination, migration action, and verified maturity:
+Every implemented task from legacy Phases 0.1 through 7.5 is inventoried below with its canonical destination, migration action, and verified runtime maturity:
 
 | Legacy ID | Description | Canonical Destination | Migration Action | Current Maturity | Evidence Link |
 |---|---|---|---|---|---|
@@ -68,13 +70,30 @@ Every task from the legacy Phase 0–15 roadmap is inventoried below with its ca
 
 ---
 
-## 3. Canonical Task Tracking Matrix (Stage R0 — Architecture Rebaseline)
+## 3. Legacy Planned Work Inventory (Phases 8.1 – 15.x)
+
+The legacy roadmap contained planned but unimplemented phases. These were never coded and are mapped into the canonical roadmap as follows:
+
+| Legacy Scope | Original Description | Canonical Release Destination | Disposition / Rationale |
+|---|---|---|---|
+| **Phase 8** | Advanced Memory, Hybrid RAG, Knowledge Ingestion | Release 0.6 / Stage R6 (Knowledge Engine) | `ABSORBED INTO R6`: Unimplemented in legacy tree; slated for canonical Knowledge Engine. |
+| **Phase 9** | Unified Audit Telemetry & Spend Analytics | Release 0.5 / Stage R1 & R2 | `ABSORBED INTO R1 / R2`: Core execution ledger in R1 and security audit in R2. |
+| **Phase 10** | Dynamic Architecture Visualizer | Release 0.9 / Stage R11 | `DEFERRED`: Advanced visual diagnostics deferred past founder MVP. |
+| **Phase 11** | Enterprise Multi-User, Tenancy, RBAC | Release 1.5 / Stage R16 (Business Edition) | `ABSORBED INTO R16`: Multi-tenancy deferred to enterprise business release. |
+| **Phase 12** | Public Skill & Agent Package Registry | Release 1.0 / Stage R13 (Package Model & Marketplace) | `ABSORBED INTO R13`: Marketplace model scheduled for 1.0 Local-First Stable. |
+| **Phase 13** | Kubernetes SaaS Cluster & Cloud Sync | Release 3.x / Stage R17 (Enterprise Cloud) | `ABSORBED INTO R17`: Cloud infrastructure out of scope for local-first MVP. |
+| **Phase 14** | Enterprise Compliance & Security Hardening | Release 1.5 / Stage R16 | `ABSORBED INTO R16`: Enterprise compliance suites deferred to Business edition. |
+| **Phase 15** | Production Operations & Package Installers | Release 1.0 / Stage R14 | `ABSORBED INTO R14`: Packaged installers slated for 1.0 release gate. |
+
+---
+
+## 4. Canonical Task Tracking Matrix (Stage R0 — Architecture Rebaseline)
 
 ```yaml
 - id: R0.1
   title: "Archive the legacy roadmap"
-  status: done
-  maturity: S3
+  task_status: done
+  capability_maturity: "N/A (Governance)"
   migration: ARCHIVE
   owner: "Architecture"
   depends_on: []
@@ -83,8 +102,8 @@ Every task from the legacy Phase 0–15 roadmap is inventoried below with its ca
 
 - id: R0.2
   title: "Create canonical architecture document set"
-  status: done
-  maturity: S3
+  task_status: done
+  capability_maturity: "N/A (Specification)"
   migration: NEW
   owner: "Architecture"
   depends_on: [R0.1]
@@ -93,18 +112,18 @@ Every task from the legacy Phase 0–15 roadmap is inventoried below with its ca
 
 - id: R0.3
   title: "Build legacy capability inventory"
-  status: done
-  maturity: S3
+  task_status: done
+  capability_maturity: "N/A (Governance)"
   migration: INTEGRATE
   owner: "Architecture"
   depends_on: [R0.2]
-  evidence: ["docs/STATUS.md Section 2 capability matrix"]
-  notes: "All 35 legacy tasks mapped to canonical subsystems and maturity."
+  evidence: ["docs/STATUS.md Section 2 (Phases 0-7.5) & Section 3 (Phases 8-15)"]
+  notes: "All 35 implemented tasks mapped; unimplemented 8-15 mapped to canonical releases."
 
 - id: R0.4
   title: "Freeze canonical domain vocabulary"
-  status: done
-  maturity: S3
+  task_status: done
+  capability_maturity: "N/A (Specification)"
   migration: NEW
   owner: "Architecture"
   depends_on: [R0.2]
@@ -113,8 +132,8 @@ Every task from the legacy Phase 0–15 roadmap is inventoried below with its ca
 
 - id: R0.5
   title: "Establish ADR process & ADR-016"
-  status: done
-  maturity: S3
+  task_status: done
+  capability_maturity: "N/A (Governance)"
   migration: NEW
   owner: "Architecture"
   depends_on: [R0.2, R0.4]
@@ -123,18 +142,18 @@ Every task from the legacy Phase 0–15 roadmap is inventoried below with its ca
 
 - id: R0.6
   title: "Dependency, provenance and license inventory"
-  status: done
-  maturity: S3
+  task_status: done
+  capability_maturity: "N/A (Governance)"
   migration: NEW
   owner: "Architecture"
   depends_on: []
   evidence: ["docs/DEPENDENCY_AND_LICENSE_INVENTORY.md"]
-  notes: "Python (uv), TS (pnpm), and Rust (cargo) dependencies audited."
+  notes: "Python, TS, and Rust dependencies audited. Weak copyleft (MPL-2.0) documented."
 
 - id: R0.7
   title: "Replace test-count completion gates"
-  status: done
-  maturity: S3
+  task_status: done
+  capability_maturity: "N/A (Governance)"
   migration: REFACTOR
   owner: "Architecture"
   depends_on: [R0.3]
@@ -143,11 +162,21 @@ Every task from the legacy Phase 0–15 roadmap is inventoried below with its ca
 
 - id: R0.8
   title: "Verify reported legacy Phase 7 completion"
-  status: done
-  maturity: S3
+  task_status: done
+  capability_maturity: "N/A (Governance)"
   migration: INTEGRATE
   owner: "Architecture"
   depends_on: [R0.3]
   evidence: ["docs/reviews/PHASE_7_CANONICAL_INTEGRATION_REVIEW.md"]
   notes: "Comprehensive ground-truth audit of Phase 7 source code completed and documented."
 ```
+
+---
+
+## 5. Active Test Suite & Deprecation Warnings Log
+
+- **Test Suite Result:** `354 passed, 3 warnings in 37.81s` (`uv run pytest`)
+- **Documented Upstream Warnings (Non-blocking):**
+  1. `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.` (Origin: `fastapi/testclient.py:1` — Upstream FastAPI/Starlette testclient deprecation notice; non-runtime).
+  2. `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.` (Origin: `starlette/testclient.py:53` — Upstream Starlette/AnyIO import alias notice; non-runtime).
+  3. `DeprecationWarning: 'asyncio.iscoroutinefunction' is deprecated and slated for removal in Python 3.16; use inspect.iscoroutinefunction() instead` (Origin: `chromadb/telemetry/opentelemetry/__init__.py:128` — Upstream ChromaDB telemetry compatibility notice for Python 3.16+; non-blocking on current Python 3.10–3.14).
