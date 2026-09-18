@@ -83,6 +83,10 @@ from core.skills import (
 )
 from core.templates import TemplateManager
 from core.workflows import (
+    SwarmAgentSpec,
+    SwarmCase,
+    SwarmCoordinator,
+    SwarmRunResult,
     WorkflowDefinition,
     WorkflowEngine,
     WorkflowGateManager,
@@ -440,6 +444,19 @@ class WorkflowRedirectRequest(BaseModel):
     target_node_id: str
     reviewer: str = "operator"
     input_overrides: Optional[Dict[str, Any]] = None
+
+
+class SwarmEstimateRequest(BaseModel):
+    agents: Optional[List[Dict[str, Any]]] = None
+    case_id: Optional[str] = None
+    model_tier: str = "instant"
+
+
+class SwarmRunApiRequest(BaseModel):
+    prompt: str
+    case_id: Optional[str] = None
+    agents: Optional[List[Dict[str, Any]]] = None
+    model_tier: str = "instant"
 
 
 class MemoryQueryResponse(BaseModel):
@@ -2435,6 +2452,59 @@ async def redirect_workflow_gate_endpoint(
         return resumed.to_dict()
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+_swarm_coordinator: Optional[SwarmCoordinator] = None
+
+
+def get_swarm_coordinator() -> SwarmCoordinator:
+    global _swarm_coordinator
+    if _swarm_coordinator is None:
+        _swarm_coordinator = SwarmCoordinator()
+    return _swarm_coordinator
+
+
+@v1_router.get("/swarm/cases", response_model=List[SwarmCase])
+async def list_swarm_cases_endpoint():
+    """List featured multi-agent swarm team templates."""
+    coordinator = get_swarm_coordinator()
+    return coordinator.list_cases()
+
+
+@v1_router.post("/swarm/estimate")
+async def estimate_swarm_cost_endpoint(req: SwarmEstimateRequest):
+    """Estimate execution cost for a swarm team dispatch before running."""
+    coordinator = get_swarm_coordinator()
+    agents: List[SwarmAgentSpec] = []
+    if req.agents:
+        for a in req.agents:
+            agents.append(SwarmAgentSpec.model_validate(a))
+    elif req.case_id:
+        c = coordinator.get_case(req.case_id)
+        if c:
+            agents = c.agents
+    if not agents:
+        agents = coordinator.list_cases()[0].agents
+
+    est = coordinator.estimate_cost(agents, model_tier=req.model_tier)
+    return {"estimated_cost_usd": est, "agent_count": len(agents), "model_tier": req.model_tier}
+
+
+@v1_router.post("/swarm/run", response_model=SwarmRunResult)
+async def run_swarm_endpoint(req: SwarmRunApiRequest):
+    """Dispatch prompt to a parallel swarm of specialized agents and return aggregated results."""
+    coordinator = get_swarm_coordinator()
+    agents: Optional[List[SwarmAgentSpec]] = None
+    if req.agents:
+        agents = [SwarmAgentSpec.model_validate(a) for a in req.agents]
+
+    result = await coordinator.run_swarm(
+        prompt=req.prompt,
+        agents=agents,
+        case_id=req.case_id,
+        model_tier=req.model_tier,
+    )
+    return result
 
 
 @v1_router.get("/pipelines", response_model=List[PipelineInfo])

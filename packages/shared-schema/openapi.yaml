@@ -801,6 +801,77 @@ paths:
               schema:
                 type: object
 
+  /swarm/cases:
+    get:
+      summary: List featured swarm team cases
+      operationId: listSwarmCases
+      responses:
+        '200':
+          description: Featured swarm cases
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /swarm/estimate:
+    post:
+      summary: Estimate swarm execution cost
+      operationId: estimateSwarmCost
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                case_id:
+                  type: string
+                model_tier:
+                  type: string
+                agents:
+                  type: array
+                  items:
+                    type: object
+      responses:
+        '200':
+          description: Cost estimate
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /swarm/run:
+    post:
+      summary: Run parallel multi-agent swarm
+      operationId: runSwarm
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - prompt
+              properties:
+                prompt:
+                  type: string
+                case_id:
+                  type: string
+                model_tier:
+                  type: string
+                agents:
+                  type: array
+                  items:
+                    type: object
+      responses:
+        '200':
+          description: Aggregated swarm execution result
+          content:
+            application/json:
+              schema:
+                type: object
+
   /pipelines:
     get:
       summary: List registered modular DSPy agent pipelines

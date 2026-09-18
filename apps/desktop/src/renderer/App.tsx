@@ -3,6 +3,7 @@ import { Layout } from './shell/Layout';
 import { Home } from './screens/Home';
 import { Agent } from './screens/Agent';
 import { Tasks } from './screens/Tasks';
+import { Swarm } from './screens/Swarm';
 import { Projects } from './screens/Projects';
 import { Settings } from './screens/Settings';
 import { Policies } from './screens/Policies';
@@ -118,6 +119,15 @@ export const App: React.FC = () => {
       case 'tasks':
         return (
           <Tasks
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'swarm':
+        return (
+          <Swarm
             onSelectMode={setActiveMode}
             activeModel={activeModel}
             onSelectModel={setActiveModel}

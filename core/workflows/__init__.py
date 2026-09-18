@@ -18,6 +18,14 @@ from core.workflows.models import (
 from core.workflows.gates import WorkflowGateManager
 from core.workflows.parser import WorkflowParser
 from core.workflows.storage import WorkflowStorage
+from core.workflows.swarm import (
+    FEATURED_SWARM_CASES,
+    SwarmAgentProgress,
+    SwarmAgentSpec,
+    SwarmCase,
+    SwarmCoordinator,
+    SwarmRunResult,
+)
 
 __all__ = [
     "WorkflowNodeType",
@@ -33,4 +41,10 @@ __all__ = [
     "WorkflowEngine",
     "WorkflowStorage",
     "WorkflowGateManager",
+    "SwarmAgentSpec",
+    "SwarmCase",
+    "SwarmAgentProgress",
+    "SwarmRunResult",
+    "SwarmCoordinator",
+    "FEATURED_SWARM_CASES",
 ]

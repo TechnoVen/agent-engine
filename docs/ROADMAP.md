@@ -353,10 +353,11 @@
 - [x] **Task 7.1 — Workflow Schema & Runtime**
 - [x] **Task 7.2 — Visual Workflow Builder**
 - [x] **Task 7.3 — Human-in-the-Loop Gates**
-- [ ] **Task 7.4 — Swarm Screen (Multi-Agent Parallel Execution)**
+- [x] **Task 7.4 — Swarm Screen (Multi-Agent Parallel Execution)**
   - **User Story:** As a team lead, I want to dispatch a prompt to a parallel swarm of specialized agents and see their live progress strips and aggregated output.
-  - **Deliverables:** `apps/desktop/src/renderer/screens/Swarm.tsx` (Route `/swarm`), `Swarm High` model selector, live multi-agent progress strips, aggregated output view with agent attribution, cost estimator before execution.
-  - **Acceptance Criteria:** Parallel execution respects cost router; partial agent failures handled gracefully; total cost calculated across all agents.
+  - **Deliverables:** `core/workflows/swarm.py` (`SwarmCoordinator`, `SwarmCase`, `SwarmAgentSpec`, `SwarmRunResult`, 3 featured team configurations), REST API endpoints (`GET /v1/swarm/cases`, `POST /v1/swarm/estimate`, `POST /v1/swarm/run`), desktop client & types, `apps/desktop/src/renderer/screens/Swarm.tsx` (Route `/swarm`), live multi-agent progress strips, aggregated output view with agent attribution, cost estimator before execution, and tests in `tests/test_workflows.py`.
+  - **Acceptance Criteria:** Parallel execution respects cost router; partial agent failures handled gracefully; total cost calculated across all agents; all 349 repo tests pass.
+  - **Status:** ✅ DONE
 - [ ] **Task 7.5 — Workflow Builder Screen (React Flow Canvas)**
   - **User Story:** As an automation engineer, I want an interactive visual canvas to drag, drop, connect, and inspect pipeline nodes, approval gates, and conditions.
   - **Deliverables:** `apps/desktop/src/renderer/screens/Workflows.tsx` (Route `/workflows`), React Flow canvas, node palette (Pipelines, Skills, Agents, Gates, Conditions, Merge), inspector panel, round-trip YAML exporter/importer, dry-run simulation mode.

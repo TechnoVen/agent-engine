@@ -42,6 +42,8 @@ import {
   AddRoomParticipantPayload,
   RoomTask,
   CreateRoomTaskPayload,
+  SwarmCase,
+  SwarmRunResult,
 } from '../types';
 
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
@@ -1694,6 +1696,56 @@ class SidecarClient {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || `Failed to update room task: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  // Swarm Multi-Agent Execution (Phase 7 - Task 7.4)
+  async listSwarmCases(): Promise<SwarmCase[]> {
+    try {
+      const res = await fetch(`${this.base}/v1/swarm/cases`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) return [];
+      return await res.json();
+    } catch {
+      return [];
+    }
+  }
+
+  async estimateSwarmCost(params: {
+    case_id?: string;
+    agents?: any[];
+    model_tier?: string;
+  }): Promise<{ estimated_cost_usd: number; agent_count: number; model_tier: string }> {
+    try {
+      const res = await fetch(`${this.base}/v1/swarm/estimate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      if (!res.ok) return { estimated_cost_usd: 0.04, agent_count: 4, model_tier: params.model_tier || 'instant' };
+      return await res.json();
+    } catch {
+      return { estimated_cost_usd: 0.04, agent_count: 4, model_tier: params.model_tier || 'instant' };
+    }
+  }
+
+  async runSwarm(payload: {
+    prompt: string;
+    case_id?: string;
+    agents?: any[];
+    model_tier?: string;
+  }): Promise<SwarmRunResult> {
+    const res = await fetch(`${this.base}/v1/swarm/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to run swarm: HTTP ${res.status}`);
     }
     return await res.json();
   }

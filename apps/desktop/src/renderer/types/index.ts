@@ -762,6 +762,49 @@ export interface CreateRoomTaskPayload {
   metadata?: Record<string, any>;
 }
 
+export interface SwarmAgentSpec {
+  id: string;
+  name: string;
+  role: string;
+  model_tier: string;
+  system_prompt?: string;
+  estimated_cost_usd: number;
+}
+
+export interface SwarmCase {
+  id: string;
+  title: string;
+  tagline: string;
+  description: string;
+  agents: SwarmAgentSpec[];
+  default_prompt: string;
+}
+
+export interface SwarmAgentProgress {
+  agent_id: string;
+  agent_name: string;
+  role: string;
+  model_tier: string;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  progress_percent: number;
+  output: string;
+  cost_usd: number;
+  execution_time_ms: number;
+  error?: string;
+}
+
+export interface SwarmRunResult {
+  swarm_id: string;
+  prompt: string;
+  model_tier: string;
+  status: 'completed' | 'partial_failure' | 'failed';
+  agent_results: SwarmAgentProgress[];
+  aggregated_output: string;
+  total_cost_usd: number;
+  total_time_ms: number;
+  created_at: string;
+}
+
 
 
 

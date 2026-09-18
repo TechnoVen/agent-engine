@@ -5,10 +5,13 @@ Covers:
 - Task 7.1: Workflow Schema, Lossless Parser & DAG Runtime Engine
 """
 
+import asyncio
 from fastapi.testclient import TestClient
 
 from core.workflows import (
     StepResult,
+    SwarmAgentSpec,
+    SwarmCoordinator,
     WorkflowDefinition,
     WorkflowEdge,
     WorkflowEngine,
@@ -616,3 +619,158 @@ def test_workflow_gate_api_redirect_and_endpoints():
 
     # Cleanup
     client.delete(f"/v1/workflows/{wf.id}")
+
+
+def test_swarm_featured_cases_listing():
+    """Verify built-in featured swarm team cases are available and well-formed."""
+    coordinator = SwarmCoordinator()
+    cases = coordinator.list_cases()
+    assert len(cases) >= 3
+    case_ids = [c.id for c in cases]
+    assert "build_deploy_api" in case_ids
+    assert "deep_code_review" in case_ids
+    assert "market_research" in case_ids
+
+    for case in cases:
+        assert case.title
+        assert case.tagline
+        assert case.default_prompt
+        assert len(case.agents) >= 3
+        for agent in case.agents:
+            assert agent.id
+            assert agent.name
+            assert agent.role
+            assert agent.model_tier
+            assert agent.estimated_cost_usd > 0.0
+
+
+def test_swarm_cost_estimator():
+    """Verify SwarmCoordinator cost estimator adheres to model tier multipliers and 90/9/1 rules."""
+    coordinator = SwarmCoordinator()
+    c = coordinator.get_case("build_deploy_api")
+    assert c is not None
+
+    # instant tier
+    cost_instant = coordinator.estimate_cost(c.agents, model_tier="instant")
+    base_sum = sum(a.estimated_cost_usd for a in c.agents)
+    assert cost_instant == round(base_sum, 4)
+
+    # reasoning tier (2.5x multiplier)
+    cost_reasoning = coordinator.estimate_cost(c.agents, model_tier="reasoning")
+    assert cost_reasoning == round(base_sum * 2.5, 4)
+    assert cost_reasoning > cost_instant
+
+
+def test_swarm_parallel_execution():
+    """Verify concurrent agent execution, timing, and attribution markdown synthesis."""
+    coordinator = SwarmCoordinator()
+    prompt = "Create a real-time event telemetry gateway"
+    result = asyncio.run(
+        coordinator.run_swarm(prompt=prompt, case_id="build_deploy_api", model_tier="instant")
+    )
+
+    assert result.status == "completed"
+    assert result.prompt == prompt
+    assert result.model_tier == "instant"
+    assert len(result.agent_results) == 4
+    assert result.total_cost_usd > 0.0
+    assert result.total_time_ms > 0.0
+
+    # Verify each agent's execution details
+    for agent_res in result.agent_results:
+        assert agent_res.status == "completed"
+        assert agent_res.progress_percent == 100
+        assert agent_res.output != ""
+        assert agent_res.execution_time_ms > 0.0
+
+    # Verify synthesized aggregated markdown contains attribution sections
+    assert "# 🐝 Swarm Execution Synthesis" in result.aggregated_output
+    assert "Architect" in result.aggregated_output
+    assert "Coder" in result.aggregated_output
+    assert "Tester" in result.aggregated_output
+    assert "Deployer" in result.aggregated_output
+
+
+def test_swarm_partial_failure_tolerance():
+    """Verify swarm coordinator isolates agent failures and returns partial synthesis."""
+    coordinator = SwarmCoordinator()
+    agents = [
+        SwarmAgentSpec(
+            id="ok_agent",
+            name="Reliable Agent",
+            role="Data Processor",
+            estimated_cost_usd=0.001,
+        ),
+        SwarmAgentSpec(
+            id="err_agent",
+            name="Failing Agent",
+            role="Fault Injection",
+            estimated_cost_usd=0.001,
+        ),
+    ]
+
+    # Mock _execute_single_agent to simulate failure on err_agent
+    orig_exec = coordinator._execute_single_agent
+
+    async def mock_execute(agent, prompt, model_tier):
+        if agent.id == "err_agent":
+            raise RuntimeError("Simulated network timeout during inference")
+        return await orig_exec(agent, prompt, model_tier)
+
+    coordinator._execute_single_agent = mock_execute
+
+    result = asyncio.run(coordinator.run_swarm(prompt="Process event pipeline", agents=agents))
+    assert result.status == "partial_failure"
+    assert len(result.agent_results) == 2
+
+    # Check first agent succeeded
+    res_ok = next(r for r in result.agent_results if r.agent_id == "ok_agent")
+    assert res_ok.status == "completed"
+
+    # Check second agent failed gracefully
+    res_err = next(r for r in result.agent_results if r.agent_id == "err_agent")
+    assert res_err.status == "failed"
+    assert "Simulated network timeout" in (res_err.error or "")
+
+    # Aggregated output mentions the failure
+    assert "Failing Agent" in result.aggregated_output
+    assert "Failed" in result.aggregated_output
+
+
+def test_swarm_api_endpoints():
+    """Verify REST API endpoints for /v1/swarm/cases, /v1/swarm/estimate, and /v1/swarm/run."""
+    client = TestClient(app)
+
+    # 1. GET /v1/swarm/cases
+    cases_res = client.get("/v1/swarm/cases")
+    assert cases_res.status_code == 200
+    cases_data = cases_res.json()
+    assert len(cases_data) >= 3
+    assert any(c["id"] == "deep_code_review" for c in cases_data)
+
+    # 2. POST /v1/swarm/estimate
+    est_res = client.post(
+        "/v1/swarm/estimate",
+        json={"case_id": "deep_code_review", "model_tier": "instant"},
+    )
+    assert est_res.status_code == 200
+    est_data = est_res.json()
+    assert est_data["estimated_cost_usd"] > 0.0
+    assert est_data["agent_count"] >= 3
+    assert est_data["model_tier"] == "instant"
+
+    # 3. POST /v1/swarm/run
+    run_res = client.post(
+        "/v1/swarm/run",
+        json={
+            "prompt": "Audit user auth flows for security vulnerabilities",
+            "case_id": "deep_code_review",
+            "model_tier": "instant",
+        },
+    )
+    assert run_res.status_code == 200
+    run_data = run_res.json()
+    assert run_data["status"] == "completed"
+    assert len(run_data["agent_results"]) >= 3
+    assert "Swarm Execution Synthesis" in run_data["aggregated_output"]
+    assert run_data["total_cost_usd"] > 0.0
