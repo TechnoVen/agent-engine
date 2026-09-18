@@ -84,6 +84,9 @@ class WorkflowParser:
             raise ValueError(f"Failed to parse JSON syntax: {e}") from e
         return cls.from_dict(data)
 
+    parse_yaml = from_yaml
+    parse_json = from_json
+
     @staticmethod
     def validate(workflow: WorkflowDefinition) -> Tuple[bool, List[str]]:
         """Perform comprehensive graph and schema validation.

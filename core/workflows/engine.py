@@ -36,8 +36,17 @@ logger = logging.getLogger("agent_engine.workflows.engine")
 class WorkflowEngine:
     """Runtime engine for executing and simulating DAG workflows."""
 
-    def __init__(self) -> None:
+    def __init__(self, storage: Optional[Any] = None) -> None:
         self.pipeline_registry = get_pipeline_registry()
+        self.storage = storage
+
+    def _record_run(self, run: WorkflowRun) -> WorkflowRun:
+        if self.storage:
+            try:
+                self.storage.save_run(run)
+            except Exception as e:
+                logger.warning("Failed to persist workflow run '%s': %s", run.run_id, e)
+        return run
 
     @staticmethod
     def resolve_binding(
@@ -273,7 +282,7 @@ class WorkflowEngine:
                     "timeout_seconds": node.config.get("timeout_seconds", 3600),
                 }
                 logger.info("Workflow run '%s' paused at Gate '%s'", run_id, node.id)
-                return run
+                return self._record_run(run)
 
             # Resolve inputs for current node
             node_inputs = self.resolve_node_inputs(node, workflow_inputs, step_outputs)
@@ -294,7 +303,7 @@ class WorkflowEngine:
             if step_res.status == "failed":
                 run.status = WorkflowRunStatus.FAILED
                 run.completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                return run
+                return self._record_run(run)
 
             # Route along outgoing edges
             edges = outgoing_edges.get(node.id, [])
@@ -319,7 +328,7 @@ class WorkflowEngine:
         run.outputs = final_outputs
         run.status = WorkflowRunStatus.COMPLETED
         run.completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        return run
+        return self._record_run(run)
 
     def resume_gate(
         self,
@@ -365,7 +374,7 @@ class WorkflowEngine:
             if not reject_edge:
                 run.status = WorkflowRunStatus.CANCELLED
                 run.completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                return run
+                return self._record_run(run)
 
         # Continue execution from post-gate nodes
         run.status = WorkflowRunStatus.RUNNING
@@ -401,7 +410,7 @@ class WorkflowEngine:
                     "inputs": resolved_in,
                     "timeout_seconds": node.config.get("timeout_seconds", 3600),
                 }
-                return run
+                return self._record_run(run)
 
             node_inputs = self.resolve_node_inputs(node, run.inputs, step_outputs)
             step_res = self.execute_node(node, node_inputs, dry_run=False)
@@ -413,7 +422,7 @@ class WorkflowEngine:
             if step_res.status == "failed":
                 run.status = WorkflowRunStatus.FAILED
                 run.completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                return run
+                return self._record_run(run)
 
             for e in [edge for edge in workflow.edges if edge.source == node.id]:
                 active_nodes.add(e.target)
@@ -429,4 +438,4 @@ class WorkflowEngine:
         run.outputs = final_outputs
         run.status = WorkflowRunStatus.COMPLETED
         run.completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        return run
+        return self._record_run(run)

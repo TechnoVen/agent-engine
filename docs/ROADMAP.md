@@ -351,7 +351,7 @@
 ## Phase 7 — Workflow Engine (Milestone M5)
 
 - [x] **Task 7.1 — Workflow Schema & Runtime**
-- [ ] **Task 7.2 — Visual Workflow Builder**
+- [x] **Task 7.2 — Visual Workflow Builder**
 - [ ] **Task 7.3 — Human-in-the-Loop Gates**
 - [ ] **Task 7.4 — Swarm Screen (Multi-Agent Parallel Execution)**
   - **User Story:** As a team lead, I want to dispatch a prompt to a parallel swarm of specialized agents and see their live progress strips and aggregated output.

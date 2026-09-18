@@ -14,7 +14,7 @@ from __future__ import annotations
 from enum import Enum
 import time
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class WorkflowNodeType(str, Enum):
@@ -111,6 +111,9 @@ class WorkflowDefinition(BaseModel):
         default_factory=dict, description="JSON schema or typing of workflow outputs"
     )
     tags: List[str] = Field(default_factory=list, description="Organizational and category tags")
+    steps: List[str] = Field(
+        default_factory=list, description="Ordered or unordered node IDs for legacy compatibility"
+    )
     metadata: Dict[str, Any] = Field(
         default_factory=dict, description="Custom metadata, author, and environment settings"
     )
@@ -120,6 +123,12 @@ class WorkflowDefinition(BaseModel):
     updated_at: str = Field(
         default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     )
+
+    @model_validator(mode="after")
+    def populate_steps(self) -> "WorkflowDefinition":
+        if not self.steps and self.nodes:
+            self.steps = [n.id for n in self.nodes]
+        return self
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize workflow definition to plain dict."""

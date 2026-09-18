@@ -5,7 +5,10 @@ Covers:
 - Task 7.1: Workflow Schema, Lossless Parser & DAG Runtime Engine
 """
 
+from fastapi.testclient import TestClient
+
 from core.workflows import (
+    StepResult,
     WorkflowDefinition,
     WorkflowEdge,
     WorkflowEngine,
@@ -13,9 +16,12 @@ from core.workflows import (
     WorkflowNodeType,
     WorkflowParser,
     WorkflowPosition,
+    WorkflowRun,
     WorkflowRunStatus,
     WorkflowStatus,
+    WorkflowStorage,
 )
+from services.python.server.api import app
 
 
 def _build_sample_workflow() -> WorkflowDefinition:
@@ -215,3 +221,195 @@ def test_workflow_engine_dry_run_simulation():
         assert step.cost_usd == 0.0
 
     assert run.total_cost_usd == 0.0
+
+
+def test_workflow_storage_crud_and_runs():
+    """Verify SQLite storage CRUD operations and run persistence with cascade deletion."""
+    storage = WorkflowStorage(db_path=":memory:")
+
+    # Default seeded workflow exists
+    default_wf = storage.get_workflow("wf_code_audit_and_fix")
+    assert default_wf is not None
+    assert default_wf.name == "Automated Code Audit & Remediation"
+
+    # Save custom workflow
+    wf = _build_sample_workflow()
+    saved = storage.save_workflow(wf)
+    assert saved.id == "compliance_pipeline"
+
+    # Fetch custom workflow
+    fetched = storage.get_workflow("compliance_pipeline")
+    assert fetched is not None
+    assert len(fetched.nodes) == 5
+
+    # List workflows
+    all_wfs = storage.list_workflows()
+    assert len(all_wfs) >= 2
+    tagged = storage.list_workflows(tag="compliance")
+    assert len(tagged) == 1
+    assert tagged[0].id == "compliance_pipeline"
+
+    # Save execution run
+    run = WorkflowRun(
+        run_id="run_test_123",
+        workflow_id=wf.id,
+        status=WorkflowRunStatus.COMPLETED,
+        inputs={"query": "test query"},
+        outputs={"status": "success"},
+        step_results={
+            "extract_step": StepResult(
+                node_id="extract_step",
+                node_type=WorkflowNodeType.AGENT,
+                status="completed",
+                outputs={"response": "extracted"},
+            )
+        },
+        total_cost_usd=0.005,
+    )
+    storage.save_run(run)
+
+    # Get run
+    fetched_run = storage.get_run("run_test_123")
+    assert fetched_run is not None
+    assert fetched_run.status == WorkflowRunStatus.COMPLETED
+    assert fetched_run.total_cost_usd == 0.005
+    assert "extract_step" in fetched_run.step_results
+
+    # List runs
+    runs = storage.list_runs(workflow_id=wf.id)
+    assert len(runs) == 1
+    assert runs[0].run_id == "run_test_123"
+
+    # Delete workflow cascades to its runs
+    deleted = storage.delete_workflow(wf.id)
+    assert deleted is True
+    assert storage.get_workflow(wf.id) is None
+    assert storage.get_run("run_test_123") is None
+
+
+def test_workflow_api_validate():
+    """Verify POST /v1/workflows/validate for valid/invalid YAML and JSON definitions."""
+    client = TestClient(app)
+    wf = _build_sample_workflow()
+    yaml_str = WorkflowParser.to_yaml(wf)
+
+    # Validate valid YAML
+    res = client.post("/v1/workflows/validate", json={"definition_yaml": yaml_str})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["valid"] is True
+    assert data["errors"] == []
+    assert data["node_count"] == 5
+    assert data["edge_count"] == 4
+
+    # Validate valid JSON
+    res_json = client.post("/v1/workflows/validate", json={"definition_json": wf.to_dict()})
+    assert res_json.status_code == 200
+    assert res_json.json()["valid"] is True
+
+    # Validate cyclic invalid JSON
+    bad_wf = _build_sample_workflow()
+    bad_wf.edges.append(WorkflowEdge(id="e_cycle", source="decide_step", target="extract_step"))
+    res_bad = client.post("/v1/workflows/validate", json={"definition_json": bad_wf.to_dict()})
+    assert res_bad.status_code == 200
+    data_bad = res_bad.json()
+    assert data_bad["valid"] is False
+    assert len(data_bad["errors"]) > 0
+
+
+def test_workflow_api_crud():
+    """Verify REST API CRUD endpoints for workflow definitions."""
+    client = TestClient(app)
+
+    # 1. List
+    res = client.get("/v1/workflows")
+    assert res.status_code == 200
+    wfs = res.json()
+    assert len(wfs) >= 1
+    assert any(w["id"] == "wf_code_audit_and_fix" for w in wfs)
+
+    # 2. Create
+    custom_wf = _build_sample_workflow()
+    custom_wf.id = "api_test_crud_pipeline"
+    create_res = client.post("/v1/workflows", json=custom_wf.to_dict())
+    assert create_res.status_code == 200
+    created = create_res.json()
+    assert created["id"] == "api_test_crud_pipeline"
+
+    # 3. Get
+    get_res = client.get(f"/v1/workflows/{custom_wf.id}")
+    assert get_res.status_code == 200
+    assert get_res.json()["name"] == custom_wf.name
+
+    # 4. Update
+    custom_wf.name = "Updated Pipeline Name"
+    put_res = client.put(f"/v1/workflows/{custom_wf.id}", json=custom_wf.to_dict())
+    assert put_res.status_code == 200
+    assert put_res.json()["name"] == "Updated Pipeline Name"
+
+    # 5. Delete
+    del_res = client.delete(f"/v1/workflows/{custom_wf.id}")
+    assert del_res.status_code == 200
+    assert del_res.json()["deleted"] is True
+
+    # Verify 404 after deletion
+    get_del_res = client.get(f"/v1/workflows/{custom_wf.id}")
+    assert get_del_res.status_code == 404
+
+
+def test_workflow_api_dry_run():
+    """Verify POST /v1/workflows/{id}/dry-run simulates execution correctly."""
+    client = TestClient(app)
+    wf = _build_sample_workflow()
+    wf.id = "api_dry_run_test_wf"
+    client.post("/v1/workflows", json=wf.to_dict())
+
+    res = client.post(
+        f"/v1/workflows/{wf.id}/dry-run",
+        json={"inputs": {"query": "Dry run verification"}},
+    )
+    assert res.status_code == 200
+    run_data = res.json()
+    assert run_data["workflow_id"] == wf.id
+    assert run_data["status"] == "completed"
+    assert len(run_data["step_results"]) == 4
+    assert run_data["total_cost_usd"] == 0.0
+
+    # Cleanup
+    client.delete(f"/v1/workflows/{wf.id}")
+
+
+def test_workflow_api_run_history():
+    """Verify POST /v1/workflows/{id}/run and GET /v1/workflows/{id}/runs history."""
+    client = TestClient(app)
+    wf = _build_sample_workflow()
+    wf.id = "api_run_history_test_wf"
+    client.post("/v1/workflows", json=wf.to_dict())
+
+    # Execute live run
+    run_res = client.post(
+        f"/v1/workflows/{wf.id}/run",
+        json={"inputs": {"query": "Live run audit test"}, "dry_run": False},
+    )
+    assert run_res.status_code == 200
+    run_data = run_res.json()
+    run_id = run_data["run_id"]
+    assert run_data["status"] == "completed"
+
+    # List runs for workflow
+    list_res = client.get(f"/v1/workflows/{wf.id}/runs")
+    assert list_res.status_code == 200
+    runs = list_res.json()
+    assert len(runs) >= 1
+    assert any(r["run_id"] == run_id for r in runs)
+
+    # Get specific run details
+    get_run_res = client.get(f"/v1/workflows/{wf.id}/runs/{run_id}")
+    assert get_run_res.status_code == 200
+    detail = get_run_res.json()
+    assert detail["run_id"] == run_id
+    assert "extract_step" in detail["step_results"]
+    assert detail["total_cost_usd"] > 0.0
+
+    # Cleanup
+    client.delete(f"/v1/workflows/{wf.id}")

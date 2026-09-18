@@ -82,6 +82,14 @@ from core.skills import (
     SkillSource,
 )
 from core.templates import TemplateManager
+from core.workflows import (
+    WorkflowDefinition,
+    WorkflowEngine,
+    WorkflowParser,
+    WorkflowRunStatus,
+    WorkflowStatus,
+    WorkflowStorage,
+)
 from server.watcher import apply_staged_patch, get_staged_patches, reject_staged_patch
 
 START_TIME = time.time()
@@ -382,6 +390,12 @@ class WorkflowInfo(BaseModel):
     name: str
     description: str = ""
     steps: List[str] = Field(default_factory=list)
+    version: str = "1.0.0"
+    status: str = "active"
+    nodes: List[Dict[str, Any]] = Field(default_factory=list)
+    edges: List[Dict[str, Any]] = Field(default_factory=list)
+    tags: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class RunWorkflowRequest(BaseModel):
@@ -392,6 +406,31 @@ class RunWorkflowRequest(BaseModel):
 class WorkflowExecutionResponse(BaseModel):
     execution_id: str
     status: str
+
+
+class WorkflowValidateRequest(BaseModel):
+    definition_yaml: Optional[str] = None
+    definition_json: Optional[Dict[str, Any]] = None
+
+
+class WorkflowValidateResponse(BaseModel):
+    valid: bool
+    errors: List[str] = Field(default_factory=list)
+    node_count: int = 0
+    edge_count: int = 0
+
+
+class WorkflowDryRunRequest(BaseModel):
+    inputs: Dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowRunRequest(BaseModel):
+    inputs: Dict[str, Any] = Field(default_factory=dict)
+    dry_run: bool = False
+
+
+class WorkflowGateDecisionRequest(BaseModel):
+    reviewer: str = "operator"
 
 
 class MemoryQueryResponse(BaseModel):
@@ -2076,24 +2115,287 @@ async def execute_skill(req: ExecuteSkillRequest):
         )
 
 
+_workflow_storage: Optional[WorkflowStorage] = None
+
+
+def get_workflow_storage() -> WorkflowStorage:
+    global _workflow_storage
+    if _workflow_storage is None:
+        _workflow_storage = WorkflowStorage()
+    return _workflow_storage
+
+
 @v1_router.get("/workflows", response_model=List[WorkflowInfo])
-async def list_workflows():
+async def list_workflows_endpoint(
+    status: Optional[str] = Query(default=None, description="Filter by status"),
+    tag: Optional[str] = Query(default=None, description="Filter by tag"),
+):
     """List registered graph workflows."""
+    storage = get_workflow_storage()
+    st = None
+    if status:
+        try:
+            st = WorkflowStatus(status)
+        except Exception:
+            st = None
+    wfs = storage.list_workflows(status=st, tag=tag)
     return [
         WorkflowInfo(
-            id="wf_code_audit_and_fix",
-            name="Automated Code Audit & Remediation",
-            description="Audits changed files with Code Sentry and generates staged patches.",
-            steps=["scan_code", "evaluate_risk", "generate_patch", "stage_review"],
+            id=w.id,
+            name=w.name,
+            description=w.description,
+            steps=[n.id for n in w.nodes] or w.steps,
+            version=w.version,
+            status=w.status.value,
+            nodes=[n.model_dump() for n in w.nodes],
+            edges=[e.model_dump() for e in w.edges],
+            tags=w.tags,
+            metadata=w.metadata,
         )
+        for w in wfs
     ]
 
 
-@v1_router.post("/workflows", response_model=WorkflowExecutionResponse)
-async def run_workflow(req: RunWorkflowRequest):
-    """Trigger a workflow execution."""
-    execution_id = f"wf_exec_{uuid.uuid4().hex[:8]}"
-    return WorkflowExecutionResponse(execution_id=execution_id, status="queued")
+@v1_router.post("/workflows")
+async def create_or_run_workflow(req: Dict[str, Any]):
+    """Create a new workflow definition, or run a workflow if legacy workflow_id payload passed."""
+    if "workflow_id" in req and "nodes" not in req:
+        wf_id = req["workflow_id"]
+        inputs = req.get("inputs", {})
+        storage = get_workflow_storage()
+        wf = storage.get_workflow(wf_id)
+        if wf:
+            engine = WorkflowEngine(storage=storage)
+            run = engine.run(wf, inputs=inputs, dry_run=True)
+            return {"execution_id": run.run_id, "status": "queued"}
+        execution_id = f"wf_exec_{uuid.uuid4().hex[:8]}"
+        return {"execution_id": execution_id, "status": "queued"}
+
+    try:
+        wf = WorkflowDefinition.model_validate(req)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid workflow definition: {e}",
+        )
+
+    is_valid, errors = WorkflowParser.validate(wf)
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Workflow validation failed: {'; '.join(errors)}",
+        )
+
+    storage = get_workflow_storage()
+    saved = storage.save_workflow(wf)
+    return saved.to_dict()
+
+
+@v1_router.post("/workflows/validate", response_model=WorkflowValidateResponse)
+async def validate_workflow_endpoint(req: WorkflowValidateRequest):
+    """Validate a YAML or JSON workflow definition without saving."""
+    wf = None
+    if req.definition_yaml:
+        try:
+            wf = WorkflowParser.parse_yaml(req.definition_yaml)
+        except Exception as e:
+            return WorkflowValidateResponse(valid=False, errors=[str(e)])
+    elif req.definition_json:
+        try:
+            wf = WorkflowDefinition.model_validate(req.definition_json)
+        except Exception as e:
+            return WorkflowValidateResponse(valid=False, errors=[str(e)])
+    else:
+        return WorkflowValidateResponse(
+            valid=False, errors=["Either definition_yaml or definition_json must be provided"]
+        )
+
+    is_valid, errors = WorkflowParser.validate(wf)
+    return WorkflowValidateResponse(
+        valid=is_valid,
+        errors=errors,
+        node_count=len(wf.nodes),
+        edge_count=len(wf.edges),
+    )
+
+
+@v1_router.get("/workflows/{workflow_id}")
+async def get_workflow_endpoint(workflow_id: str):
+    """Fetch workflow definition by ID."""
+    storage = get_workflow_storage()
+    wf = storage.get_workflow(workflow_id)
+    if not wf:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow '{workflow_id}' not found",
+        )
+    return wf.to_dict()
+
+
+@v1_router.put("/workflows/{workflow_id}")
+async def update_workflow_endpoint(workflow_id: str, req: Dict[str, Any]):
+    """Update an existing workflow definition."""
+    req["id"] = workflow_id
+    try:
+        wf = WorkflowDefinition.model_validate(req)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid workflow definition: {e}",
+        )
+
+    is_valid, errors = WorkflowParser.validate(wf)
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Workflow validation failed: {'; '.join(errors)}",
+        )
+
+    storage = get_workflow_storage()
+    saved = storage.save_workflow(wf)
+    return saved.to_dict()
+
+
+@v1_router.delete("/workflows/{workflow_id}")
+async def delete_workflow_endpoint(workflow_id: str):
+    """Delete a workflow and all associated runs."""
+    storage = get_workflow_storage()
+    deleted = storage.delete_workflow(workflow_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow '{workflow_id}' not found",
+        )
+    return {"deleted": True, "id": workflow_id}
+
+
+@v1_router.post("/workflows/{workflow_id}/dry-run")
+async def dry_run_workflow_endpoint(
+    workflow_id: str,
+    req: Optional[WorkflowDryRunRequest] = None,
+):
+    """Simulate workflow execution DAG traversal without executing heavy external models."""
+    storage = get_workflow_storage()
+    wf = storage.get_workflow(workflow_id)
+    if not wf:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow '{workflow_id}' not found",
+        )
+
+    engine = WorkflowEngine(storage=storage)
+    inputs = req.inputs if req else {}
+    run = engine.run(wf, inputs=inputs, dry_run=True)
+    return run.to_dict()
+
+
+@v1_router.post("/workflows/{workflow_id}/run")
+async def run_workflow_endpoint(
+    workflow_id: str,
+    req: Optional[WorkflowRunRequest] = None,
+):
+    """Execute a workflow instance."""
+    storage = get_workflow_storage()
+    wf = storage.get_workflow(workflow_id)
+    if not wf:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow '{workflow_id}' not found",
+        )
+
+    engine = WorkflowEngine(storage=storage)
+    inputs = req.inputs if req else {}
+    dry_run = req.dry_run if req else False
+    run = engine.run(wf, inputs=inputs, dry_run=dry_run)
+    return run.to_dict()
+
+
+@v1_router.get("/workflows/{workflow_id}/runs")
+async def list_workflow_runs_endpoint(
+    workflow_id: str,
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    """List execution runs for a workflow."""
+    storage = get_workflow_storage()
+    runs = storage.list_runs(workflow_id=workflow_id, limit=limit)
+    return [r.to_dict() for r in runs]
+
+
+@v1_router.get("/workflows/{workflow_id}/runs/{run_id}")
+async def get_workflow_run_endpoint(workflow_id: str, run_id: str):
+    """Get details and step results of a workflow run."""
+    storage = get_workflow_storage()
+    run = storage.get_run(run_id)
+    if not run or run.workflow_id != workflow_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run '{run_id}' not found for workflow '{workflow_id}'",
+        )
+    return run.to_dict()
+
+
+@v1_router.post("/workflows/{workflow_id}/runs/{run_id}/approve")
+async def approve_workflow_gate_endpoint(
+    workflow_id: str,
+    run_id: str,
+    req: Optional[WorkflowGateDecisionRequest] = None,
+):
+    """Approve a paused human review gate and resume DAG execution."""
+    storage = get_workflow_storage()
+    wf = storage.get_workflow(workflow_id)
+    if not wf:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow '{workflow_id}' not found",
+        )
+    run = storage.get_run(run_id)
+    if not run or run.workflow_id != workflow_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run '{run_id}' not found for workflow '{workflow_id}'",
+        )
+    if run.status != WorkflowRunStatus.WAITING_APPROVAL:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Run '{run_id}' is not waiting for approval (current status: {run.status.value})",
+        )
+
+    reviewer = req.reviewer if req else "operator"
+    engine = WorkflowEngine(storage=storage)
+    resumed = engine.resume_gate(wf, run, approve=True, reviewer=reviewer)
+    return resumed.to_dict()
+
+
+@v1_router.post("/workflows/{workflow_id}/runs/{run_id}/reject")
+async def reject_workflow_gate_endpoint(
+    workflow_id: str,
+    run_id: str,
+    req: Optional[WorkflowGateDecisionRequest] = None,
+):
+    """Reject a paused human review gate and route to rejection path or cancel."""
+    storage = get_workflow_storage()
+    wf = storage.get_workflow(workflow_id)
+    if not wf:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow '{workflow_id}' not found",
+        )
+    run = storage.get_run(run_id)
+    if not run or run.workflow_id != workflow_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Run '{run_id}' not found for workflow '{workflow_id}'",
+        )
+    if run.status != WorkflowRunStatus.WAITING_APPROVAL:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Run '{run_id}' is not waiting for approval (current status: {run.status.value})",
+        )
+
+    reviewer = req.reviewer if req else "operator"
+    engine = WorkflowEngine(storage=storage)
+    resumed = engine.resume_gate(wf, run, approve=False, reviewer=reviewer)
+    return resumed.to_dict()
 
 
 @v1_router.get("/pipelines", response_model=List[PipelineInfo])

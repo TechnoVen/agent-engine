@@ -16,6 +16,7 @@ from core.workflows.models import (
     WorkflowStatus,
 )
 from core.workflows.parser import WorkflowParser
+from core.workflows.storage import WorkflowStorage
 
 __all__ = [
     "WorkflowNodeType",
@@ -29,4 +30,5 @@ __all__ = [
     "WorkflowRun",
     "WorkflowParser",
     "WorkflowEngine",
+    "WorkflowStorage",
 ]

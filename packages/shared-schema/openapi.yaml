@@ -494,6 +494,261 @@ paths:
               schema:
                 $ref: '#/components/schemas/WorkflowExecutionResponse'
 
+  /workflows/validate:
+    post:
+      summary: Validate a workflow definition
+      operationId: validateWorkflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                definition_yaml:
+                  type: string
+                definition_json:
+                  type: object
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                  errors:
+                    type: array
+                    items:
+                      type: string
+                  node_count:
+                    type: integer
+                  edge_count:
+                    type: integer
+
+  /workflows/{workflow_id}:
+    get:
+      summary: Get workflow definition by ID
+      operationId: getWorkflow
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Workflow definition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowInfo'
+    put:
+      summary: Update workflow definition
+      operationId: updateWorkflow
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Updated workflow definition
+          content:
+            application/json:
+              schema:
+                type: object
+    delete:
+      summary: Delete workflow
+      operationId: deleteWorkflow
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Deletion status
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /workflows/{workflow_id}/dry-run:
+    post:
+      summary: Dry run workflow execution
+      operationId: dryRunWorkflow
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                inputs:
+                  type: object
+      responses:
+        '200':
+          description: Dry run result
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /workflows/{workflow_id}/run:
+    post:
+      summary: Execute workflow
+      operationId: executeWorkflow
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                inputs:
+                  type: object
+                dry_run:
+                  type: boolean
+      responses:
+        '200':
+          description: Execution result
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /workflows/{workflow_id}/runs:
+    get:
+      summary: List workflow execution runs
+      operationId: listWorkflowRuns
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: List of execution runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /workflows/{workflow_id}/runs/{run_id}:
+    get:
+      summary: Get workflow run details
+      operationId: getWorkflowRun
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Run details
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /workflows/{workflow_id}/runs/{run_id}/approve:
+    post:
+      summary: Approve workflow gate
+      operationId: approveWorkflowGate
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reviewer:
+                  type: string
+      responses:
+        '200':
+          description: Resumed run
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /workflows/{workflow_id}/runs/{run_id}/reject:
+    post:
+      summary: Reject workflow gate
+      operationId: rejectWorkflowGate
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reviewer:
+                  type: string
+      responses:
+        '200':
+          description: Resumed or cancelled run
+          content:
+            application/json:
+              schema:
+                type: object
+
   /pipelines:
     get:
       summary: List registered modular DSPy agent pipelines
