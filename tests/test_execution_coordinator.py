@@ -26,6 +26,10 @@ def coordinator_env(tmp_path):
         storage=storage,
         policy_engine=policy_engine,
         cost_tracker=cost_tracker,
+        dispatch_override=lambda ctx, tier, prov, model: {
+            "response": f"Processed prompt with {prov}/{model}",
+            "echo_prompt": ctx.execution_id,
+        },
     )
     return coordinator, storage, policy_engine, cost_tracker
 

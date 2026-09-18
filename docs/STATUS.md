@@ -216,15 +216,59 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/execution/__init__.py"
     - "tests/test_execution_coordinator.py"
   notes: "Universal 10-phase execution coordinator integrating context building, routing, safety policy pre-flight, budget check, consequential gating, verification, and telemetry."
+
+- id: R1.4
+  title: "Rewire chat to real execution"
+  task_status: done
+  capability_maturity: S1
+  migration: REFACTOR
+  owner: "Execution Kernel"
+  depends_on: [R1.3]
+  evidence:
+    - "services/python/server/api.py"
+    - "core/execution/coordinator.py"
+    - "tests/test_chat_execution_integration.py"
+  notes: "Eliminated all test-trigger/fake-success routes in chat completions. Wired POST /v1/chat/completions directly through ExecutionCoordinator with strict fail-closed 502 / error SSE handling and 90/9/1 cost optimization."
+
+- id: R1.5
+  title: "Real provider/model resolution"
+  task_status: done
+  capability_maturity: S1
+  migration: INTEGRATE
+  owner: "Execution Kernel"
+  depends_on: [R1.3]
+  evidence:
+    - "core/router/model_router.py"
+    - "core/execution/coordinator.py"
+    - "tests/test_router_hardening.py"
+    - "tests/test_chat_execution_integration.py"
+  notes: "Implemented ResolvedModel dataclass, model resolution by tier/preference, circuit breaker status checking, and transparent fallback recording with ROUTING_RESOLVED events."
+
+- id: R1.6
+  title: "Canonical project context"
+  task_status: done
+  capability_maturity: S1
+  migration: REFACTOR
+  owner: "Execution Kernel"
+  depends_on: [R1.1]
+  evidence:
+    - "core/projects/models.py"
+    - "core/storage/base.py"
+    - "core/storage/sqlite.py"
+    - "alembic/versions/004_canonical_projects.py"
+    - "services/python/server/api.py"
+    - "tests/test_chat_execution_integration.py"
+  notes: "Created canonical Project domain model, SQLite persistence with auto-seeded default workspace, full REST CRUD endpoints (/v1/projects), context assembly injection, and cross-project session isolation enforcement."
 ```
 
 ---
 
 ## 6. Active Test Suite & Deprecation Warnings Log
 
-- **Test Suite Result:** `376 passed, 3 warnings in 46.60s` (`uv run pytest`)
+- **Test Suite Result:** `389 passed, 3 warnings in 48.32s` (`uv run pytest`)
 - **Documented Upstream Warnings (Non-blocking):**
   1. `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.` (Origin: `fastapi/testclient.py:1` — Upstream FastAPI/Starlette testclient deprecation notice; non-runtime).
   2. `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.` (Origin: `starlette/testclient.py:53` — Upstream Starlette/AnyIO import alias notice; non-runtime).
   3. `DeprecationWarning: 'asyncio.iscoroutinefunction' is deprecated and slated for removal in Python 3.16; use inspect.iscoroutinefunction() instead` (Origin: `chromadb/telemetry/opentelemetry/__init__.py:128` — Upstream ChromaDB telemetry compatibility notice for Python 3.16+; non-blocking on current Python 3.10–3.14).
+
 

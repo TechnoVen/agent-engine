@@ -30,10 +30,11 @@ from core.router.execution_router import (
     profiled_step,
 )
 from core.router.health import HealthProber, ProbeResult
-from core.router.model_router import ModelRouter
+from core.router.model_router import ModelRouter, ResolvedModel
 
 __all__ = [
     "ModelRouter",
+    "ResolvedModel",
     "CircuitBreaker",
     "CircuitBreakerConfig",
     "CircuitState",

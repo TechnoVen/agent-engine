@@ -582,6 +582,28 @@ class StorageBackend(ABC):
         """Retrieve ordered event stream for an execution."""
         return []
 
+    # --- 14. CANONICAL PROJECTS (R1.6) ---
+
+    def create_project(self, project: Dict[str, Any]) -> Dict[str, Any]:
+        """Create and persist a canonical project."""
+        return project
+
+    def get_project(self, project_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve a project by primary key."""
+        return None
+
+    def update_project(self, project_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update an existing project."""
+        return None
+
+    def list_projects(self, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+        """List canonical projects with pagination."""
+        return []
+
+    def delete_project(self, project_id: str) -> bool:
+        """Delete a project by primary key."""
+        return False
+
 
 # Backward-compatible and semantic alias
 StorageRepository = StorageBackend

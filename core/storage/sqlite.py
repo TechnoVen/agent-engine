@@ -269,6 +269,21 @@ class SQLiteBackend(StorageBackend):
                         UNIQUE(execution_id, sequence_num)
                     );
                     CREATE INDEX IF NOT EXISTS idx_events_execution ON execution_events(execution_id);
+
+                    CREATE TABLE IF NOT EXISTS projects (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        description TEXT,
+                        root_path TEXT NOT NULL UNIQUE,
+                        instructions TEXT NOT NULL DEFAULT '',
+                        settings_json TEXT NOT NULL DEFAULT '{}',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name);
+
+                    INSERT OR IGNORE INTO projects (id, name, description, root_path, instructions, settings_json, created_at, updated_at)
+                    VALUES ('default', 'Default Project', 'Default workspace project', '/workspace', '', '{}', '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00');
                 """)
                 conn.commit()
 
@@ -2020,16 +2035,28 @@ class SQLiteBackend(StorageBackend):
                 set_clauses: List[str] = []
                 params: List[Any] = []
 
+                valid_columns = {
+                    "session_id",
+                    "project_id",
+                    "status",
+                    "request_json",
+                    "provider",
+                    "model",
+                    "routing_tier",
+                    "input_tokens",
+                    "output_tokens",
+                    "total_cost_usd",
+                    "is_cost_estimated",
+                    "started_at",
+                    "completed_at",
+                    "error_code",
+                    "error_message",
+                }
+
                 for k, v in updates.items():
                     if k in ("id", "created_at"):
                         continue
-                    if k == "status" and hasattr(v, "value"):
-                        v = v.value
-                    elif k == "routing_tier" and hasattr(v, "value"):
-                        v = v.value
-                    elif k == "is_cost_estimated":
-                        v = 1 if v else 0
-                    elif k in ("request", "request_json"):
+                    if k in ("request", "request_json"):
                         k = "request_json"
                         if not isinstance(v, str):
                             v = (
@@ -2037,6 +2064,14 @@ class SQLiteBackend(StorageBackend):
                                 if hasattr(v, "model_dump_json")
                                 else json.dumps(v)
                             )
+                    if k not in valid_columns:
+                        continue
+                    if k == "status" and hasattr(v, "value"):
+                        v = v.value
+                    elif k == "routing_tier" and hasattr(v, "value"):
+                        v = v.value
+                    elif k == "is_cost_estimated":
+                        v = 1 if v else 0
                     set_clauses.append(f"{k} = ?")
                     params.append(v)
 
@@ -2160,6 +2195,151 @@ class SQLiteBackend(StorageBackend):
                             data["payload"] = data["payload_json"]
                     results.append(data)
                 return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    # --- 14. CANONICAL PROJECTS (R1.6) ---
+
+    def create_project(self, project: Dict[str, Any]) -> Dict[str, Any]:
+        """Create and persist a canonical project."""
+        proj_id = project["id"]
+        name = project["name"]
+        description = project.get("description")
+        root_path = project.get("root_path", f"/workspace/{proj_id}")
+        instructions = project.get("instructions", "")
+        settings = project.get("settings", {})
+        if hasattr(settings, "model_dump"):
+            settings = settings.model_dump()
+        settings_json = json.dumps(settings) if isinstance(settings, dict) else str(settings)
+        now_iso = datetime.now(timezone.utc).isoformat()
+        created_at = project.get("created_at") or now_iso
+        updated_at = project.get("updated_at") or now_iso
+
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO projects (id, name, description, root_path, instructions, settings_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        proj_id,
+                        name,
+                        description,
+                        root_path,
+                        instructions,
+                        settings_json,
+                        created_at,
+                        updated_at,
+                    ),
+                )
+                conn.commit()
+                found = self.get_project(proj_id)
+                return found if found is not None else project
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_project(self, project_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve a project by primary key."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                data = dict(row)
+                if data.get("settings_json"):
+                    try:
+                        data["settings"] = json.loads(data["settings_json"])
+                    except Exception:
+                        data["settings"] = {}
+                else:
+                    data["settings"] = {}
+                return data
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def update_project(self, project_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update an existing project."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                set_clauses: List[str] = []
+                params: List[Any] = []
+
+                for k, v in updates.items():
+                    if k in ("id", "created_at"):
+                        continue
+                    if k == "settings":
+                        k = "settings_json"
+                        if hasattr(v, "model_dump"):
+                            v = v.model_dump()
+                        v = json.dumps(v) if isinstance(v, dict) else str(v)
+                    elif k == "settings_json" and isinstance(v, dict):
+                        v = json.dumps(v)
+                    set_clauses.append(f"{k} = ?")
+                    params.append(v)
+
+                if "updated_at" not in updates:
+                    set_clauses.append("updated_at = ?")
+                    params.append(datetime.now(timezone.utc).isoformat())
+
+                if not set_clauses:
+                    return self.get_project(project_id)
+
+                params.append(project_id)
+                sql = f"UPDATE projects SET {', '.join(set_clauses)} WHERE id = ?"
+                cursor.execute(sql, tuple(params))
+                conn.commit()
+                return self.get_project(project_id)
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_projects(self, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+        """List canonical projects with pagination."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM projects ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (limit, offset),
+                )
+                rows = cursor.fetchall()
+                results = []
+                for row in rows:
+                    data = dict(row)
+                    if data.get("settings_json"):
+                        try:
+                            data["settings"] = json.loads(data["settings_json"])
+                        except Exception:
+                            data["settings"] = {}
+                    else:
+                        data["settings"] = {}
+                    results.append(data)
+                return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def delete_project(self, project_id: str) -> bool:
+        """Delete a project by primary key."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+                conn.commit()
+                return cursor.rowcount > 0
             finally:
                 if not self._is_memory:
                     conn.close()

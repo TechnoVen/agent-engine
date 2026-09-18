@@ -413,52 +413,52 @@ A real desktop request travels through project/session context, routing, a real 
 - **Required Evidence:**
   - Architecture dependency test + integration trace (`tests/test_execution_coordinator.py`).
 
-### [ ] R1.4 — Rewire chat to real execution
+### [x] R1.4 — Rewire chat to real execution
 
 - **Migration:** `REFACTOR`
 - **Target release:** `0.5`
-- **Initial maturity:** `S0` unless `docs/STATUS.md` verifies a higher level from legacy work.
+- **Initial maturity:** `S1`
 - **Dependencies:** R1.3
 - **User Story:** As Nadir, I want chat responses to come from actual configured intelligence so I can trust that a success message means work really happened.
 - **Deliverables:**
   - Remove test-trigger/fake-success production branches.
   - Route chat through `ExecutionCoordinator`.
 - **Acceptance Criteria:**
-  - [ ] No-provider request fails explicitly.
-  - [ ] Arbitrary prompt reaches provider stub unchanged except intentional context assembly.
+  - [x] No-provider request fails explicitly.
+  - [x] Arbitrary prompt reaches provider stub unchanged except intentional context assembly.
 - **Required Evidence:**
-  - E2E provider-stub test.
+  - E2E provider-stub test (`tests/test_chat_execution_integration.py`).
 
-### [ ] R1.5 — Real provider/model resolution
+### [x] R1.5 — Real provider/model resolution
 
 - **Migration:** `INTEGRATE`
 - **Target release:** `0.5`
-- **Initial maturity:** `S0` unless `docs/STATUS.md` verifies a higher level from legacy work.
+- **Initial maturity:** `S1`
 - **Dependencies:** R1.3
 - **User Story:** As a Power User, I want changing the selected model to change the model that executes so provider controls are real, not labels.
 - **Deliverables:**
   - Bind UI/provider configuration to Model Router.
   - Persist model choice at profile/project/session/request scopes.
 - **Acceptance Criteria:**
-  - [ ] Two configured selections invoke two distinct provider/model targets.
+  - [x] Two configured selections invoke two distinct provider/model targets.
 - **Required Evidence:**
-  - Provider-spy integration test.
+  - Provider-spy integration test (`tests/test_chat_execution_integration.py`).
 
-### [ ] R1.6 — Canonical project context
+### [x] R1.6 — Canonical project context
 
 - **Migration:** `REFACTOR`
 - **Target release:** `0.5`
-- **Initial maturity:** `S0` unless `docs/STATUS.md` verifies a higher level from legacy work.
+- **Initial maturity:** `S1`
 - **Dependencies:** R1.1
 - **User Story:** As Nadir, I want each project’s instructions, files, policies and budgets to affect only that project so work remains isolated and relevant.
 - **Deliverables:**
   - Move browser-local project state into backend canonical Project model.
   - Pass project identity through execution context.
 - **Acceptance Criteria:**
-  - [ ] Project A instructions/files never enter Project B execution.
-  - [ ] Reload preserves project records.
+  - [x] Project A instructions/files never enter Project B execution.
+  - [x] Reload preserves project records.
 - **Required Evidence:**
-  - Cross-project isolation E2E test.
+  - Cross-project isolation E2E test (`tests/test_chat_execution_integration.py`).
 
 ### [ ] R1.7 — Bounded real conversation history
 

@@ -67,6 +67,16 @@ from core.session import (
     ToolCall,
     get_session_store,
 )
+from core.execution import (
+    ExecutionCoordinator,
+    ExecutionRequest,
+    ExecutionStatus,
+)
+from core.projects import (
+    Project,
+    ProjectSettings,
+    generate_project_id,
+)
 from core.telemetry import (
     BudgetConfig,
     get_cost_tracker,
@@ -163,6 +173,30 @@ router_instance = ModelRouter()
 memory_instance = AgentMemory()
 observational_memory_instance = ObservationalMemory()
 cost_tracker_instance = get_cost_tracker()
+coordinator_instance = ExecutionCoordinator(
+    storage=get_storage_backend(),
+    policy_engine=get_policy_engine(),
+    model_router=router_instance,
+    cost_tracker=cost_tracker_instance,
+)
+
+
+def get_execution_coordinator() -> ExecutionCoordinator:
+    global coordinator_instance
+    if coordinator_instance is None:
+        coordinator_instance = ExecutionCoordinator(
+            storage=get_storage_backend(),
+            policy_engine=get_policy_engine(),
+            model_router=router_instance,
+            cost_tracker=cost_tracker_instance,
+        )
+    return coordinator_instance
+
+
+def set_execution_coordinator(coord: ExecutionCoordinator) -> None:
+    global coordinator_instance
+    coordinator_instance = coord
+
 
 # In-memory queues for global SSE event subscribers
 _event_subscribers: List[asyncio.Queue] = []
@@ -235,6 +269,7 @@ class ChatRequest(BaseModel):
     model: Optional[str] = None
     stream: bool = True
     skill_id: Optional[str] = None
+    project_id: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
@@ -242,6 +277,11 @@ class ChatResponse(BaseModel):
     session_id: str
     tool_calls: List[Dict[str, Any]] = Field(default_factory=list)
     cost_usd: float = 0.0
+    execution_id: Optional[str] = None
+    status: str = "completed"
+    model_used: Optional[str] = None
+    provider_used: Optional[str] = None
+    routing_tier: Optional[str] = None
 
 
 class AgentInfo(BaseModel):
@@ -1179,6 +1219,22 @@ class UpdateCheckResponse(BaseModel):
     sha256: Optional[str] = None
 
 
+class CreateProjectRequest(BaseModel):
+    name: str
+    description: Optional[str] = None
+    root_path: Optional[str] = None
+    instructions: Optional[str] = ""
+    settings: Optional[ProjectSettings] = None
+
+
+class UpdateProjectRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    root_path: Optional[str] = None
+    instructions: Optional[str] = None
+    settings: Optional[Dict[str, Any]] = None
+
+
 class CreateRoomRequest(BaseModel):
     project_id: str
     name: str
@@ -1252,35 +1308,57 @@ async def get_sidecar_health():
 
 @v1_router.post("/chat/completions", response_model=None)
 async def chat_completions(req: ChatRequest):
-    """Execute a chat completion with session persistence, real provider execution, and honest failure reporting."""
+    """Execute a chat completion with session persistence, canonical execution coordinator dispatch, and honest failure reporting."""
     session_id = req.session_id or f"sess_{uuid.uuid4().hex[:10]}"
 
-    # 1. Session Persistence: store user prompt in session store
+    # 1. Session & Project Persistence: store user prompt in session store
     store = get_session_store()
     session = store.get_session(session_id)
+    resolved_project_id = req.project_id
     if not session:
-        store.create_session(
+        session = store.create_session(
             session_id=session_id,
             title=req.prompt[:40] + ("..." if len(req.prompt) > 40 else ""),
             channel="desktop",
+            metadata={"project_id": resolved_project_id or "default"},
         )
+    elif not resolved_project_id:
+        resolved_project_id = (
+            session.metadata.get("project_id", "default") if session.metadata else "default"
+        )
+
+    resolved_project_id = resolved_project_id or "default"
+
     store.append_message(
         session_id=session_id,
         role=MessageRole.USER.value,
         content=req.prompt,
         metadata={
             "model": req.model or "default",
+            "project_id": resolved_project_id,
             "timestamp": datetime.datetime.now().isoformat(),
         },
     )
 
-    # 2. Honest Failure Check (F03: provider failure produces visible error rather than success narrative)
-    if (
-        req.model in ("failure_test", "error_trigger")
-        or req.prompt.strip() == "TRIGGER_PROVIDER_FAILURE"
-        or req.prompt.strip().startswith("FAIL_TEST:")
-    ):
-        error_msg = "Provider upstream connection failed: HTTP 503 Service Unavailable"
+    # 2. Build Canonical ExecutionRequest and dispatch through ExecutionCoordinator
+    coordinator = get_execution_coordinator()
+    exec_req = ExecutionRequest(
+        project_id=resolved_project_id,
+        session_id=session_id,
+        task_type="chat",
+        prompt=req.prompt,
+        model_preference=req.model,
+        inputs={
+            "stream": req.stream,
+            "skill_id": req.skill_id,
+        },
+    )
+
+    result = await coordinator.execute(exec_req)
+
+    # 3. Handle Failure or Policy Block
+    if result.status in (ExecutionStatus.FAILED, ExecutionStatus.BLOCKED):
+        error_msg = result.error or "Provider execution failed: upstream service unavailable"
         if req.stream:
 
             async def err_gen():
@@ -1295,60 +1373,11 @@ async def chat_completions(req: ChatRequest):
             return StreamingResponse(err_gen(), media_type="text/event-stream")
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=error_msg)
 
-    # 3. Model execution resolution
-    full_response_text = ""
-
-    cleaned_prompt = req.prompt.strip()
-    lower_prompt = cleaned_prompt.lower()
-
-    if "ping" in lower_prompt:
-        full_response_text = "Pong"
-    elif "2+2" in lower_prompt or "2 + 2" in lower_prompt:
-        full_response_text = "4"
-    elif lower_prompt.startswith("echo:"):
-        full_response_text = cleaned_prompt[5:].strip()
-    else:
-        # Check if a live LM is configured or can be configured via router
-        lm = router_instance._configured_lm
-        if not lm:
-            try:
-                available = router_instance.get_available_providers()
-                if available:
-                    lm, _ = router_instance.initialize_and_configure()
-            except Exception as init_err:
-                logger.debug(f"Router initialize skipped: {init_err}")
-                lm = None
-
-        if lm:
-            try:
-                res = lm(req.prompt)
-                full_response_text = res[0] if isinstance(res, list) else str(res)
-            except Exception as exec_err:
-                logger.error(f"Live provider execution failed: {exec_err}")
-                error_msg = f"Provider execution failed: {exec_err}"
-                if req.stream:
-
-                    async def exec_err_gen():
-                        payload = {
-                            "event": "error",
-                            "session_id": session_id,
-                            "error": error_msg,
-                            "timestamp": datetime.datetime.now().isoformat(),
-                        }
-                        yield f"data: {json.dumps(payload)}\n\n"
-
-                    return StreamingResponse(exec_err_gen(), media_type="text/event-stream")
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=error_msg)
-        else:
-            full_response_text = f"Agent Engine executed your instruction: {cleaned_prompt}"
-
-    prompt_tokens = len(req.prompt.split())
-    # Token chunking for streaming
-    import re
-
-    tokens = re.findall(r"\S+|\s+", full_response_text) if full_response_text else [""]
-    completion_tokens = len(tokens)
-    cost_usd = round((prompt_tokens * 0.00000015) + (completion_tokens * 0.0000006), 6)
+    # 4. Handle Success
+    full_response_text = result.outputs.get("response", "")
+    prompt_tokens = result.prompt_tokens
+    completion_tokens = result.completion_tokens
+    cost_usd = result.total_cost_usd
 
     # Persist assistant turn to session store
     store.append_message(
@@ -1356,7 +1385,9 @@ async def chat_completions(req: ChatRequest):
         role=MessageRole.ASSISTANT.value,
         content=full_response_text,
         metadata={
-            "model": req.model or "default",
+            "model": result.model_used or req.model or "default",
+            "provider": result.provider_used,
+            "execution_id": result.execution_id,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "cost_usd": cost_usd,
@@ -1366,21 +1397,25 @@ async def chat_completions(req: ChatRequest):
 
     # Record local throughput in hardware tracker if local model was used
     local_keywords = ["qwen", "llama", "local", "ollama", "mistral", "deepseek"]
-    model_lower = (req.model or "").lower()
+    model_lower = (result.model_used or req.model or "").lower()
     if any(k in model_lower for k in local_keywords) or (
-        getattr(req, "provider", None) in ["ollama", "llamacpp"]
+        result.provider_used in ["ollama", "llamacpp"]
     ):
         hw_tracker = get_hardware_telemetry_tracker()
         hw_tracker.record_inference_speed(
             tokens=max(1, completion_tokens),
             elapsed_seconds=max(0.05, completion_tokens * 0.016),
-            model=req.model or "qwen2.5-coder:7b",
+            model=result.model_used or req.model or "qwen2.5-coder:7b",
             runtime="ollama"
-            if ("ollama" in model_lower or getattr(req, "provider", None) == "ollama")
+            if ("ollama" in model_lower or result.provider_used == "ollama")
             else "local",
         )
 
+    # 5. Output Response (Streaming or Non-streaming)
     if req.stream:
+        import re
+
+        tokens = re.findall(r"\S+|\s+", full_response_text) if full_response_text else [""]
 
         async def event_generator() -> AsyncGenerator[str, None]:
             for t in tokens:
@@ -1391,15 +1426,16 @@ async def chat_completions(req: ChatRequest):
                     "timestamp": datetime.datetime.now().isoformat(),
                 }
                 yield f"data: {json.dumps(payload)}\n\n"
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0.005)
 
             cost_event = {
                 "event": "cost_update",
                 "session_id": session_id,
-                "model": req.model or "default",
+                "model": result.model_used or req.model or "default",
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "cost_usd": cost_usd,
+                "execution_id": result.execution_id,
                 "timestamp": datetime.datetime.now().isoformat(),
             }
             yield f"data: {json.dumps(cost_event)}\n\n"
@@ -1407,6 +1443,7 @@ async def chat_completions(req: ChatRequest):
             done_event = {
                 "event": "done",
                 "session_id": session_id,
+                "execution_id": result.execution_id,
                 "timestamp": datetime.datetime.now().isoformat(),
             }
             yield f"data: {json.dumps(done_event)}\n\n"
@@ -1417,8 +1454,13 @@ async def chat_completions(req: ChatRequest):
     return ChatResponse(
         response=full_response_text,
         session_id=session_id,
-        tool_calls=[],
+        tool_calls=result.outputs.get("tool_calls", []),
         cost_usd=cost_usd,
+        execution_id=result.execution_id,
+        status=result.status.value if hasattr(result.status, "value") else str(result.status),
+        model_used=result.model_used,
+        provider_used=result.provider_used,
+        routing_tier=result.routing_tier.value if result.routing_tier else None,
     )
 
 
@@ -4383,6 +4425,81 @@ async def test_adapter_endpoint(adapter_id: str):
             "version": getattr(adapter, "version", None),
             "details": {"error": str(e)},
         }
+
+
+# ---------------------------------------------------------------------------
+# Canonical Projects Endpoints (/v1/projects/...) (Task R1.6)
+# ---------------------------------------------------------------------------
+
+
+@v1_router.get("/projects", response_model=List[Dict[str, Any]])
+async def list_projects(
+    limit: int = Query(50, ge=1, le=200, description="Max projects to return"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+):
+    """List canonical projects with pagination."""
+    backend = get_storage_backend()
+    return backend.list_projects(limit=limit, offset=offset)
+
+
+@v1_router.post("/projects", status_code=status.HTTP_201_CREATED)
+async def create_project(req: CreateProjectRequest):
+    """Create a new canonical project workspace."""
+    backend = get_storage_backend()
+    proj_id = generate_project_id()
+    root_path = req.root_path or f"/workspace/{proj_id}"
+    proj = Project(
+        id=proj_id,
+        name=req.name,
+        description=req.description,
+        root_path=root_path,
+        instructions=req.instructions or "",
+        settings=req.settings or ProjectSettings(),
+    )
+    created = backend.create_project(proj.model_dump())
+    return created
+
+
+@v1_router.get("/projects/{project_id}")
+async def get_project(project_id: str):
+    """Fetch details for a specific canonical project."""
+    backend = get_storage_backend()
+    proj = backend.get_project(project_id)
+    if not proj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project '{project_id}' not found",
+        )
+    return proj
+
+
+@v1_router.put("/projects/{project_id}")
+@v1_router.patch("/projects/{project_id}")
+async def update_project(project_id: str, req: UpdateProjectRequest):
+    """Update canonical project attributes."""
+    backend = get_storage_backend()
+    existing = backend.get_project(project_id)
+    if not existing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project '{project_id}' not found",
+        )
+    updates = req.model_dump(exclude_unset=True)
+    updated = backend.update_project(project_id, updates)
+    return updated
+
+
+@v1_router.delete("/projects/{project_id}")
+async def delete_project(project_id: str):
+    """Delete a canonical project."""
+    backend = get_storage_backend()
+    deleted = backend.delete_project(project_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project '{project_id}' not found",
+        )
+    return {"deleted": True, "project_id": project_id}
 
 
 # ---------------------------------------------------------------------------

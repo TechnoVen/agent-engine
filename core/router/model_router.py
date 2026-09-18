@@ -2,11 +2,13 @@
 import logging
 import os
 import sys
-from typing import Any, Callable
+from dataclasses import dataclass, field
+from typing import Any, Callable, List, Optional
 
 import dspy
 from dotenv import load_dotenv
 
+from core.execution.models import RoutingTier
 from core.router.circuit_breaker import CircuitBreaker
 from core.router.config import RouterConfigFile, load_router_config
 from core.router.health import HealthProber
@@ -20,6 +22,20 @@ load_dotenv()
 
 # Configure logging
 logger = logging.getLogger("agent_engine.router")
+
+
+@dataclass
+class ResolvedModel:
+    """Canonical model resolution outcome produced by the ModelRouter (Task R1.5)."""
+
+    provider_id: str
+    model_id: str
+    routing_tier: RoutingTier
+    reason: str = "default_routing"
+    capabilities: List[str] = field(default_factory=list)
+    estimated_cost_per_1k_tokens: float = 0.0
+    fallback_chain: List[str] = field(default_factory=list)
+    is_fallback: bool = False
 
 
 class ModelRouter:
@@ -138,6 +154,218 @@ class ModelRouter:
                     available.append(p)
 
         return available
+
+    def _get_default_model_for_provider(self, provider: str) -> str:
+        defaults = {
+            "ollama": "qwen2.5-coder:3b",
+            "llamacpp": "qwen2.5-coder-3b-instruct-q4_k_m",
+            "gemini": "gemini-2.0-flash",
+            "openai": "gpt-4o-mini",
+            "anthropic": "claude-3-5-haiku",
+            "deepseek": "deepseek-chat",
+            "kimi": "moonshot-v1-8k",
+            "groq": "llama-3.3-70b-specdec",
+            "local": "deterministic_code",
+        }
+        return defaults.get(provider, "qwen2.5-coder:3b")
+
+    def _get_default_tier_for_provider(self, provider: str) -> RoutingTier:
+        if provider in ("ollama", "llamacpp"):
+            return RoutingTier.LOCAL
+        elif provider == "local":
+            return RoutingTier.CODE
+        return RoutingTier.MID
+
+    def _estimate_cost_per_1k(self, provider: str, model: str) -> float:
+        pref = model.lower()
+        if "gpt-4o" in pref and "mini" not in pref:
+            return 0.005
+        if "sonnet" in pref or "opus" in pref or "pro" in pref:
+            return 0.003
+        if provider in ("ollama", "llamacpp", "local"):
+            return 0.0
+        return 0.00015
+
+    def resolve_model(
+        self,
+        requested_model: Optional[str] = None,
+        requested_tier: Optional[RoutingTier] = None,
+        task_type: Optional[str] = None,
+    ) -> ResolvedModel:
+        """
+        Resolve provider, model, and routing tier (Task R1.5).
+        Respects circuit breaker status and performs transparent fallback chain traversal.
+        """
+        # 1. Explicit model request
+        if requested_model:
+            pref = requested_model.lower().strip()
+            # Determine provider from model name
+            provider = "ollama"
+            if pref.startswith("openai/") or "gpt" in pref:
+                provider = "openai"
+            elif pref.startswith("gemini/") or "gemini" in pref:
+                provider = "gemini"
+            elif pref.startswith("anthropic/") or "claude" in pref:
+                provider = "anthropic"
+            elif pref.startswith("deepseek/") or "deepseek" in pref:
+                provider = "deepseek"
+            elif pref.startswith("groq/") or "groq" in pref:
+                provider = "groq"
+            elif pref.startswith("kimi/") or "kimi" in pref or "moonshot" in pref:
+                provider = "kimi"
+            elif pref.startswith("llamacpp/"):
+                provider = "llamacpp"
+            elif pref.startswith("ollama/") or "qwen" in pref or "llama" in pref:
+                provider = "ollama"
+            elif pref in ("deterministic_code", "code"):
+                provider = "local"
+            elif pref in ("semantic_cache", "cache"):
+                provider = "local"
+            elif "/" in pref:
+                provider = pref.split("/")[0]
+
+            # Inferred tier if not specified
+            tier = requested_tier
+            if not tier:
+                if provider == "local":
+                    tier = RoutingTier.CACHE if "cache" in pref else RoutingTier.CODE
+                elif "mini" in pref or "flash" in pref or "haiku" in pref:
+                    tier = RoutingTier.MID
+                elif "gpt-4o" in pref or "sonnet" in pref or "opus" in pref or "pro" in pref:
+                    tier = RoutingTier.FRONTIER
+                elif provider in ("ollama", "llamacpp") or "qwen" in pref or "llama" in pref:
+                    tier = RoutingTier.LOCAL
+                else:
+                    tier = RoutingTier.MID
+
+            # Circuit breaker check on requested provider
+            if not self.circuit_breaker.can_attempt(provider):
+                logger.warning(
+                    "Circuit OPEN for requested provider '%s'; resolving fallback", provider
+                )
+                available = self.get_available_providers(task_type=task_type)
+                fallbacks = [p for p in available if p != provider]
+                if fallbacks:
+                    fb_provider = fallbacks[0]
+                    fb_model = self._get_default_model_for_provider(fb_provider)
+                    fb_tier = self._get_default_tier_for_provider(fb_provider)
+                    return ResolvedModel(
+                        provider_id=fb_provider,
+                        model_id=fb_model,
+                        routing_tier=fb_tier,
+                        reason=f"Circuit OPEN for '{provider}'; failed over to '{fb_provider}'",
+                        capabilities=["general_chat", "completion"],
+                        estimated_cost_per_1k_tokens=self._estimate_cost_per_1k(
+                            fb_provider, fb_model
+                        ),
+                        fallback_chain=[provider, fb_provider],
+                        is_fallback=True,
+                    )
+                return ResolvedModel(
+                    provider_id=provider,
+                    model_id=requested_model,
+                    routing_tier=tier,
+                    reason=f"Circuit OPEN for '{provider}' and no fallbacks available",
+                    capabilities=[],
+                    fallback_chain=[provider],
+                    is_fallback=False,
+                )
+
+            return ResolvedModel(
+                provider_id=provider,
+                model_id=requested_model,
+                routing_tier=tier,
+                reason="explicit_model_preference",
+                capabilities=["general_chat", "completion"],
+                estimated_cost_per_1k_tokens=self._estimate_cost_per_1k(provider, requested_model),
+                fallback_chain=[provider],
+                is_fallback=False,
+            )
+
+        # 2. Explicit tier request without explicit model
+        if requested_tier:
+            if requested_tier == RoutingTier.CODE:
+                return ResolvedModel(
+                    provider_id="local",
+                    model_id="deterministic_code",
+                    routing_tier=RoutingTier.CODE,
+                    reason="tier_code",
+                    capabilities=["deterministic"],
+                    fallback_chain=["local"],
+                )
+            elif requested_tier == RoutingTier.CACHE:
+                return ResolvedModel(
+                    provider_id="local",
+                    model_id="semantic_cache",
+                    routing_tier=RoutingTier.CACHE,
+                    reason="tier_cache",
+                    capabilities=["caching"],
+                    fallback_chain=["local"],
+                )
+            elif requested_tier == RoutingTier.LOCAL:
+                prov = "ollama" if self.circuit_breaker.can_attempt("ollama") else "llamacpp"
+                model = (
+                    "qwen2.5-coder:3b" if prov == "ollama" else "qwen2.5-coder-3b-instruct-q4_k_m"
+                )
+                return ResolvedModel(
+                    provider_id=prov,
+                    model_id=model,
+                    routing_tier=RoutingTier.LOCAL,
+                    reason="tier_local",
+                    capabilities=["local_inference"],
+                    fallback_chain=[prov],
+                )
+            elif requested_tier == RoutingTier.FRONTIER:
+                prov = "openai" if self.circuit_breaker.can_attempt("openai") else "anthropic"
+                model = "gpt-4o" if prov == "openai" else "claude-3-5-sonnet"
+                return ResolvedModel(
+                    provider_id=prov,
+                    model_id=model,
+                    routing_tier=RoutingTier.FRONTIER,
+                    reason="tier_frontier",
+                    capabilities=["high_reasoning", "complex_context"],
+                    estimated_cost_per_1k_tokens=0.005,
+                    fallback_chain=[prov],
+                )
+            else:
+                prov = "gemini" if self.circuit_breaker.can_attempt("gemini") else "openai"
+                model = "gemini-2.0-flash" if prov == "gemini" else "gpt-4o-mini"
+                return ResolvedModel(
+                    provider_id=prov,
+                    model_id=model,
+                    routing_tier=RoutingTier.MID,
+                    reason="tier_mid",
+                    capabilities=["general_chat", "completion"],
+                    estimated_cost_per_1k_tokens=0.00015,
+                    fallback_chain=[prov],
+                )
+
+        # 3. Default resolution
+        available = self.get_available_providers(task_type=task_type)
+        if not available:
+            return ResolvedModel(
+                provider_id="none",
+                model_id="none",
+                routing_tier=RoutingTier.LOCAL,
+                reason="no_available_providers",
+                capabilities=[],
+                fallback_chain=[],
+                is_fallback=False,
+            )
+
+        primary = available[0]
+        model = self._get_default_model_for_provider(primary)
+        tier = self._get_default_tier_for_provider(primary)
+        return ResolvedModel(
+            provider_id=primary,
+            model_id=model,
+            routing_tier=tier,
+            reason="router_priority",
+            capabilities=["general_chat", "completion"],
+            estimated_cost_per_1k_tokens=self._estimate_cost_per_1k(primary, model),
+            fallback_chain=available,
+            is_fallback=False,
+        )
 
     def create_lm(
         self, provider: str, cache: bool = True, num_ctx: int = 4096, **kwargs: Any
@@ -303,3 +531,11 @@ class ModelRouter:
 
     def get_active_provider(self) -> str | None:
         return self._active_provider
+
+    def record_failure(self, provider: str, model: str = "", error: Any = None) -> None:
+        """Record a failure for provider in circuit breaker."""
+        self.circuit_breaker.record_failure(provider, error)
+        # Invalidate cached LM if failing the active provider
+        if provider == self._active_provider:
+            self._configured_lm = None
+            self._active_provider = None

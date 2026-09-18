@@ -108,9 +108,12 @@ class ExecutionContext(BaseModel):
     project_id: str
     project_root: str
     project_instructions: str = ""
+    task: str = ""
+    prompt: str = ""
     active_skills: List[str] = Field(default_factory=list)
     retrieved_passages: List[Dict[str, Any]] = Field(default_factory=list)
     conversation_history: List[Dict[str, str]] = Field(default_factory=list)
+    context_provenance: Dict[str, Any] = Field(default_factory=dict)
     token_budget: int = 8000
     security_policy_id: str = "default"
     created_at: str = Field(default_factory=current_timestamp_iso)
