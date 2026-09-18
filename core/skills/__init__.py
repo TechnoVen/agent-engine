@@ -13,6 +13,11 @@ from core.skills.models import (
     SkillMetadata,
     SkillSource,
 )
+from core.skills.registry import (
+    SkillRegistryClient,
+    SkillRegistryPackage,
+    scan_content_safety,
+)
 
 __all__ = [
     "Skill",
@@ -24,4 +29,7 @@ __all__ = [
     "SkillEditor",
     "SkillValidationResult",
     "SkillCollectionManager",
+    "SkillRegistryClient",
+    "SkillRegistryPackage",
+    "scan_content_safety",
 ]

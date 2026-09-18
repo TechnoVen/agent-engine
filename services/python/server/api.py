@@ -77,6 +77,7 @@ from core.skills import (
     SkillCollectionManager,
     SkillEditor,
     SkillFormat,
+    SkillRegistryClient,
     SkillSource,
 )
 from core.templates import TemplateManager
@@ -326,6 +327,30 @@ class AddSkillToCollectionRequest(BaseModel):
 class SkillSearchResult(BaseModel):
     skill: SkillInfo
     score: float
+
+
+class SkillRegistryPackageInfo(BaseModel):
+    id: str
+    name: str
+    version: str = "1.0.0"
+    description: str = ""
+    author: str = "Agent Engine Core"
+    tags: List[str] = Field(default_factory=list)
+    category: str = "General"
+    sha256: str = ""
+    verified: bool = True
+    installs: int = 0
+    is_installed: bool = False
+    installed_path: Optional[str] = None
+
+
+class InstallSkillPackageRequest(BaseModel):
+    package_id: str
+    force: bool = False
+
+
+class UninstallSkillPackageRequest(BaseModel):
+    package_id: str
 
 
 class ExecuteSkillRequest(BaseModel):
@@ -1715,6 +1740,93 @@ async def remove_skill_from_collection_endpoint(collection_id: str, skill_id: st
         return {"success": True, "collection_id": collection_id, "skill_id": skill_id}
     except FileNotFoundError as e:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@v1_router.get(
+    "/skills/registry",
+    response_model=List[SkillRegistryPackageInfo],
+    dependencies=[Depends(require_flag("enable_registry"))],
+)
+async def list_registry_packages(
+    query: Optional[str] = Query(default=None, description="Filter by text"),
+    category: Optional[str] = Query(default=None, description="Filter by category"),
+    tag: Optional[str] = Query(default=None, description="Filter by tag"),
+):
+    """List available community and verified packages in the skill registry."""
+    client = SkillRegistryClient()
+    pkgs = client.list_packages(query=query, category=category, tag=tag)
+    return [
+        SkillRegistryPackageInfo(
+            id=p.id,
+            name=p.name,
+            version=p.version,
+            description=p.description,
+            author=p.author,
+            tags=p.tags,
+            category=p.category,
+            sha256=p.sha256,
+            verified=p.verified,
+            installs=p.installs,
+            is_installed=p.is_installed,
+            installed_path=p.installed_path,
+        )
+        for p in pkgs
+    ]
+
+
+@v1_router.post(
+    "/skills/registry/install",
+    response_model=SkillRegistryPackageInfo,
+    dependencies=[Depends(require_flag("enable_registry"))],
+)
+async def install_registry_package(req: InstallSkillPackageRequest):
+    """Install a skill package from registry with hash verification and security scan."""
+    client = SkillRegistryClient()
+    try:
+        pkg = client.install_package(req.package_id, force=req.force)
+        return SkillRegistryPackageInfo(
+            id=pkg.id,
+            name=pkg.name,
+            version=pkg.version,
+            description=pkg.description,
+            author=pkg.author,
+            tags=pkg.tags,
+            category=pkg.category,
+            sha256=pkg.sha256,
+            verified=pkg.verified,
+            installs=pkg.installs,
+            is_installed=pkg.is_installed,
+            installed_path=pkg.installed_path,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@v1_router.post(
+    "/skills/registry/uninstall",
+    dependencies=[Depends(require_flag("enable_registry"))],
+)
+async def uninstall_registry_package(req: UninstallSkillPackageRequest):
+    """Uninstall a package previously installed from the registry."""
+    client = SkillRegistryClient()
+    try:
+        success = client.uninstall_package(req.package_id)
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Package '{req.package_id}' is not currently installed.",
+            )
+        return {"success": True, "package_id": req.package_id}
+    except PermissionError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 

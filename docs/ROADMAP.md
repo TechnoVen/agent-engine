@@ -343,7 +343,7 @@
 - [x] **Task 6.1 — Multi-Tool Skill Discovery**
 - [x] **Task 6.2 — Skill Editor**
 - [x] **Task 6.3 — Collections & Search**
-- [ ] **Task 6.4 — Skill Registry Integration**
+- [x] **Task 6.4 — Skill Registry Integration**
 - [ ] **Task 6.5 — Remote Skill Discovery**
 
 ---

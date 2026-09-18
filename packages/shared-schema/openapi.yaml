@@ -307,6 +307,69 @@ paths:
               schema:
                 type: object
 
+  /skills/registry:
+    get:
+      summary: List available registry skills
+      operationId: listRegistrySkills
+      parameters:
+        - name: query
+          in: query
+          schema:
+            type: string
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: tag
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Registry packages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SkillRegistryPackageInfo'
+
+  /skills/registry/install:
+    post:
+      summary: Install a skill from registry
+      operationId: installRegistrySkill
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstallSkillPackageRequest'
+      responses:
+        '200':
+          description: Installed package info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillRegistryPackageInfo'
+
+  /skills/registry/uninstall:
+    post:
+      summary: Uninstall a skill from registry
+      operationId: uninstallRegistrySkill
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UninstallSkillPackageRequest'
+      responses:
+        '200':
+          description: Deletion result
+          content:
+            application/json:
+              schema:
+                type: object
+
   /skills/{skill_id}:
     get:
       summary: Get details and content of a skill
@@ -2574,6 +2637,53 @@ components:
           $ref: '#/components/schemas/SkillInfo'
         score:
           type: number
+
+    SkillRegistryPackageInfo:
+      type: object
+      required: [id, name, version]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        author:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        category:
+          type: string
+        sha256:
+          type: string
+        verified:
+          type: boolean
+        installs:
+          type: integer
+        is_installed:
+          type: boolean
+        installed_path:
+          type: string
+
+    InstallSkillPackageRequest:
+      type: object
+      required: [package_id]
+      properties:
+        package_id:
+          type: string
+        force:
+          type: boolean
+
+    UninstallSkillPackageRequest:
+      type: object
+      required: [package_id]
+      properties:
+        package_id:
+          type: string
 
     WorkflowInfo:
       type: object
