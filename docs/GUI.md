@@ -1,831 +1,1738 @@
-# Agent Engine — Kimi-Inspired GUI Design & Gemini Instructions
+# Agent Engine — Canonical GUI & Interaction Architecture
 
-## Part 1 — The Dashboard Decision (Answered First)
-
-**Question:** Should we keep both dashboards (Streamlit + Tauri) or streamline?
-
-**Answer: Streamline to ONE.** Ship the **Tauri shell as the only user-facing dashboard**. Demote Streamlit to a **hidden developer tool** (`make dev-dashboard`) that is never shipped to end users.
-
-**Why:**
-
-1. Kimi proves that a **single sidebar + main canvas** beats separate dashboards. Every screenshot shows the same shell — no separate "control panel" app.
-2. Two dashboards = two codebases, two auth systems, two design languages, two bug surfaces. That is anti–Law 1 (90/9/1 discipline applied to engineering effort).
-3. Streamlit was a Phase 4 shortcut. The Tauri shell in Phase 2 was always the long-term answer. Keep Streamlit only for internal debugging, benchmarking, and CI reports.
-4. Enterprise buyers expect one product, not a "real app plus a Python dashboard."
-
-**Action for Gemini:**
-- Move Streamlit code from `server/dashboard.py` to `tools/dev_dashboard.py`.
-- Remove all references to `http://localhost:8501` from user-facing docs.
-- Update `start_studio.sh` to remove Streamlit from the default startup.
-- Keep Streamlit only for `make dev` mode with a warning banner: "Developer tool — not for end users."
+**Status:** Canonical product interface specification  
+**Supersedes:** The earlier Kimi-inspired GUI document as the primary design authority  
+**Purpose:** Define a professional, non-gimmicky desktop interface for Agent Engine that feels like a mature operating environment rather than a generic AI chat product.
 
 ---
 
-## Part 2 — Understanding the Kimi GUI (Complete Anatomy)
+# 1. Product Design Position
 
-Kimi's GUI is not one page — it is a **unified shell with mode-based navigation**. Every screenshot shares the same skeleton. This is the pattern we adopt.
+Agent Engine should not visually present itself as “an AI app.”
 
-### 2.1 The Universal Shell (Present in Every Screenshot)
+It should feel closer to:
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│  LEFT SIDEBAR (280px)     │         MAIN CANVAS                     │
-│                           │                                          │
-│  [K Logo]    [<<]         │         (Mode-specific content)          │
-│                           │                                          │
-│  [+ New Chat]  Ctrl K     │                                          │
-│                           │                                          │
-│  ◯ My Kimi                │                                          │
-│  ◯ Scheduled Tasks        │                                          │
-│  ⚡ Swarm                 │                                          │
-│  ▢ Slides                 │                                          │
-│  🔍 Deep Research         │                                          │
-│  🌐 Websites              │                                          │
-│  📄 Docs                  │                                          │
-│  📊 Sheets                │                                          │
-│  🎨 Design                │                                          │
-│  💼 Kimi Work             │                                          │
-│  💻 Kimi Code             │                                          │
-│  🦀 Kimi Claw             │                                          │
-│  ─ OpenClaw-8Zw (agent)   │                                          │
-│  ────────────────────     │                                          │
-│  PROJECTS                 │                                          │
-│  + New project            │                                          │
-│  ▢ Organiser              │                                          │
-│  ────────────────────     │                                          │
-│  CHATS                    │                                          │
-│  • Saturday Party...      │                                          │
-│  • Oilist Project...      │                                          │
-│  • Real Estate Est...     │                                          │
-│                           │                                          │
-│  ────────────────────     │                                          │
-│  [Avatar] Ahmed...  ↑ ↓   │                                          │
-└──────────────────────────────────────────────────────────────────────┘
-```
+- a professional IDE;
+- a modern research workspace;
+- a document and data workbench;
+- a reliable operations console;
+- a native desktop productivity environment.
 
-### 2.2 The Sidebar Anatomy (Three Zones)
+AI is an implementation detail. The interface should communicate **work, context, control, provenance, and execution state**.
 
-**Zone A — Global Actions** (top)
-- Logo + collapse toggle
-- **New Chat** — the single most important action. Always visible. `Ctrl+K` shortcut.
+The user should not have to think in terms of:
 
-**Zone B — Mode Navigation** (middle)
-This is the key insight: Kimi treats each capability as a **mode**, not a menu item. Clicking `Slides` does not open a new app — it **swaps the main canvas** to a slides-focused workspace while keeping the sidebar, input box, project picker, and chat history intact.
+- models;
+- prompts;
+- swarms;
+- agents everywhere;
+- neural networks;
+- magic buttons;
+- glowing AI states;
+- “growth” gamification.
 
-Modes visible in the screenshots:
-| Icon | Mode | Purpose |
-|---|---|---|
-| ◯ | My Kimi | Agent identity, memory, growth |
-| ◯ | Scheduled Tasks | Cron-style recurring jobs |
-| ⚡ | Swarm | Multi-agent parallel task execution |
-| ▢ | Slides | Deck generation |
-| 🔍 | Deep Research | Long-form investigative reports |
-| 🌐 | Websites | Web builder |
-| 📄 | Docs | Document writer |
-| 📊 | Sheets | Spreadsheet/data work |
-| 🎨 | Design | Visual/UI design |
-| 💼 | Kimi Work | Work workflows |
-| 💻 | Kimi Code | Coding agent |
-| 🦀 | Kimi Claw | OpenClaw channel bridge (agent instance) |
+Those concepts may exist internally or in Developer Mode, but the default product should feel calm, precise, and useful.
 
-**Zone C — Context** (bottom)
-- **Projects** — persistent workspaces (folders of related chats + files + instructions)
-- **Chats** — recent conversation history
-- **User footer** — avatar, name, upgrade, download
+---
 
-### 2.3 The Universal Input Box (Present in Every Mode)
+# 2. Core Design Principles
 
-The most important reusable component. It appears identically in every mode, only the placeholder and mode-chip change.
+## 2.1 Work first, AI second
 
-```
-┌────────────────────────────────────────────────────────────────┐
-│  Type "/" to invoke plugins and skills                         │
-│                                                                │
-│  [+]                                    [Instant High ▾] [↑]  │
-├────────────────────────────────────────────────────────────────┤
-│  [📁 Select project ▾]   [icons]   [Plugins ▾]                │
-└────────────────────────────────────────────────────────────────┘
+Primary navigation should describe what the user wants to do:
+
+```text
+Home
+Projects
+Tasks
+Automations
+Knowledge
+Developer
+Research
+Writing
+Data
 ```
 
-Components:
-- **Large textarea** with placeholder that adapts to mode
-- **`+` button** — attach files, images, documents
-- **Mode chip** (e.g., `Swarm`, `Slides`, `Deep Research`, `Sheets`) — click to switch mode without leaving chat
-- **Model selector** (`Instant High`, `K3 Swarm High`, `K3 High`) — quick model tier switch
-- **Send arrow** — disabled until text entered
-- **Project selector row** — bind this chat to a project
-- **Plugin icons row** — active plugins with quick toggles
-- **Plugin dropdown** — full plugin/skill picker
+not which AI subsystem is responsible.
 
-### 2.4 The Mode Landing Pages (Empty States)
+Avoid making the user choose between agent concepts before starting work.
 
-Each mode has a **rich empty state** with feature cards — this is a huge UX win:
+---
 
-| Mode | Empty State Content |
+## 2.2 Restraint over spectacle
+
+Avoid:
+
+- neon glows;
+- gradients used as decoration;
+- animated “thinking” orbs;
+- neural-network visualizations;
+- oversized hero cards;
+- glassmorphism;
+- excessive pills/chips;
+- multicolor icon walls;
+- anthropomorphic “relationship” metrics;
+- arbitrary badges on every surface.
+
+Use:
+
+- neutral surfaces;
+- clear alignment;
+- consistent spacing;
+- subtle depth;
+- single accent color;
+- typography and layout for hierarchy;
+- color only for meaning.
+
+---
+
+## 2.3 Desktop density, not SaaS-card density
+
+Agent Engine is a desktop work environment.
+
+Favor:
+
+- split panes;
+- lists;
+- tables;
+- sidebars;
+- inspectors;
+- activity drawers;
+- command palettes;
+- context panels;
+
+over dashboards made of large floating cards.
+
+Cards should exist only when they represent discrete entities such as projects, packages, or templates.
+
+---
+
+## 2.4 Show system state without exposing internals
+
+The user should be able to understand:
+
+```text
+Ready
+Running
+Waiting for approval
+Paused
+Failed
+Offline
+Degraded
+```
+
+without needing to know which framework or provider produced the state.
+
+Technical detail remains available through disclosure.
+
+---
+
+## 2.5 Progressive disclosure
+
+Use three interface levels:
+
+### Standard
+
+For everyday work.
+
+### Advanced
+
+Shows:
+
+- models;
+- execution details;
+- context sources;
+- skills;
+- cost;
+- approvals.
+
+### Developer
+
+Shows:
+
+- DSPy;
+- MCP;
+- ACP;
+- traces;
+- workflow internals;
+- provider details;
+- policy evaluation;
+- runtime logs.
+
+The main UI must remain useful with all advanced panels hidden.
+
+---
+
+# 3. Visual Character
+
+## 3.1 Desired character
+
+Agent Engine should feel:
+
+```text
+quiet
+serious
+precise
+fast
+local
+technical
+trustworthy
+desktop-native
+```
+
+Reference qualities:
+
+- VS Code density;
+- Linear precision;
+- Arc/Raycast restraint;
+- modern native macOS/Linux utility apps;
+- professional financial/research terminals;
+- high-quality developer tools.
+
+Do not imitate their branding directly.
+
+---
+
+## 3.2 Avoid “AI app” clichés
+
+Do not use:
+
+```text
+sparkle icons for AI
+purple/blue gradients
+glowing borders
+brain icons
+neural illustrations
+magic wand imagery
+robot avatars
+animated constellation backgrounds
+```
+
+Do not label ordinary operations as “AI-powered.”
+
+---
+
+# 4. Information Architecture
+
+The previous GUI grew from feature-by-feature development and exposes too many implementation concepts in the main sidebar.
+
+The canonical sidebar should instead be organized around user work.
+
+## 4.1 Primary Navigation
+
+```text
+┌───────────────────────────────┐
+│ AE  Agent Engine         [⌘K] │
+│                               │
+│ + New                         │
+│                               │
+│ WORK                          │
+│ Home                          │
+│ Projects                      │
+│ Tasks                         │
+│ Automations                   │
+│                               │
+│ TOOLS                         │
+│ Research                      │
+│ Writing                       │
+│ Data                          │
+│ Developer                     │
+│                               │
+│ LIBRARY                       │
+│ Knowledge                     │
+│ Skills                        │
+│                               │
+│ SYSTEM                        │
+│ Activity                      │
+│ Approvals                     │
+│ Models                        │
+│                               │
+│ ───────────────────────────   │
+│ Recent                        │
+│ Agent Engine                  │
+│ THE DEN                       │
+│ Writing                       │
+│                               │
+│ Nadir                    [⚙]  │
+└───────────────────────────────┘
+```
+
+### Why this is better
+
+It removes internal concepts such as:
+
+- Swarm;
+- Adapters;
+- Rooms;
+- Channels;
+- Benchmarks;
+- Marketplace;
+
+from the default mental model.
+
+Those features still exist, but appear where they belong:
+
+| Old navigation concept | Canonical location |
 |---|---|
-| **Home** | KIMI logo + input + quick action chips (Swarm, Slides, Deep Research, Websites, Docs, Sheets, Design) + "Explore inspiration" scroll bar |
-| **Swarm** | "Assign a task to your AI team..." + Featured cases (Blackhole, 3D Typewriter, Market Dashboard) |
-| **Slides** | "Turn your ideas into stunning slides in minutes" + category tabs (All, Custom, Work, Finance, Consulting, Promotion, Academic) + template grid |
-| **Deep Research** | "Ask Kimi to get an in-depth research report" + Featured cases (42 Years of Silicon, Shipping: Not One Cycle, The Interactive Paper) |
-| **Scheduled Tasks** | "Let Kimi run tasks on schedule..." + "Add manually or Create via chat" + Create dropdown |
-| **Sheets** | "Upload a spreadsheet..." + featured templates |
-
-**Design lesson:** Never show an empty chat. Always show **example prompts and featured cases**. This reduces first-use friction and teaches the feature without documentation.
-
-### 2.5 The My Kimi Page (Identity & Memory)
-
-This is the agent's "self" page — unique to Kimi and a powerful concept we must adopt:
-
-- **Header:** "{User}'s Kimi" — the agent belongs to the user, is personalized
-- **Stats strip:** "271 days, 39 chats, 1 day streak"
-- **Tabs:** `Closeness` (interaction graph) / `Growth` (capability graph)
-- **Contribution heatmap:** GitHub-style, shows engagement over 12 months
-- **Self-growth toggle:** "Once enabled, Kimi keeps learning your preferences, habits, and ways of working, making every collaboration the start of the next one"
-- **Neural visualization:** abstract dots representing the growing memory network
-
-**Design lesson:** The agent is not a tool — it is a **relationship**. Users come back to see growth, streaks, and memory. This drives retention and creates emotional investment.
-
-### 2.6 The Project Page
-
-- **Project name** as page title
-- **Thread list** below — each thread shows title, timestamp, and preview text
-- **Right panel** with two cards:
-  - **Instructions** — persistent system prompt for the project
-  - **Files** — attached files referenced across all project chats
-- **Bottom input** — chat scoped to the project
-
-### 2.7 The Create Project Flow
-
-- Centered modal-style page
-- **"Keep one topic in one place"** — clear purpose statement
-- **Folder icon carousel** — pick an icon visually
-- **Name input** — single field
-- No clutter — one decision per screen
+| Swarm | Teams inside Automations / Developer |
+| Workflows | Automations |
+| Channels | Settings → Connections |
+| Adapters | Settings → Integrations |
+| Rooms | Shared Projects / Team features |
+| Marketplace | Skills → Browse |
+| Cost | Activity → Usage |
+| Policies | Approvals / Settings → Security |
+| Benchmarks | Models → Diagnostics |
+| Diagrams | Developer / Writing tools |
+| Slides | Writing / Documents tools |
+| Websites | Developer |
+| Design | Writing/Creative pack or installed capability |
 
 ---
 
-## Part 3 — Mapping Kimi's GUI to Agent Engine Features
+# 5. Shell Architecture
 
-| Kimi Element | Agent Engine Equivalent | Notes |
-|---|---|---|
-| Sidebar `New Chat` | **New Chat** | Same (`Ctrl+K`) |
-| Sidebar `My Kimi` | **My Agent** | Agent identity, memory, growth, cost summary (`/agent`) |
-| Sidebar `Scheduled Tasks` | **Scheduled Tasks** | Same + workflow-based scheduling (`/tasks`) |
-| Sidebar `Swarm` | **Swarm** | Multi-agent parallel execution (`/swarm`) |
-| Sidebar `Slides` | **Slides** | Deck generation (skill) (`/modes/slides`) |
-| Sidebar `Deep Research` | **Deep Research** | Long-form research (skill) (`/modes/deep-research`) |
-| Sidebar `Websites` | **Websites** | Web builder (skill) (`/modes/websites`) |
-| Sidebar `Docs` | **Docs** | Document writer (skill) (`/modes/docs`) |
-| Sidebar `Sheets` | **Sheets** | Spreadsheet/data (skill) (`/modes/sheets`) |
-| Sidebar `Design` | **Design** | Visual/UI design (skill) (`/modes/design`) |
-| Sidebar `Kimi Work` | **Workflows** | Graph workflow builder + runner (`/workflows`) |
-| Sidebar `Kimi Code` | **Code** | Code mode + IDE adapters (`/modes/code`) |
-| Sidebar `Kimi Claw` | **Channels** | OpenClaw + Switch channel bridge (`/channels`) |
-| (none) | **Skills** | Chops-style skill library (`/skills`) |
-| (none) | **Marketplace** | Agent/skill registry (`/marketplace`) |
-| (none) | **Cost** | Cost dashboard (`/cost`) |
-| (none) | **Policies & Approvals** | Harden-style policy editor + approval queue (`/policies`) |
-| (none) | **Adapters** | Claude Code, Codex, Cursor, Goose, Hermes |
-| (none) | **Diagrams** | ArchitectGPT-style architecture diagrams (`/modes/diagrams`) |
-| (none) | **Benchmarks** | Local model performance |
-| (none) | **Rooms** | Switch-style team collaboration |
-| (none) | **Settings** | Providers, keychain, models (`/settings`) |
-| Projects | **Projects / Workspaces** | Same + git history + agent activity (`/projects`) |
-| Chats | **Chats** | Same + search + agent tags |
-| OpenClaw-8Zw item | **Agent instances** in sidebar | Multiple agent instances listed |
+## 5.1 Left Sidebar
 
-### Revised Sidebar for Agent Engine
+Default width:
 
-```
-┌─────────────────────────────────────┐
-│  [AE]   [<<]                        │
-│                                     │
-│  [+ New Chat]         Ctrl K        │
-│                                     │
-│  ◯ My Agent                         │
-│  ◯ Scheduled Tasks                  │
-│  ⚡ Swarm                            │
-│  🔀 Workflows                       │
-│                                     │
-│  ── MODES ──                        │
-│  💻 Code                            │
-│  🔍 Deep Research                   │
-│  📄 Docs                            │
-│  📊 Sheets                          │
-│  ▢ Slides                           │
-│  🌐 Websites                        │
-│  🎨 Design                          │
-│  📐 Diagrams                        │
-│                                     │
-│  ── AGENTS ──                       │
-│  🦀 Channels (OpenClaw/Switch)      │
-│  🧩 Adapters (Claude, Codex, Goose) │
-│  🏢 Rooms (Team collaboration)      │
-│                                     │
-│  ── LIBRARY ──                      │
-│  🛠 Skills                          │
-│  🛒 Marketplace                     │
-│                                     │
-│  ── OPERATIONS ──                   │
-│  💰 Cost                            │
-│  🛡 Policies & Approvals            │
-│  📊 Benchmarks                      │
-│                                     │
-│  ──────────────────                 │
-│  PROJECTS                           │
-│  + New project                      │
-│  ▢ Organiser                        │
-│  ▢ Client Website                   │
-│                                     │
-│  ──────────────────                 │
-│  CHATS                              │
-│  • Saturday Party Planning          │
-│  • Invoice March 2026               │
-│  • Book Chapter 4                   │
-│                                     │
-│  ──────────────────                 │
-│  [👤] Nadir          ⚙  ⬇          │
-└─────────────────────────────────────┘
+```text
+240px
 ```
 
----
+Collapsed width:
 
-## Part 4 — Screen-by-Screen Design Specification for Gemini
-
-Each screen corresponds to specific tasks across Phase 3, Phase 4, Phase 7, and Phase 15.
-
-### Screen 1 — Home (Default Chat Mode)
-- **Route:** `/`
-- **Task:** 3.1
-- **Layout:**
-  - Center canvas, vertically stacked, max-width 760px
-  - Logo at top (small, muted)
-  - Large greeting: "Good morning, Nadir" or mode-specific title
-  - **Universal Input Box** (component `ChatInput`) — see Screen 11
-  - **Quick Action Chips** below input: Swarm, Workflows, Deep Research, Docs, Sheets, Diagrams
-  - **Featured Cases Grid** — 3 cards, "Explore inspiration" section
-  - **Recent Projects row** — horizontal scroll of 4 project cards
-- **Empty state content:**
-  - Chip row: `Swarm · Workflows · Deep Research · Docs · Sheets · Diagrams · Code`
-  - Featured cards:
-    1. "Build an invoice agent" (business case)
-    2. "Write a book chapter" (author case)
-    3. "Analyze a codebase" (dev case)
-    4. "Plan a marketing launch" (workflow case)
-  - Inspiration footer: "Scroll to explore"
-- **Acceptance criteria:**
-  - Streaming tokens render at 60fps
-  - Input remembers last mode/model/project
-  - `Ctrl+K` focuses input from any screen
-
----
-
-### Screen 2 — My Agent (Identity, Memory, Growth)
-- **Route:** `/agent`
-- **Task:** 3.7
-- **Layout:**
-  - **Header:** `{User}'s Agent` — e.g., "Nadir's Agent"
-  - **Stats strip:** days active · total sessions · current streak · total cost saved vs frontier
-  - **Tabs:** `Closeness` / `Growth` / `Memory` / `Cost`
-  - **Closeness tab:** GitHub-style contribution heatmap (12 months), hover shows daily session count
-  - **Growth tab:** capability visualization — which skills/agents have been used, which are new
-  - **Memory tab:** list of observational memories with edit/delete, importance score
-  - **Cost tab:** inline mini cost dashboard (links to full Cost screen)
-  - **Self-growth toggle:** "Enable self-growth" — when on, agent learns preferences and habits across sessions
-  - **Neural visualization:** animated dots showing memory network — subtle, non-distracting
-- **Acceptance criteria:**
-  - Heatmap loads in <200ms for 365 days
-  - Memory list searchable, editable inline
-  - Toggle persists per-user
-  - Stats update in real-time after each session
-
----
-
-### Screen 3 — Scheduled Tasks
-- **Route:** `/tasks`
-- **Task:** 3.8
-- **Layout:**
-  - **Header:** "Scheduled Tasks" + "Create ▾" dropdown button (top right)
-  - **Subtitle:** "Let your agent run tasks on schedule and deliver results automatically"
-  - **Empty state:** Calendar illustration + "Create a scheduled task" + "Add manually or Create via chat" links
-  - **Populated state:** Table/card list — name, schedule (cron preview in human language), agent, last run, next run, status
-  - **Create dropdown options:** "Manually" / "Via chat" / "From template"
-- **Templates to include:**
-  - "Daily inbox digest at 8 AM"
-  - "Weekly expense report Sunday 6 PM"
-  - "Hourly code audit on save"
-  - "Monthly book progress summary"
-- **Acceptance criteria:**
-  - Cron expression builder with plain-English preview
-  - Tasks run off-peak by default (Law 7)
-  - Failure sends notification via Channel adapter
-  - Each task shows cost-per-run and monthly estimate
-
----
-
-### Screen 4 — Swarm (Multi-Agent)
-- **Route:** `/swarm`
-- **Task:** 7.4
-- **Layout:**
-  - **Header:** "Swarm" + subtitle "Assign a task to your AI team"
-  - **Input box** with `Swarm` mode chip and `Swarm High` model selector
-  - **Featured Swarm cases** — 3 cards showing multi-agent outputs:
-    1. "Build & deploy an API" — 4 agents (architect, coder, tester, deployer)
-    2. "Deep code review" — 3 agents (security, lint, fix)
-    3. "Market research report" — 4 agents (search, analyst, writer, editor)
-- **Behavior:**
-  - Swarm runs N pipelines in parallel; results merged
-  - Each agent's progress shown as a live progress strip
-  - Final output aggregated with attribution per agent
-- **Acceptance criteria:**
-  - Parallel execution respects cost router (each agent uses cheapest tier)
-  - Partial failures don't kill the swarm
-  - Cost shown per agent before run ("Estimated: $0.04")
-
----
-
-### Screen 5 — Workflows
-- **Route:** `/workflows`
-- **Task:** 7.2 & 7.5
-- **Layout:**
-  - **List view:** saved workflows + "New workflow" button
-  - **Editor view:** React Flow canvas
-  - **Left palette:** Pipelines, Skills, Agents, Gates (human approval), Conditions, Parallel, Merge
-  - **Right inspector:** selected node config
-  - **Top bar:** Save, Run, Validate, Export YAML
-- **Acceptance criteria:**
-  - Round-trip YAML ↔ canvas lossless
-  - Dry-run mode shows path without executing
-  - Human gates show as pause nodes
-
----
-
-### Screen 6 — Mode Pages (Code, Deep Research, Docs, Sheets, Slides, Websites, Design, Diagrams)
-- **Routes:** `/modes/{mode}`
-- **Tasks:** 3.1 & 3.10
-- **Mode-specific content:**
-  | Mode | Tagline | Featured Cases |
-  |---|---|---|
-  | Code | "Ship code with a local-first coding agent" | Code review, refactor, test generation |
-  | Deep Research | "Ask your agent for an in-depth research report" | Silicon history, market analysis, academic paper |
-  | Docs | "Write and edit documents grounded in your files" | Contract review, technical spec, essay |
-  | Sheets | "Upload a spreadsheet or create from scratch" | Bibliometric graph, financial panorama, health dashboard |
-  | Slides | "Turn your ideas into stunning slides in minutes" | Annual report, pitch deck, academic presentation |
-  | Websites | "Build a site in minutes" | Portfolio, SaaS landing, docs site |
-  | Design | "Design UI and visuals" | App mockup, brand kit, icon set |
-  | Diagrams | "Describe an app in one line, get an architecture diagram" | Microservices, data pipeline, AI stack |
-- **Acceptance criteria:**
-  - Every mode uses the same `ChatInput` component
-  - Switching modes preserves chat history
-  - Mode-specific skills load automatically
-
----
-
-### Screen 7 — Channels (OpenClaw + Switch)
-- **Route:** `/channels`
-- **Task:** 5B.1–5B.3, 5C.1–5C.4
-- **Layout:**
-  - **Tabs:** Personal (OpenClaw) | Team (Native collaboration)
-  - **Personal tab:** list of connected channels — WhatsApp, Telegram — each with status, last message, agent binding
-  - **Team tab:** Slack, Teams, Discord, Mattermost — each with workspace, channels, roles synced
-  - **Connect button** per channel — OAuth or token flow
-  - **Agent binding** — each channel maps to an agent instance
-- **Acceptance criteria:**
-  - Adding a channel works in <2 minutes
-  - Test message button verifies connection
-  - Role sync visible in UI
-
----
-
-### Screen 8 — Skills Library
-- **Route:** `/skills`
-- **Task:** 6.1–6.5
-- **Layout:**
-  - **Top tabs:** `Installed` | `Registry` | `Collections`
-  - **Left filter:** source tool (Claude Code, Cursor, Codex, Goose, Agent Engine native)
-  - **Main grid:** skill cards — name, description, source, version, author
-  - **Editor panel:** Monaco editor with frontmatter parsing
-  - **Search bar:** full-text + tag filters
-- **Acceptance criteria:**
-  - Editing a skill writes to correct per-tool path
-  - Registry install works in <10s
-  - Remote discovery works via SSH/API
-
----
-
-### Screen 9 — Marketplace
-- **Route:** `/marketplace`
-- **Task:** 12.4
-- **Layout:**
-  - **Hero section:** featured agents this week
-  - **Category tabs:** Productivity, Finance, Code, Research, Writing, Design, Enterprise
-  - **Agent grid:** card with icon, name, author, rating, installs, price (free/paid)
-  - **Detail page:** description, screenshots, version history, reviews, install button
-  - **Installed tab:** your installed agents
-- **Acceptance criteria:**
-  - Install in <60s
-  - License validation for paid agents
-  - Security audit scan runs automatically before install
-
----
-
-### Screen 10 — Cost Dashboard
-- **Route:** `/cost`
-- **Task:** 4.9 & 9.5
-- **Layout:**
-  - **Top metrics:** this month's spend, forecast, savings vs frontier-only baseline
-  - **90/9/1 split chart:** donut showing distribution across CODE/CACHE/SMALL/MID/FRONTIER
-  - **Cost per task type:** bar chart
-  - **Cache hit rate:** line chart
-  - **Distillation candidates:** list of tasks > 10k/month with "distill now" button
-  - **Budget alerts:** set monthly ceiling per project/agent
-  - **Export:** CSV / JSON
-- **Acceptance criteria:**
-  - Numbers match sidecar `/v1/telemetry/cost`
-  - Alerts fire at 80% and 100% of budget
-  - Distill button triggers Task 9.3 pipeline
-
----
-
-### Screen 11 — Universal Chat Input (The Core Component)
-- **Component:** `ChatInput.tsx` (Task 3.9)
-- **Used in:** Every screen
-- **Anatomy:**
+```text
+52px
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  [Placeholder — mode-specific]                               │
-│                                                              │
-│  [+]                     [Model ▾]              [↑ Send]     │
-├──────────────────────────────────────────────────────────────┤
-│  [Project ▾]   [plugin icons]   [Plugins ▾]                  │
-└──────────────────────────────────────────────────────────────┘
+
+Avoid the previous 280px default unless labels require it.
+
+The sidebar should be calm and low-contrast.
+
+Section headings use 11px uppercase tracking, not decorative separators.
+
+No emoji.
+
+Use Lucide icons at 16px.
+
+---
+
+## 5.2 Top Bar
+
+The top bar should be very restrained.
+
+Default:
+
+```text
+Project / location breadcrumb               System status
 ```
-- **Props interface:**
-```typescript
-interface ChatInputProps {
-  mode: Mode;                    // 'chat' | 'swarm' | 'code' | ...
-  placeholder?: string;          // defaults to mode-specific
-  model: ModelTier;              // 'instant' | 'k3' | 'swarm-high' | ...
-  projectId?: string;
-  plugins: Plugin[];
-  onSend: (message: string, options: SendOptions) => void;
-  onModeChange: (mode: Mode) => void;
-  onModelChange: (model: ModelTier) => void;
-  onProjectChange: (projectId: string) => void;
-}
+
+Example:
+
+```text
+Agent Engine / Workflows / Security Review          Ready
 ```
-- **Features:**
-  - `Ctrl+K` global focus
-  - Slash commands (`/skill`, `/agent`, `/workflow`)
-  - `@` mentions for files, projects, agents
-  - Drag-drop file attachments
-  - Paste image support
-  - Enter to send, Shift+Enter for newline
-  - Streaming stop button (replaces send while streaming)
-  - Token cost preview above send button
-  - Inline error banner if model unavailable
-- **Acceptance criteria:**
-  - 60fps on 10,000-char input
-  - Attachments upload progressively
-  - Cost preview accurate to ±5%
+
+Do not permanently show:
+
+```text
+VRAM
+tokens/sec
+CPU
+RAM
+model tier
+cost
+```
+
+in the global top bar.
+
+Those metrics make the app feel like a model demo.
+
+Instead provide a single system-state indicator:
+
+```text
+Ready
+Busy
+Offline
+Degraded
+```
+
+Clicking it opens the System Status popover with detailed metrics.
 
 ---
 
-### Screen 12 — Policies & Approvals
-- **Route:** `/policies`
-- **Task:** 4.4 & 4.6
-- **Layout:**
-  - **Tabs:** `Policies` | `Approval Queue` | `Audit Log`
-  - **Policies tab:** YAML editor + rule builder + test playground
-  - **Approval Queue:** pending tool calls with risk score, diff, context, Approve/Reject/Edit
-  - **Audit Log:** searchable, exportable, tamper-evident
-- **Acceptance criteria:**
-  - Policy changes take effect without restart
-  - Approval action executes within 500ms
-  - Audit log immutable
+## 5.3 Main Canvas
 
-#### Shared Component: `ApprovalCard.tsx` (Task 3.3)
-- **File:** `apps/desktop/src/renderer/components/ApprovalCard.tsx`
-- **Purpose:** Universal inline confirmation card rendered in conversation streams (`Message.tsx`) and Screen 12 queues when dangerous or high-risk tool calls are intercepted.
-- **Key Features:**
-  - **Risk Badges:** Color-coded glowing risk indicators (`critical` in red, `high` in amber, `medium` in yellow, `low` in emerald) with numeric risk scores (e.g. `95%`).
-  - **Diff Preview Engine:** Line-by-line syntax-highlighted diffs for code/file edits (`+` additions in green, `-` deletions in red), terminal command preview boxes with `$ ` prompts, and SQL query inspector.
-  - **Action Trio:** `Approve & Execute` (<500ms resolution SLA), `Reject` (with optional operator reason dialog), and `Edit Payload` (inline JSON argument editor with instant re-validation).
-  - **Audit Ledger Integration:** Persists operator human decisions directly into SQLite/Postgres audit logs via `POST /v1/safety/approval` and displays immutable audit stamps (`#aud-<id>`).
+Main content should usually use one of four patterns:
+
+1. **Conversation**
+2. **List + Inspector**
+3. **Canvas + Inspector**
+4. **Document/Editor + Context Panel**
+
+Avoid using a grid of cards simply because a screen is empty.
 
 ---
 
-### Screen 13 — Projects (Workspaces)
-- **Route:** `/projects`
-- **Task:** 4.1
-- **List view:** grid of project cards — icon, name, last activity, agents active, thread count
-- **Detail view (Organiser):**
-  - Project name as title
-  - Thread list with preview
-  - **Right panel:**
-    - **Instructions** — persistent system prompt
-    - **Files** — attached files referenced across threads
-    - **Agents** — active adapters in project
-    - **Policy** — project-scoped policy override
-    - **Cost** — project-scoped cost summary
-  - **Bottom input** — chat scoped to project
-- **Create project flow:**
-  - Centered modal
-  - "Keep one topic in one place" subtitle
-  - Icon picker carousel
-  - Name input
-  - Optional: bind to git repo, bind to agent, set policy
+# 6. Home
+
+## 6.1 Purpose
+
+Home is a launch surface, not a marketing landing page.
+
+Avoid:
+
+- giant logo;
+- “Explore inspiration” carousel;
+- showcase cards;
+- slogans.
+
+Use:
+
+```text
+Good morning, Nadir
+What are you working on?
+```
+
+Below:
+
+```text
+[ Large command/input surface ]
+```
+
+Then two compact sections:
+
+```text
+Recent work
+Pinned projects
+```
+
+Optional contextual shortcuts:
+
+```text
+Research
+Write
+Analyze data
+Work on code
+```
+
+Use text + icon rows, not promotional cards.
 
 ---
 
-### Screen 14 — Settings
-- **Route:** `/settings`
-- **Task:** 4.8
-- **Tabs:**
-  - **Providers** — API keys (keychain-backed), test connection
-  - **Models** — default tier per task type
-  - **Local Runtime** — Ollama / llama.cpp config, context size, GPU usage
-  - **Adapters** — enable/disable Claude Code, Codex, Goose, Cursor, etc.
-  - **Channels** — OpenClaw, WhatsApp, Telegram, Slack tokens
-  - **Storage** — SQLite path, Postgres URL, cloud sync
-  - **Security** — AES key, policy defaults, sandbox toggle
-  - **Appearance** — theme, density, font
-  - **About** — version, update channel, diagnostics export
+## 6.2 Example
+
+```text
+Good morning, Nadir
+
+┌──────────────────────────────────────────────────┐
+│ Ask, open a project, or describe a task...       │
+│                                                  │
+│ Attach   Project: Agent Engine        Run        │
+└──────────────────────────────────────────────────┘
+
+Recent work
+────────────────────────────────────────────────────
+Agent Engine architecture review         18 min ago
+THE DEN opening checklist                 Yesterday
+Article draft: Local AI                  2 days ago
+
+Pinned projects
+────────────────────────────────────────────────────
+Agent Engine
+THE DEN
+Writing
+```
 
 ---
 
-## Part 5 — Design System (Tokens Gemini Must Use)
+# 7. Universal Input
 
-### Colors (Dark Theme Default)
+The universal input remains important but should look like a command surface, not a chat toy.
+
+## 7.1 Structure
+
+```text
+┌────────────────────────────────────────────────────────┐
+│ Ask, describe a task, or type / for commands...        │
+│                                                        │
+│ [Attach]  Project: Agent Engine       [Model ▾] [Run] │
+└────────────────────────────────────────────────────────┘
+```
+
+Use a simple rectangular surface.
+
+Radius:
+
+```text
+8px
+```
+
+not 16–24px.
+
+Avoid:
+
+- floating chips inside chips;
+- colored mode pills;
+- multiple plugin avatars;
+- glowing send buttons.
+
+---
+
+## 7.2 Model selection
+
+Model choice is secondary.
+
+Default display:
+
+```text
+Automatic
+```
+
+Advanced options:
+
+```text
+Local
+Balanced
+Best quality
+Specific model...
+```
+
+Do not expose internal names such as:
+
+```text
+K3 Swarm High
+Instant High
+```
+
+unless in Developer Mode.
+
+---
+
+## 7.3 Cost
+
+Do not put cost estimates permanently beside every send button.
+
+Default:
+
+```text
+Automatic · Local preferred
+```
+
+When meaningful:
+
+```text
+Estimated cloud cost: €0.04
+```
+
+Show it only if the task is expected to use paid cloud inference.
+
+---
+
+# 8. Projects
+
+Projects should feel like real workspaces.
+
+## 8.1 Project page layout
+
+```text
+┌─────────────────────────────────────────────────────────────┐
+│ Agent Engine                             [•••]              │
+│ Local repository · Active today                              │
+├────────────────────────────┬────────────────────────────────┤
+│ Work                       │ Project context                │
+│                            │                                │
+│ Sessions                   │ Instructions                   │
+│ Documents                  │ Files                          │
+│ Tasks                      │ Repository                     │
+│ Automations                │ Connected sources              │
+│                            │                                │
+├────────────────────────────┴────────────────────────────────┤
+│ Ask about this project...                                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Right panel should be collapsible.
+
+Do not turn project metadata into many cards.
+
+---
+
+# 9. Tasks
+
+Scheduled and one-off work belong under **Tasks**.
+
+Use a table by default:
+
+| Task | Schedule | Project | Last run | Next run | Status |
+|---|---|---|---|---|---|
+
+Do not use large colorful status cards.
+
+Statuses use subtle text + icon:
+
+```text
+Scheduled
+Running
+Waiting
+Failed
+Paused
+```
+
+---
+
+# 10. Automations
+
+Rename the former Workflows area to **Automations** in Standard Mode.
+
+Inside:
+
+```text
+Automations
+├── Workflows
+├── Schedules
+└── Teams
+```
+
+Developer Mode may expose the exact concepts.
+
+---
+
+# 11. Workflow Builder
+
+The existing workflow builder is one of the strongest interfaces and should largely remain.
+
+## 11.1 Preserve
+
+- dark canvas;
+- node palette;
+- inspector;
+- graph connections;
+- Validate;
+- YAML/source;
+- Dry Run;
+- Run;
+- Save.
+
+## 11.2 Visual refinement
+
+Nodes should resemble a professional graph editor.
+
+Avoid:
+
+- bright type badges;
+- glowing node outlines;
+- excessive color coding.
+
+Use a neutral node:
+
+```text
+┌──────────────────────────────┐
+│ Query Analyzer               │
+│ Agent                        │
+│                              │
+│ Parses request and context   │
+└──────────────────────────────┘
+```
+
+Node type is secondary metadata.
+
+Use color only for runtime status:
+
+```text
+running    blue
+success    green
+waiting    amber
+failed     red
+```
+
+At rest, nodes are monochrome.
+
+---
+
+## 11.3 Palette
+
+Group nodes by purpose:
+
+```text
+Logic
+  Condition
+  Parallel
+  Join
+  Wait
+
+Work
+  Program
+  Skill
+  Agent
+  Tool
+
+Control
+  Approval
+  Human Input
+  Subworkflow
+```
+
+This is easier to understand than an unstructured list.
+
+---
+
+## 11.4 Runtime states
+
+Node state should be shown through:
+
+- small status dot;
+- border;
+- compact footer.
+
+Never animate the whole card.
+
+---
+
+# 12. Research
+
+Research should look like a research workspace.
+
+Use:
+
+```text
+query / prompt
+sources
+notes
+report
+```
+
+Suggested layout:
+
+```text
+┌───────────────────────┬───────────────────────────────┐
+│ Sources               │ Research report               │
+│                       │                               │
+│ 12 collected          │ # Market structure            │
+│ 8 used                │ ...                           │
+│ 3 conflicting         │                               │
+│                       │                               │
+├───────────────────────┤                               │
+│ Notes / claims        │                               │
+└───────────────────────┴───────────────────────────────┘
+```
+
+Source provenance should be visually more important than “AI activity.”
+
+---
+
+# 13. Writing
+
+Writing should resemble a document editor.
+
+Primary surface:
+
+```text
+document
+```
+
+Secondary side panel:
+
+```text
+outline
+sources
+comments
+versions
+```
+
+Conversation remains available but should not dominate the interface.
+
+Avoid presenting all writing as chat output.
+
+---
+
+# 14. Data
+
+Use spreadsheet/table metaphors.
+
+Layout:
+
+```text
+dataset/table
+filters
+analysis panel
+chart/output
+```
+
+AI suggestions should appear as actions:
+
+```text
+Explain anomaly
+Create formula
+Summarize this selection
+Build chart
+```
+
+not as an omnipresent assistant persona.
+
+---
+
+# 15. Developer
+
+Developer is the place for advanced system capabilities.
+
+Possible tabs:
+
+```text
+Code
+Repository
+Worktrees
+Executions
+Tools
+Architecture
+```
+
+This is also where IDE/ACP/MCP details belong.
+
+---
+
+# 16. Knowledge
+
+Knowledge replaces the idea of a generic RAG screen.
+
+Sections:
+
+```text
+Sources
+Documents
+Project knowledge
+User memory
+Procedures
+```
+
+Each record should show provenance.
+
+Avoid “memory network” diagrams.
+
+---
+
+# 17. Memory
+
+The earlier design used:
+
+- closeness;
+- trust;
+- streaks;
+- neural visualizations;
+- growth radar;
+- interaction heatmaps.
+
+These features make the product feel anthropomorphic and AI-centric.
+
+Remove them from the main product.
+
+Replace `My Agent` with:
+
+# Profile & Memory
+
+Tabs:
+
+```text
+Preferences
+Memory
+Instructions
+Privacy
+```
+
+Optional Developer tab:
+
+```text
+Memory diagnostics
+```
+
+Do not quantify “closeness.”
+
+Do not gamify use with streaks.
+
+Do not visualize memory as neural nodes.
+
+---
+
+# 18. Skills
+
+Skills should feel like installed capabilities, similar to extensions in an IDE.
+
+Use:
+
+```text
+Installed
+Browse
+Updates
+```
+
+List or compact grid:
+
+```text
+Financial Modeling
+Finance · v2.4
+Used 18 times · 96% successful
+
+Threat Modeling
+Security · v1.9
+Used 7 times · 100% successful
+```
+
+Primary signals:
+
+- purpose;
+- publisher;
+- version;
+- permissions;
+- reliability.
+
+Avoid ratings and marketplace-style hype in the local product.
+
+---
+
+# 19. Marketplace / Browse
+
+Rename default entry to:
+
+```text
+Browse
+```
+
+inside Skills.
+
+The marketplace itself may exist later, but the UI should resemble a professional extension registry.
+
+Avoid:
+
+- “featured agents this week”;
+- hero banners;
+- huge install counts;
+- consumer app-store appearance.
+
+Use:
+
+```text
+Search
+Categories
+Verified
+Installed
+Updates
+```
+
+---
+
+# 20. Approvals
+
+Approvals are consequential and should look sober.
+
+Do not use:
+
+- glowing red cards;
+- pulsing borders;
+- giant risk percentages.
+
+Use a plain decision panel:
+
+```text
+Approval required
+
+Modify 4 files in Agent Engine
+
+Command
+pytest tests/execution -q
+
+Reason
+Workflow requested verification after applying patch.
+
+Risk
+Medium
+
+Files
+core/execution/coordinator.py
+...
+
+[Reject]                     [Approve once]
+```
+
+Risk is communicated through language, not spectacle.
+
+---
+
+# 21. Activity
+
+Combine:
+
+```text
+execution history
+cost
+audit
+system activity
+```
+
+into a unified Activity area.
+
+Tabs:
+
+```text
+Executions
+Usage
+Audit
+System
+```
+
+This avoids separate top-level pages for Cost and Benchmarks.
+
+---
+
+# 22. Usage
+
+Replace the old “90/9/1 Cost Dashboard.”
+
+The old chart is overly theoretical and feels like an AI optimization demo.
+
+Use practical metrics:
+
+```text
+Cloud spend this month
+Local inference time
+Cost by project
+Cost by task
+Successful task cost
+Provider usage
+Cache savings
+```
+
+Do not show hypothetical savings against an imaginary frontier-only baseline unless clearly labeled as modeled.
+
+---
+
+# 23. Models
+
+Models page:
+
+```text
+Models
+
+Local
+────────────────────────────────────────
+Fast Local             Ready
+Balanced Local         Ready
+Best Local             Not installed
+
+Cloud
+────────────────────────────────────────
+OpenAI                 Connected
+Anthropic              Connected
+Google                 Not connected
+```
+
+Advanced panel exposes:
+
+```text
+context
+VRAM
+quantization
+latency
+tokens/sec
+```
+
+Do not make benchmark numbers part of the normal interface.
+
+---
+
+# 24. System Status
+
+The previous global top bar displays too many machine metrics.
+
+Replace with one state:
+
+```text
+Ready
+Degraded
+Offline
+Busy
+```
+
+Clicking opens:
+
+```text
+System Status
+
+Execution service         Ready
+Local model               Ready
+Database                  Ready
+Sandbox                   Ready
+Cloud providers           2 connected
+
+Resources
+CPU                       24%
+Memory                    65%
+VRAM                      85%
+
+[Open diagnostics]
+```
+
+---
+
+# 25. Settings
+
+Settings should use familiar desktop categories:
+
+```text
+General
+Appearance
+Models
+Connections
+Storage
+Security
+Notifications
+Developer
+About
+```
+
+Do not expose architecture terminology in top-level settings.
+
+For example:
+
+```text
+Adapters
+Channels
+Providers
+```
+
+all belong under:
+
+```text
+Connections
+```
+
+---
+
+# 26. Design System
+
+## 26.1 Color palette
+
+Dark theme:
+
 ```css
---bg-base:        #0a0a0a;   /* page background */
---bg-elevated:    #141414;   /* cards, input */
---bg-hover:       #1c1c1c;   /* hover state */
---border-subtle:  #1f1f1f;   /* hairlines */
---border-strong:  #2a2a2a;   /* input borders */
---text-primary:   #f5f5f5;
---text-secondary: #a0a0a0;
---text-tertiary:  #666666;
---accent:         #3b82f6;   /* primary blue */
---accent-hover:   #2563eb;
---success:        #10b981;
---warning:        #f59e0b;
---danger:         #ef4444;
---code-bg:        #1a1a1a;
+--surface-0: #0d0e10;
+--surface-1: #121417;
+--surface-2: #181a1e;
+--surface-3: #202329;
+
+--border-1: #24272d;
+--border-2: #30343b;
+
+--text-1: #f1f3f5;
+--text-2: #b5bac1;
+--text-3: #777d86;
+
+--accent: #6b8afd;
+--accent-hover: #8099ff;
+
+--success: #4fa474;
+--warning: #c79a4b;
+--danger: #c86464;
 ```
 
-### Typography
-- **UI:** Inter or Geist Sans, 14px base, 1.5 line-height
-- **Code:** JetBrains Mono or Geist Mono, 13px
-- **Headers:** same family, 1.25× / 1.5× / 2× scale
-- **No serif fonts anywhere**
+The accent should appear sparingly.
 
-### Spacing
-- Base unit: 4px
-- Scale: 4, 8, 12, 16, 24, 32, 48, 64
-- Sidebar width: 280px
-- Chat max-width: 760px
-- Input max-width: 760px
-
-### Component Build Order
-1. `Sidebar` — nav + projects + chats + footer
-2. `ChatInput` — universal input (Screen 11)
-3. `Message` — streaming markdown, code, tables, images
-4. `ApprovalCard` — inline approval (Screen 12)
-5. `ModePage` — reusable mode template
-6. `FeaturedGrid` — cards for empty states
-7. `ProjectCard` — project tile
-8. `AgentCard` — agent instance tile
-9. `SkillCard` — skill tile
-10. `MetricCard` — KPI tile
-11. `Chart` — line, bar, donut (Recharts)
-12. `Modal` — create/confirm dialogs
-
-### Motion & Accessibility
-- Transitions: 150ms ease-out for hovers, 250ms for panels
-- No bouncy springs, no excessive animation
-- Streaming text: no per-character animation (feels sluggish)
-- Loading: subtle pulsing dots, never spinners >2s
-- WCAG 2.1 AA minimum; keyboard navigable everywhere (`Ctrl+K` global palette)
-- Focus rings visible; screen reader labels on all icons; reduced-motion respects OS setting
+Avoid pure black `#000` or extreme contrast everywhere.
 
 ---
 
-## Part 6 — Instructions for Gemini (How to Build)
+## 26.2 Radius
 
-### Gemini's Role
-Gemini implements the Agent Engine GUI **one screen at a time**:
-1. Read the screen spec (Part 4).
-2. Check dependencies (Phase tasks it depends on).
-3. Build the component in `apps/desktop/src/renderer/`.
-4. Use the design system tokens (Part 5).
-5. Reuse `ChatInput`, `Message`, `Sidebar`, `ApprovalCard` — **never duplicate**.
-6. Add Playwright E2E test.
-7. Verify acceptance criteria.
-8. Update `docs/GUI.md` with screenshots.
-
-### File Structure
-```
-apps/desktop/src/
-├── renderer/
-│   ├── App.tsx                     # Router
-│   ├── shell/
-│   │   ├── Sidebar.tsx
-│   │   ├── TopBar.tsx
-│   │   └── Layout.tsx
-│   ├── components/                 # Reusable
-│   │   ├── ChatInput.tsx
-│   │   ├── Message.tsx
-│   │   ├── ApprovalCard.tsx
-│   │   ├── FeaturedGrid.tsx
-│   │   ├── MetricCard.tsx
-│   │   ├── Chart.tsx
-│   │   └── Modal.tsx
-│   ├── screens/
-│   │   ├── Home.tsx
-│   │   ├── Agent.tsx
-│   │   ├── Tasks.tsx
-│   │   ├── Swarm.tsx
-│   │   ├── Workflows.tsx
-│   │   ├── Modes/
-│   │   │   ├── Code.tsx
-│   │   │   ├── DeepResearch.tsx
-│   │   │   ├── Docs.tsx
-│   │   │   ├── Sheets.tsx
-│   │   │   ├── Slides.tsx
-│   │   │   ├── Websites.tsx
-│   │   │   ├── Design.tsx
-│   │   │   └── Diagrams.tsx
-│   │   ├── Channels.tsx
-│   │   ├── Skills.tsx
-│   │   ├── Marketplace.tsx
-│   │   ├── Cost.tsx
-│   │   ├── Policies.tsx
-│   │   ├── Projects.tsx
-│   │   ├── ProjectDetail.tsx
-│   │   └── Settings.tsx
-│   ├── state/
-│   │   ├── sessions.ts
-│   │   ├── projects.ts
-│   │   ├── agents.ts
-│   │   ├── skills.ts
-│   │   └── settings.ts
-│   └── api/
-│       └── client.ts               # Typed client for sidecar API
+```text
+4px   small controls
+6px   buttons
+8px   panels/input
+10px  large modal maximum
 ```
 
-### Rules for Gemini
-1. **One screen per PR.** Never mix screens in one PR.
-2. **Reuse `ChatInput`** in every screen.
-3. **Follow Kimi's pattern:** sidebar + main canvas. No floating windows.
-4. **Every mode landing page has featured cards.** Never ship an empty state without examples.
-5. **Dark theme is default.** Light theme is Phase 15.
-6. **No emojis in UI copy.** Use icons from Lucide.
-7. **Keyboard first:** `Ctrl+K`, `Ctrl+N`, `Ctrl+/`, `Esc`.
-8. **No custom fonts.** Inter + JetBrains Mono only.
-9. **Every screen must have E2E test.** Playwright.
-10. **Every screen must have loading, empty, error, and populated states.**
-11. **Use the sidecar API** — never call models directly from the renderer.
-12. **Respect the cost guide:** every screen that triggers a model call must show a cost estimate before execution.
-13. **Every action that could be dangerous** must show an approval card inline.
-14. **No new dependencies without ADR.**
-15. **Update `docs/GUI.md`** with each new screen, including a screenshot and a 3-line description.
-
-### Definition of Done (GUI Task)
-- [ ] Screen implemented at the correct route
-- [ ] Uses design system tokens
-- [ ] Reuses `ChatInput`, `Message`, `Sidebar` where applicable
-- [ ] Loading, empty, error, populated states all implemented
-- [ ] Keyboard navigation works
-- [ ] Screen reader labels present
-- [ ] Playwright E2E test passes
-- [ ] Cost estimate shown before any model call
-- [ ] Approval card shown for dangerous actions
-- [ ] Screenshot added to `docs/GUI.md`
-- [ ] No console errors or warnings
-- [ ] Cross-platform build passes (Win/Mac/Linux)
+Do not use bubbly 16–24px radii.
 
 ---
 
-## Part 7 — Updated Master Plan Additions
+## 26.3 Shadows
 
-### Phase 3 (extended) — Kimi-Style GUI
-- **Task 3.7** — My Agent screen (identity, memory, growth)
-- **Task 3.8** — Scheduled Tasks screen
-- **Task 3.9** — Universal Chat Input component
-- **Task 3.10** — Mode landing page template
-- **Task 3.11** — Featured cases content curation
+Minimal.
 
-### Phase 4 (extended) — Dashboard
-- **Task 4.8** — Settings screen
-- **Task 4.9** — Cost dashboard (react version, replaces Streamlit tab)
-- **Task 4.10** — Remove Streamlit from user-facing build
+Use borders and tonal surface changes before shadows.
 
-### Phase 7 (extended) — Workflows
-- **Task 7.4** — Swarm screen
-- **Task 7.5** — Workflow builder screen
-
-### Phase 15 (new) — Light Theme & Accessibility Polish
-- **Task 15.1** — Light theme
-- **Task 15.2** — High-contrast mode
-- **Task 15.3** — Reduced motion mode
-- **Task 15.4** — Full keyboard shortcut system
+No glow shadows.
 
 ---
 
-## Part 8 — Final Architectural Synthesis
+## 26.4 Typography
 
-**1. Should we keep both dashboards?**
-**No.** Streamline to **one Tauri shell**. Demote Streamlit to `make dev` only. This is a hard architectural decision, not a preference.
+Recommended:
 
-**2. Can it be a base for any agent — email, personal finance, company finance, author study?**
-**Yes.** The GUI structure proves it: Kimi's mode-based sidebar is exactly the pattern for **any vertical**:
-- Email agent → "Inbox" mode
-- Personal finance → "Finance" mode
-- Company finance → "Company Finance" mode (with RBAC overlay from Phase 11)
-- Author → "Writing" mode + "Research" mode
-- Study → "Study" mode with RAG over PDFs
+```text
+UI:
+Inter / Geist / system sans
 
-Each mode uses the same shell, the same input, the same chat history, the same project system. The only differences are the skills, pipelines, and policies bound to each mode. **Adding a new vertical is a new mode + new skills, not a new app.**
+Code:
+JetBrains Mono / Geist Mono
+```
+
+Base:
+
+```text
+13px–14px
+```
+
+Desktop density should remain compact.
+
+Headings should not become oversized marketing typography.
 
 ---
 
-## Part 9 — Screen Gallery & Visual Verification
+## 26.5 Icons
 
-### Task 3.4 — Model & Agent Switcher (Home Screen)
-![Task 3.4 Model & Agent Switcher](screenshots/screen_task_3_4_home_model_switcher.png)
-1. **Interactive Routing Tiers:** Seamlessly toggle between `Instant High` ($0.0002/1k), `K3 Swarm High` ($0.0015/1k), and `K3 High` ($0.0080/1k) with live pre-execution cost estimation in the universal chat input.
-2. **Specialized Persona Selection:** Instantly switch agent personas (General Assistant, Senior Engineer, Deep Researcher, Security Auditor) with automatic model suggestions and pipeline synchronization.
-3. **Execution Transparency:** Home status badges dynamically reflect the active persona, backing pipeline, and cost parameters while strictly enforcing the 90/9/1 routing split.
+Use one icon family only.
 
-### Task 3.5 — Session Sidebar & Search
-![Task 3.5 Session Sidebar & Search](screenshots/screen_task_3_5_sidebar_search.png)
-1. **Three-Zone Organization:** Structured desktop navigation combining Zone A global actions (New Chat with `Ctrl+K`), Zone B mode list, and Zone C context (Projects, Recent Chats, and Nadir user profile).
-2. **Real-Time Session Search:** Fast keyword search querying `/v1/sessions/search` with matched snippet previews, message counts, and keyboard escape reset (`Esc`).
-3. **Active State & Icon Strip Collapse:** Clean active session visual highlighting (`bg-accent/15`) with full collapse into a compact icon strip featuring tooltip-guided actions.
+Recommended:
 
-### Task 3.6 — Document Drop & RAG Ingestion
-![Task 3.6 Document Drop & RAG Ingestion](screenshots/screen_task_3_6_document_drop_rag.png)
-1. **Interactive Drag Target:** Native full-canvas drag-and-drop overlay welcoming PDFs, CSVs, code files (.ts, .py, .rs), and Markdown with zero token overhead.
-2. **Observational Ingestion & Progress:** Real-time upload progress tracking with automatic sidecar grounding into ChromaDB vector and observational memory (`/v1/memory/observe`).
-3. **Multi-File Attachment Chips & Snippet Inspection:** Rich chips in universal `ChatInput` with indexed status badges, upload indicators, and one-click snippet previews before dispatch.
+```text
+Lucide
+```
 
-### Task 3.7 — My Agent Screen (Identity, Memory, Growth)
-![Task 3.7 My Agent Screen](screenshots/screen_task_3_7_agent_screen.png)
-1. **Identity & 365-Day Contribution Heatmap:** Personal agent identity banner showing level, experience streak, and GitHub-style 365-day interaction heatmap rendering in <200ms with level grading.
-2. **Four Deep-Insight Tabs:** Structured tabs for Closeness (trust metrics, topic affinities), Growth (capability radars, milestones, skills unlocked), Memory (searchable observational ledger), and Cost (90/9/1 routing savings breakdown).
-3. **Observational Memory Ledger & Self-Growth Toggle:** Live inline memory search, editing, creation, and deletion backed by `/v1/memory/observe` with persistent per-user self-growth toggle and embedded universal chat input.
+Standard sizes:
 
-### Task 3.8 — Scheduled Tasks Screen
-![Task 3.8 Scheduled Tasks Screen](screenshots/screen_task_3_8_scheduled_tasks.png)
-1. **Plain-English Cron Builder & Presets:** Human-readable cron schedule preview translating expressions in real-time, accompanied by quick presets for daily, weekly, and monthly automated execution.
-2. **Off-Peak Engine (Law 7) & Cost Tracking:** Default off-peak execution (02:00–06:00 window) to protect frontier token quotas with transparent cost-per-run and monthly spend projections.
-3. **Multi-Modal Creation & Channel Alerts:** Three creation pathways ("Manually", "Via chat", "From template") with four built-in routines and multi-channel failure alerts across Slack, Telegram, and webhooks.
+```text
+14
+16
+18
+```
 
-### Task 3.9 — Universal Chat Input Component Hardening
-![Task 3.9 Universal Chat Input](screenshots/screen_task_3_9_universal_chat_input.png)
-1. **60fps Responsiveness on 10,000+ Chars:** RequestAnimationFrame-governed auto-grow height recalculation with O(1) bounded lookback window for slash-commands on large payloads.
-2. **Multi-Modal Clipboard Paste & Drag-Drop:** Direct clipboard paste support for image screenshots with base64 visual snippet previews and automatic observational memory grounding.
-3. **Calibrated ±5% Token Cost Estimator:** Accurate pre-execution token counting across code and English prose with model tier dropdown, global `Ctrl+K` auto-focus, and inline error banner.
+Avoid emojis entirely.
 
-### Task 3.10 — Mode Landing Page Template & FeaturedGrid
-![Task 3.10 Mode Landing Page Template](screenshots/screen_task_3_10_mode_page_template.png)
-1. **Unified Capability Shell:** Dynamic ModePage template rendering across all 8 capability modes (Code, Deep Research, Docs, Sheets, Slides, Websites, Design, Diagrams) with specialized headers, pipeline badges, and category filters.
-2. **FeaturedGrid Case Templates:** Responsive card grid showcasing real-world problem templates with category filters, estimated cost per run, icon badges, and one-click prompt injection.
-3. **Persistent Chat & Zero-Duplication Reusability:** Embedded hardened `ChatInput` and conversation history preserved across mode switches with instant "New Session" reset and URL hash routing.
+---
 
-### Task 3.11 — Featured Cases Content Curation
-![Task 3.11 Featured Cases Content Curation](screenshots/screen_task_3_11_featured_cases.png)
-1. **32 Production-Curated Templates:** Declarative case configurations across all 8 capability modes (`configs/cases/`) detailing real-world problems, realistic prompts, expected tool chains, and formatted sample outputs.
-2. **Dedicated Mode Architecture:** Modular screen components in `apps/desktop/src/renderer/screens/Modes/` wrapping `ModePage` with mode-specific category chips, cost estimates, and tool badges.
-3. **One-Click Frictionless Prompt Injection:** Clicking any featured card dynamically populates the hardened `ChatInput` with one-click runnable prompts and triggers input events for immediate execution.
+# 27. Motion
 
-### Task 4.5 — Cost & Budget Command Center
-- **Route:** `/cost`
-- **Component:** `apps/desktop/src/renderer/screens/Cost.tsx`
-1. **Law 1 90/9/1 Cost Routing Donut:** High-performance native SVG donut visualizer illustrating live token traffic distribution across Deterministic/Cache/Local (90%), Mid-Tier Swarm (9%), and Frontier Reasoning (1%).
-2. **Aggregated Telemetry & Spend Breakdown:** Real-time monthly spend, daily spend, cache hit rate gauge, and interactive bar chart of cost per task type or date range.
-3. **Law 8 Distillation Pipeline:** One-click distillation trigger for high-volume repeating tasks (>10,000 calls/month) to train and deploy compact local specialist models from teacher logs.
-4. **Budget Ceilings & Export:** Configurable monthly/daily spending limits with warning (80%) and critical (100%) thresholds, plus one-click CSV and JSON export.
+Motion communicates state, not personality.
 
-### Task 4.6 — Policy Editor & Immutable Audit Log
-- **Route:** `/policies`
-- **Component:** `apps/desktop/src/renderer/screens/Policies.tsx`
-1. **YAML Policy Editor:** Live syntax-validated editor with preset templates (`strict`, `developer`), diff checking, and instantaneous hot-reloading in the sidecar engine without process restarts.
-2. **Rule Dry-Run Playground:** Safe simulator allowing operators to test prospective tool names and JSON parameters against active guardrails, computing risk scores and rule matches with zero footprint on the immutable audit trail.
-3. **Paginated Immutable Audit Log:** High-volume searchable ledger with pagination controls (10/25/50 items per page), risk-tier filters (Low/Medium/High/Critical), decision filters (Allow/Deny/Pending/Approved/Rejected), inline JSON arguments inspection, and CSV/JSON export.
+Use:
 
-### Task 4.7 — Hardware Telemetry Panel
-- **Routes & Surfaces:** TopBar status bar (`shell/TopBar.tsx`), Settings Hardware tab (`screens/Settings.tsx` -> `activeTab === 'hardware'`)
-- **Components:** `apps/desktop/src/renderer/shell/TopBar.tsx`, `apps/desktop/src/renderer/screens/Settings.tsx`
-1. **GPU Model Detection:** Automatic detection of GPU hardware acceleration (AMD Radeon Vega / Raven Ridge, NVIDIA, Apple Silicon, Intel) with vendor badge and memory headroom.
-2. **VRAM Utilization & 95% Saturation Warning:** Real-time VRAM gauge tracking allocated vs total VRAM. Triggers prominent warning banner and pulsing TopBar badge at 95% threshold with remediation advice (quantization, context reduction, layer offloading).
-3. **Generation Speed Gauge (Tokens/Sec):** High-contrast throughput speedometer tracking real-time local model generation speed (tok/s) across Ollama and llama.cpp runtimes, complete with live benchmark trigger.
-4. **Host RAM & CPU Radar:** Visual utilization meters for system RAM and CPU load with core topologies.
-5. **Real-Time 2-Second Polling:** Automatically queries `/v1/telemetry/hardware` at 2s intervals whenever local models run or when viewing hardware diagnostics.
+```text
+120–160ms hover/focus
+180–220ms panels
+```
 
+Avoid:
 
+- springy movement;
+- floating elements;
+- glowing pulses;
+- constant animations;
+- “AI thinking” waves.
 
+For running executions:
 
+```text
+subtle progress indicator
+```
 
+For waiting:
 
+```text
+static status + elapsed time
+```
+
+---
+
+# 28. Empty States
+
+The previous document mandates featured cards on every empty state.
+
+Change this.
+
+Empty states should help the user begin work but remain minimal.
+
+Example:
+
+```text
+No automations yet
+
+Automations can run recurring or multi-step work.
+
+[Create automation]
+
+Examples:
+Weekly project review
+Invoice processing
+Morning brief
+```
+
+Examples can be simple text rows.
+
+Do not always use promotional card grids.
+
+---
+
+# 29. Copy Style
+
+Use plain professional language.
+
+Avoid:
+
+```text
+Meet your AI team
+Unlock your potential
+Supercharge
+Magic
+Intelligent
+Powerful AI
+Your agent is growing
+```
+
+Prefer:
+
+```text
+Run
+Review
+Analyze
+Create
+Schedule
+Compare
+Open
+Continue
+```
+
+Status copy must be factual.
+
+---
+
+# 30. Remove Anthropomorphic Product Language
+
+Replace:
+
+```text
+My Agent
+Nadir's Agent
+Closeness
+Growth
+Self-growth
+Agent relationship
+```
+
+with:
+
+```text
+Profile & Memory
+Preferences
+Memory
+Capabilities
+Learning settings
+```
+
+Agent identity may still exist internally or for configured specialist agents.
+
+The product itself should not imitate a companion unless the user explicitly creates one.
+
+---
+
+# 31. Canonical Screen Map
+
+```text
+Home
+
+Work
+├── Projects
+├── Tasks
+└── Automations
+    ├── Workflows
+    ├── Schedules
+    └── Teams
+
+Tools
+├── Research
+├── Writing
+├── Data
+└── Developer
+
+Library
+├── Knowledge
+└── Skills
+    └── Browse
+
+System
+├── Activity
+│   ├── Executions
+│   ├── Usage
+│   ├── Audit
+│   └── System
+├── Approvals
+└── Models
+
+Settings
+```
+
+Installed capability packs can add tool entries without restructuring the entire application.
+
+---
+
+# 32. Component Architecture
+
+```text
+apps/desktop/src/renderer/
+├── shell/
+│   ├── Sidebar.tsx
+│   ├── TopBar.tsx
+│   ├── WorkspaceLayout.tsx
+│   └── StatusPopover.tsx
+│
+├── components/
+│   ├── CommandInput.tsx
+│   ├── Conversation.tsx
+│   ├── ApprovalPanel.tsx
+│   ├── Inspector.tsx
+│   ├── EmptyState.tsx
+│   ├── StatusBadge.tsx
+│   ├── DataTable.tsx
+│   ├── SplitPane.tsx
+│   └── Modal.tsx
+│
+├── screens/
+│   ├── Home.tsx
+│   ├── Projects/
+│   ├── Tasks/
+│   ├── Automations/
+│   ├── Research/
+│   ├── Writing/
+│   ├── Data/
+│   ├── Developer/
+│   ├── Knowledge/
+│   ├── Skills/
+│   ├── Activity/
+│   ├── Approvals/
+│   ├── Models/
+│   └── Settings/
+```
+
+Do not force every screen through one generic `ModePage`.
+
+Shared behavior should come from layout primitives and command/execution infrastructure, not visual sameness.
+
+---
+
+# 33. Refactoring Existing Screens
+
+## Keep nearly as-is
+
+```text
+Workflow Builder
+Project list/detail
+Policy editor foundations
+Session search
+Document attachments
+```
+
+## Restyle / reorganize
+
+```text
+Home
+Scheduled Tasks
+Cost
+Skills
+Settings
+System telemetry
+```
+
+## Rename / reposition
+
+```text
+Swarm
+→ Automations → Teams
+
+My Agent
+→ Settings / Profile & Memory
+
+Cost
+→ Activity → Usage
+
+Benchmarks
+→ Models → Diagnostics
+
+Marketplace
+→ Skills → Browse
+
+Channels
+→ Settings → Connections
+
+Adapters
+→ Settings → Integrations
+```
+
+## Remove from default UX
+
+```text
+Closeness
+streak
+neural visualization
+growth radar
+AI persona badges
+90/9/1 donut
+frontier-savings vanity metric
+always-visible hardware telemetry
+always-visible model tier badges
+```
+
+---
+
+# 34. Workflow Builder Specific Design
+
+The current Workflow Builder should become the visual benchmark for Agent Engine.
+
+Recommended shell:
+
+```text
+Breadcrumb
+Automation / Security remediation
+
+Toolbar
+Validate | Dry run | Source | Run | Save
+
+────────────────────────────────────────────────────────
+Palette |                  Canvas                 | Inspector
+```
+
+Keep the dark editor aesthetic.
+
+Reduce chrome around it.
+
+Inspector should use compact forms.
+
+Node details appear only when selected.
+
+Execution details open in a bottom drawer rather than permanently occupying space.
+
+---
+
+# 35. Execution Drawer
+
+Any active operation may open a bottom drawer:
+
+```text
+Execution
+────────────────────────────────────────
+Status        Running
+Elapsed       00:18
+Project       Agent Engine
+Model         Automatic
+Steps         3 / 7
+
+Current
+Running tests
+
+[Stop]                         [Details]
+```
+
+Expanded details may show:
+
+```text
+model
+tokens
+cost
+context
+tool calls
+trace
+```
+
+This keeps technical transparency available without making the entire application feel like a model dashboard.
+
+---
+
+# 36. Developer Mode
+
+Developer Mode is where technical depth belongs.
+
+Enable:
+
+```text
+Settings → Developer → Developer Mode
+```
+
+Then expose:
+
+```text
+runtime names
+model IDs
+DSPy pipelines
+MCP servers
+ACP state
+token counts
+context inspector
+execution trace
+raw events
+API endpoints
+hardware telemetry
+```
+
+This preserves Agent Engine's technical power without making the default interface intimidating.
+
+---
+
+# 37. Accessibility
+
+Minimum:
+
+```text
+WCAG 2.2 AA
+full keyboard navigation
+visible focus
+screen reader labels
+reduced motion
+high contrast
+text scaling
+```
+
+Keyboard behavior should follow desktop conventions.
+
+Do not overload `Ctrl+K` for both chat focus and global palette.
+
+Recommended:
+
+```text
+Ctrl/Cmd + K      Command palette
+Ctrl/Cmd + N      New task/chat
+Ctrl/Cmd + P      Quick project switcher
+Ctrl/Cmd + ,      Settings
+Esc               Close / cancel current overlay
+```
+
+---
+
+# 38. Product State Language
+
+Canonical state vocabulary:
+
+```text
+Ready
+Queued
+Running
+Waiting
+Needs approval
+Paused
+Completed
+Partial
+Failed
+Cancelled
+Blocked
+Offline
+Degraded
+```
+
+Use this everywhere.
+
+Do not invent screen-specific synonyms.
+
+---
+
+# 39. Design Governance
+
+Every new screen must answer:
+
+1. What user job does this screen support?
+2. Does it need to be a top-level screen?
+3. Can it be a panel/tab inside an existing area?
+4. Is this showing a product concept or an implementation concept?
+5. Is any information decorative rather than actionable?
+6. Does the screen still work without animations?
+7. Can a professional user understand it without knowing AI terminology?
+
+If not, redesign before implementation.
+
+---
+
+# 40. Gemini Implementation Rules
+
+Gemini should not perform a wholesale UI rewrite.
+
+Apply the redesign incrementally.
+
+Priority:
+
+```text
+1. Navigation information architecture
+2. Top bar / system status
+3. Home
+4. Profile & Memory simplification
+5. Activity / Usage consolidation
+6. Settings consolidation
+7. Skills / Browse redesign
+8. Workflow visual refinement
+9. Tool workspaces
+10. Accessibility / polish
+```
+
+Preserve working behavior.
+
+Separate layout/refactor commits from execution/runtime changes.
+
+For each change:
+
+```text
+inspect existing component
+preserve functionality
+update component hierarchy
+update routes safely
+add migration aliases where needed
+run Playwright
+capture screenshot
+compare density/hierarchy
+```
+
+---
+
+# 41. Acceptance Standard
+
+The UI succeeds when a new user describes it as:
+
+```text
+"workbench"
+"desktop app"
+"project environment"
+"professional tool"
+```
+
+rather than:
+
+```text
+"AI dashboard"
+"chatbot"
+"agent demo"
+"LLM frontend"
+```
+
+That is the intended visual identity of Agent Engine.
+
+---
+
+# 42. Final Direction
+
+Agent Engine should visually express its architecture:
+
+```text
+work
+context
+execution
+control
+evidence
+```
+
+not:
+
+```text
+AI
+models
+agents
+prompts
+magic
+```
+
+The interface should make sophisticated AI infrastructure disappear into a calm, reliable professional environment.
+
+The result should feel like software a developer, researcher, writer, analyst, founder, or business operator could keep open all day—even if the words “AI” and “agent” were removed from most of the interface.
