@@ -201,6 +201,48 @@ export interface SkillItem {
   sampleInputs?: Record<string, string>;
 }
 
+export interface SkillDetailed {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  inputs: string[];
+  outputs: string[];
+  source_tool: string;
+  version?: string;
+  author?: string;
+  tags?: string[];
+  content?: string;
+  path?: string | null;
+  is_readonly?: boolean;
+  format?: string;
+}
+
+export interface SkillRegistryPackage {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  author: string;
+  tags: string[];
+  category: string;
+  sha256: string;
+  verified: boolean;
+  installs: number;
+  is_installed: boolean;
+  installed_path?: string | null;
+}
+
+export interface SkillCollectionItem {
+  id: string;
+  name: string;
+  description: string;
+  skill_ids: string[];
+  tags: string[];
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface PluginItem {
   id: string;
   name: string;

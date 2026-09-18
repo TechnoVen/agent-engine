@@ -74,6 +74,7 @@ from core.telemetry import (
 )
 from core.skills import (
     MultiToolSkillDiscovery,
+    RemoteSkillDiscoveryClient,
     SkillCollectionManager,
     SkillEditor,
     SkillFormat,
@@ -351,6 +352,19 @@ class InstallSkillPackageRequest(BaseModel):
 
 class UninstallSkillPackageRequest(BaseModel):
     package_id: str
+
+
+class RemoteSkillDiscoverRequest(BaseModel):
+    endpoint_url: str
+    api_token: Optional[str] = None
+
+
+class RemoteSkillImportRequest(BaseModel):
+    endpoint_url: str
+    skill_id: str
+    api_token: Optional[str] = None
+    target_tool: Optional[str] = "agent-engine"
+    force: bool = False
 
 
 class ExecuteSkillRequest(BaseModel):
@@ -1827,6 +1841,86 @@ async def uninstall_registry_package(req: UninstallSkillPackageRequest):
         return {"success": True, "package_id": req.package_id}
     except PermissionError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@v1_router.post(
+    "/skills/remote/discover",
+    response_model=List[SkillInfo],
+)
+async def discover_remote_skills(req: RemoteSkillDiscoverRequest):
+    """Discover available skills on a remote Agent Engine instance or manifest."""
+    client = RemoteSkillDiscoveryClient()
+    try:
+        remote_items = client.discover_remote(req.endpoint_url, api_token=req.api_token)
+        return [
+            SkillInfo(
+                id=item["id"],
+                name=item["name"],
+                category=item.get("category", "Remote"),
+                description=item.get("description", ""),
+                inputs=item.get("inputs", []),
+                outputs=item.get("outputs", []),
+                source_tool=item.get("source_tool", "agent-engine"),
+                version=item.get("version", "1.0.0"),
+                author=item.get("author", "remote"),
+                tags=item.get("tags", []),
+                content=item.get("content", ""),
+            )
+            for item in remote_items
+        ]
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ConnectionError as e:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@v1_router.post(
+    "/skills/remote/import",
+    response_model=SkillInfo,
+)
+async def import_remote_skill(req: RemoteSkillImportRequest):
+    """Fetch remote skill, validate safety scan and schema, and persist locally."""
+    client = RemoteSkillDiscoveryClient()
+    try:
+        try:
+            source = SkillSource(req.target_tool) if req.target_tool else SkillSource.AGENT_ENGINE
+        except ValueError:
+            source = SkillSource.AGENT_ENGINE
+
+        skill = client.import_remote_skill(
+            endpoint_url=req.endpoint_url,
+            skill_id=req.skill_id,
+            api_token=req.api_token,
+            target_tool=source,
+            force=req.force,
+        )
+        return SkillInfo(
+            id=skill.id,
+            name=skill.metadata.name,
+            category=skill.metadata.category,
+            description=skill.metadata.description,
+            inputs=skill.metadata.inputs,
+            outputs=skill.metadata.outputs,
+            source_tool=skill.metadata.source_tool.value,
+            version=skill.metadata.version,
+            author=skill.metadata.author,
+            tags=skill.metadata.tags,
+            content=skill.content,
+            path=str(skill.path.resolve()) if skill.path else None,
+            is_readonly=skill.is_readonly,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except FileExistsError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except ConnectionError as e:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
 

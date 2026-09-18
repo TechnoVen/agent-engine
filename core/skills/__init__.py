@@ -18,6 +18,7 @@ from core.skills.registry import (
     SkillRegistryPackage,
     scan_content_safety,
 )
+from core.skills.remote import RemoteSkillDiscoveryClient
 
 __all__ = [
     "Skill",
@@ -32,4 +33,5 @@ __all__ = [
     "SkillRegistryClient",
     "SkillRegistryPackage",
     "scan_content_safety",
+    "RemoteSkillDiscoveryClient",
 ]

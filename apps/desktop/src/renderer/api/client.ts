@@ -8,6 +8,9 @@ import {
   UpdateCheckResult,
   UpdateStatus,
   SkillItem,
+  SkillDetailed,
+  SkillRegistryPackage,
+  SkillCollectionItem,
   AuditLogEntry,
   RiskLevel,
   AgentPersona,
@@ -427,6 +430,254 @@ class SidecarClient {
     }
 
     return DEFAULT_SKILLS_CATALOG;
+  }
+
+  async getSkillsDetailed(query?: string, tool?: string, tag?: string): Promise<SkillDetailed[]> {
+    try {
+      const params = new URLSearchParams();
+      if (query) params.set('query', query);
+      if (tool) params.set('tool', tool);
+      if (tag) params.set('tag', tag);
+      const url = `${this.base}/v1/skills${params.toString() ? `?${params.toString()}` : ''}`;
+      const res = await fetch(url);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async getSkillContent(skillId: string): Promise<SkillDetailed | null> {
+    try {
+      const res = await fetch(`${this.base}/v1/skills/${encodeURIComponent(skillId)}`);
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  async createSkill(payload: {
+    name: string;
+    description: string;
+    content: string;
+    source_tool?: string;
+    skill_id?: string;
+    tags?: string[];
+    author?: string;
+    version?: string;
+    format?: string;
+  }): Promise<SkillDetailed> {
+    const res = await fetch(`${this.base}/v1/skills/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Failed to create skill: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async updateSkillContent(skillId: string, content: string): Promise<SkillDetailed> {
+    const res = await fetch(`${this.base}/v1/skills/${encodeURIComponent(skillId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Failed to update skill: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async validateSkillContent(content: string, format = 'markdown'): Promise<{
+    valid: boolean;
+    errors: string[];
+    warnings: string[];
+    parsed_metadata?: Record<string, any>;
+  }> {
+    try {
+      const res = await fetch(`${this.base}/v1/skills/validate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, format }),
+      });
+      if (!res.ok) {
+        return { valid: false, errors: [`Server returned HTTP ${res.status}`], warnings: [] };
+      }
+      return await res.json();
+    } catch (e: any) {
+      return { valid: false, errors: [e.message || 'Validation request failed'], warnings: [] };
+    }
+  }
+
+  async searchSkills(query: string, tag?: string, limit = 20): Promise<Array<{ skill: SkillDetailed; score: number }>> {
+    try {
+      const params = new URLSearchParams({ q: query, limit: String(limit) });
+      if (tag) params.set('tag', tag);
+      const res = await fetch(`${this.base}/v1/skills/search?${params.toString()}`);
+      if (!res.ok) return [];
+      return await res.json();
+    } catch {
+      return [];
+    }
+  }
+
+  async getSkillCollections(): Promise<SkillCollectionItem[]> {
+    try {
+      const res = await fetch(`${this.base}/v1/skills/collections`);
+      if (!res.ok) return [];
+      return await res.json();
+    } catch {
+      return [];
+    }
+  }
+
+  async getSkillCollection(id: string): Promise<SkillCollectionItem | null> {
+    try {
+      const res = await fetch(`${this.base}/v1/skills/collections/${encodeURIComponent(id)}`);
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  async createSkillCollection(payload: {
+    name: string;
+    description?: string;
+    tags?: string[];
+    skill_ids?: string[];
+    collection_id?: string;
+  }): Promise<SkillCollectionItem> {
+    const res = await fetch(`${this.base}/v1/skills/collections`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Failed to create collection: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async deleteSkillCollection(id: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.base}/v1/skills/collections/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async addSkillToCollection(collectionId: string, skillId: string): Promise<boolean> {
+    try {
+      const res = await fetch(
+        `${this.base}/v1/skills/collections/${encodeURIComponent(collectionId)}/skills/${encodeURIComponent(skillId)}`,
+        { method: 'POST' }
+      );
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async removeSkillFromCollection(collectionId: string, skillId: string): Promise<boolean> {
+    try {
+      const res = await fetch(
+        `${this.base}/v1/skills/collections/${encodeURIComponent(collectionId)}/skills/${encodeURIComponent(skillId)}`,
+        { method: 'DELETE' }
+      );
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async getSkillRegistryPackages(query?: string, category?: string, tag?: string): Promise<SkillRegistryPackage[]> {
+    try {
+      const params = new URLSearchParams();
+      if (query) params.set('query', query);
+      if (category) params.set('category', category);
+      if (tag) params.set('tag', tag);
+      const url = `${this.base}/v1/skills/registry${params.toString() ? `?${params.toString()}` : ''}`;
+      const res = await fetch(url);
+      if (!res.ok) return [];
+      return await res.json();
+    } catch {
+      return [];
+    }
+  }
+
+  async installRegistryPackage(packageId: string, force = false): Promise<SkillRegistryPackage> {
+    const res = await fetch(`${this.base}/v1/skills/registry/install`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ package_id: packageId, force }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Installation failed: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async uninstallRegistryPackage(packageId: string): Promise<boolean> {
+    const res = await fetch(`${this.base}/v1/skills/registry/uninstall`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ package_id: packageId }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Uninstall failed: HTTP ${res.status}`);
+    }
+    return true;
+  }
+
+  async discoverRemoteSkills(endpointUrl: string, apiToken?: string): Promise<SkillDetailed[]> {
+    const res = await fetch(`${this.base}/v1/skills/remote/discover`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint_url: endpointUrl, api_token: apiToken }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Remote discovery failed: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async importRemoteSkill(
+    endpointUrl: string,
+    skillId: string,
+    targetTool = 'agent-engine',
+    apiToken?: string,
+    force = false
+  ): Promise<SkillDetailed> {
+    const res = await fetch(`${this.base}/v1/skills/remote/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        endpoint_url: endpointUrl,
+        skill_id: skillId,
+        target_tool: targetTool,
+        api_token: apiToken,
+        force,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Remote import failed: HTTP ${res.status}`);
+    }
+    return await res.json();
   }
 
   async getPersonas(): Promise<AgentPersona[]> {

@@ -2065,3 +2065,53 @@ def test_task_4_9_streamlit_demotion_and_process_lifecycle():
     readme = (repo_root / "README.md").read_text()
     assert "make desktop-tauri-dev" in readme
     assert "make dev-dashboard" in readme
+
+
+def test_skills_library_screen_component():
+    """Verify Screen 8 — Skills Library component, tabs, routing, and client integration."""
+    skills_screen = RENDERER_ROOT / "screens" / "Skills.tsx"
+    assert skills_screen.exists(), "apps/desktop/src/renderer/screens/Skills.tsx must exist"
+
+    content = skills_screen.read_text(encoding="utf-8")
+
+    # 1. Top tabs: Installed, Registry, Collections
+    assert "Installed (" in content
+    assert "Registry" in content
+    assert "Collections (" in content
+
+    # 2. Left filters: Claude Code, Cursor, Codex, Goose, Agent Engine
+    assert "claude-code" in content
+    assert "cursor" in content
+    assert "codex" in content
+    assert "goose" in content
+    assert "agent-engine" in content
+
+    # 3. Editor & Frontmatter validation
+    assert "Frontmatter schema valid" in content
+    assert "handleSaveSkill" in content
+    assert "validateSkillContent" in content
+
+    # 4. Registry actions (<10s install / uninstall)
+    assert "handleInstallPackage" in content
+    assert "handleUninstallPackage" in content
+    assert "Curated Skill Registry" in content
+
+    # 5. Remote discovery modal
+    assert "Remote Skill Discovery" in content
+    assert "handleDiscoverRemote" in content
+    assert "handleImportRemoteSkill" in content
+
+    # 6. App.tsx mounting and Sidebar navigation
+    app_content = (RENDERER_ROOT / "App.tsx").read_text(encoding="utf-8")
+    assert "case 'skills':" in app_content
+    assert "<Skills" in app_content
+
+    sidebar_content = (RENDERER_ROOT / "shell" / "Sidebar.tsx").read_text(encoding="utf-8")
+    assert "id: 'skills'" in sidebar_content
+
+    # 7. Client methods in client.ts
+    client_content = (RENDERER_ROOT / "api" / "client.ts").read_text(encoding="utf-8")
+    assert "getSkillsDetailed(" in client_content
+    assert "getSkillRegistryPackages(" in client_content
+    assert "discoverRemoteSkills(" in client_content
+    assert "importRemoteSkill(" in client_content

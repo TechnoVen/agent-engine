@@ -370,6 +370,44 @@ paths:
               schema:
                 type: object
 
+  /skills/remote/discover:
+    post:
+      summary: Discover skills on remote host or manifest
+      operationId: discoverRemoteSkills
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RemoteSkillDiscoverRequest'
+      responses:
+        '200':
+          description: List of discovered remote skills
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SkillInfo'
+
+  /skills/remote/import:
+    post:
+      summary: Import and persist a remote skill locally
+      operationId: importRemoteSkill
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RemoteSkillImportRequest'
+      responses:
+        '200':
+          description: Imported skill info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillInfo'
+
   /skills/{skill_id}:
     get:
       summary: Get details and content of a skill
@@ -2684,6 +2722,30 @@ components:
       properties:
         package_id:
           type: string
+
+    RemoteSkillDiscoverRequest:
+      type: object
+      required: [endpoint_url]
+      properties:
+        endpoint_url:
+          type: string
+        api_token:
+          type: string
+
+    RemoteSkillImportRequest:
+      type: object
+      required: [endpoint_url, skill_id]
+      properties:
+        endpoint_url:
+          type: string
+        skill_id:
+          type: string
+        api_token:
+          type: string
+        target_tool:
+          type: string
+        force:
+          type: boolean
 
     WorkflowInfo:
       type: object

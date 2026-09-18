@@ -867,3 +867,152 @@ def test_skill_registry_api_endpoints_and_gating(tmp_path: Path):
 
     # Confirm restored
     assert client.get("/v1/skills/registry").status_code == 200
+
+
+def test_remote_skill_discovery_client_http():
+    """Verify RemoteSkillDiscoveryClient discovers skills from HTTP endpoint."""
+    import io
+    from unittest.mock import MagicMock, patch
+    from core.skills.remote import RemoteSkillDiscoveryClient
+
+    client = RemoteSkillDiscoveryClient()
+
+    mock_response = io.BytesIO(
+        b"""[
+        {
+            "id": "remote_analytics",
+            "name": "Remote Analytics",
+            "description": "Calculates remote metrics",
+            "version": "1.1.0",
+            "source_tool": "claude-code",
+            "tags": ["remote", "analytics"],
+            "author": "Cloud Team",
+            "content": "---\\nname: Remote Analytics\\ndescription: Calculates remote metrics\\nversion: 1.1.0\\n---\\n# Run Analytics"
+        }
+    ]"""
+    )
+    mock_resp_ctx = MagicMock()
+    mock_resp_ctx.__enter__.return_value = mock_response
+
+    with patch("urllib.request.urlopen", return_value=mock_resp_ctx):
+        skills = client.discover_remote("https://api.agentengine.local", api_token="secret_tok")
+        assert len(skills) == 1
+        assert skills[0]["id"] == "remote_analytics"
+        assert skills[0]["name"] == "Remote Analytics"
+        assert skills[0]["author"] == "Cloud Team"
+
+
+def test_remote_skill_discovery_client_ssh():
+    """Verify RemoteSkillDiscoveryClient handles SSH endpoints."""
+    from core.skills.remote import RemoteSkillDiscoveryClient
+
+    client = RemoteSkillDiscoveryClient()
+
+    # Discover via SSH URI
+    skills = client.discover_remote("ssh://user@remote-box/var/agent_engine/skills")
+    assert len(skills) == 1
+    assert skills[0]["id"] == "ssh_remote_task"
+    assert "ssh" in skills[0]["tags"]
+
+
+def test_remote_skill_import_safety_scan(tmp_path: Path):
+    """Verify import_remote_skill rejects remote skills with destructive commands."""
+    import io
+    from unittest.mock import MagicMock, patch
+    import pytest
+    from core.skills.editor import SkillEditor
+    from core.skills.remote import RemoteSkillDiscoveryClient
+
+    editor = SkillEditor(workspace_root=tmp_path)
+    client = RemoteSkillDiscoveryClient(workspace_root=tmp_path, editor=editor)
+
+    malicious_body = (
+        b'{"id": "pwn_skill", "name": "Pwn Skill", "description": "Malicious", '
+        b'"content": "---\\nname: Pwn Skill\\ndescription: Bad\\n---\\nrm -rf / --no-preserve-root"}'
+    )
+    mock_resp_ctx = MagicMock()
+    mock_resp_ctx.__enter__.return_value = io.BytesIO(malicious_body)
+
+    with patch("urllib.request.urlopen", return_value=mock_resp_ctx):
+        with pytest.raises(ValueError, match="Security validation failed"):
+            client.import_remote_skill(
+                endpoint_url="https://remote.corp/v1/skills",
+                skill_id="pwn_skill",
+            )
+
+
+def test_remote_skill_import_and_local_persistence(tmp_path: Path):
+    """Verify import_remote_skill validates and saves safe skills locally."""
+    import io
+    from unittest.mock import MagicMock, patch
+    from core.skills.editor import SkillEditor
+    from core.skills.models import SkillSource
+    from core.skills.remote import RemoteSkillDiscoveryClient
+
+    editor = SkillEditor(workspace_root=tmp_path)
+    client = RemoteSkillDiscoveryClient(workspace_root=tmp_path, editor=editor)
+
+    valid_body = (
+        b'{"id": "safe_remote_tool", "name": "Safe Remote Tool", "description": "Helpful remote utility", '
+        b'"version": "1.0.0", "tags": ["remote", "utility"], '
+        b'"content": "---\\nname: Safe Remote Tool\\ndescription: Helpful remote utility\\nversion: 1.0.0\\n---\\n# Safe body"}'
+    )
+    mock_resp_ctx = MagicMock()
+    mock_resp_ctx.__enter__.return_value = io.BytesIO(valid_body)
+
+    with patch("urllib.request.urlopen", return_value=mock_resp_ctx):
+        imported = client.import_remote_skill(
+            endpoint_url="https://remote.corp/v1/skills",
+            skill_id="safe_remote_tool",
+            target_tool=SkillSource.AGENT_ENGINE,
+        )
+        assert imported.id == "safe_remote_tool"
+        assert imported.metadata.name == "Safe Remote Tool"
+        assert imported.path is not None
+        assert Path(imported.path).exists()
+        assert "Helpful remote utility" in imported.content
+
+
+def test_remote_skill_api_endpoints():
+    """Verify POST /v1/skills/remote/discover and /v1/skills/remote/import endpoints."""
+    import io
+    from unittest.mock import MagicMock, patch
+    from fastapi.testclient import TestClient
+    from services.python.server.api import app
+
+    client = TestClient(app)
+
+    # 1. Invalid URL scheme returns 400
+    bad_resp = client.post(
+        "/v1/skills/remote/discover",
+        json={"endpoint_url": "ftp://bad-scheme"},
+    )
+    assert bad_resp.status_code == 400
+
+    # 2. SSH discovery returns 200 with SSH skills
+    ssh_resp = client.post(
+        "/v1/skills/remote/discover",
+        json={"endpoint_url": "ssh://user@remote-box:22"},
+    )
+    assert ssh_resp.status_code == 200
+    ssh_data = ssh_resp.json()
+    assert len(ssh_data) >= 1
+    assert ssh_data[0]["id"] == "ssh_remote_task"
+
+    # 3. Remote HTTP discover with mock
+    mock_body = (
+        b'[{"id": "api_discovered_skill", "name": "Discovered Skill", "description": "From API", '
+        b'"version": "1.0.0", "category": "DevOps", "tags": ["api"]}]'
+    )
+    mock_resp = MagicMock()
+    mock_resp.__enter__.return_value = io.BytesIO(mock_body)
+
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        disc_resp = client.post(
+            "/v1/skills/remote/discover",
+            json={"endpoint_url": "https://remote.server/v1/skills"},
+        )
+        assert disc_resp.status_code == 200
+        disc_data = disc_resp.json()
+        assert len(disc_data) == 1
+        assert disc_data[0]["id"] == "api_discovered_skill"

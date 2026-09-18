@@ -7,6 +7,7 @@ import { Projects } from './screens/Projects';
 import { Settings } from './screens/Settings';
 import { Policies } from './screens/Policies';
 import { Cost } from './screens/Cost';
+import { Skills } from './screens/Skills';
 import {
   CodeMode,
   ResearchMode,
@@ -226,6 +227,15 @@ export const App: React.FC = () => {
       case 'cost':
         return (
           <Cost
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'skills':
+        return (
+          <Skills
             onSelectMode={setActiveMode}
             activeModel={activeModel}
             onSelectModel={setActiveModel}
