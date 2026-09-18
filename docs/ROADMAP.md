@@ -367,51 +367,51 @@ A real desktop request travels through project/session context, routing, a real 
 
 ## Tasks
 
-### [ ] R1.1 — Canonical Execution domain
+### [x] R1.1 — Canonical Execution domain
 
 - **Migration:** `NEW`
 - **Target release:** `0.5`
-- **Initial maturity:** `S0` unless `docs/STATUS.md` verifies a higher level from legacy work.
+- **Initial maturity:** `S1`
 - **Dependencies:** R0.4
 - **User Story:** As a developer, I want a stable Execution model so every surface describes work using the same lifecycle and identifiers.
 - **Deliverables:**
   - Implement `Execution`, `ExecutionRequest`, `ExecutionContext`, `ExecutionResult`, `ExecutionEvent`, status enum.
   - Repository interfaces and migrations.
 - **Acceptance Criteria:**
-  - [ ] Execution IDs are immutable and globally unique within deployment.
-  - [ ] State transitions are validated.
+  - [x] Execution IDs are immutable and globally unique within deployment.
+  - [x] State transitions are validated.
 - **Required Evidence:**
-  - Unit tests + migration test.
+  - Unit tests + migration test (`tests/test_execution_models.py`, `tests/test_execution_storage.py`).
 
-### [ ] R1.2 — Execution state machine
+### [x] R1.2 — Execution state machine
 
 - **Migration:** `NEW`
 - **Target release:** `0.5`
-- **Initial maturity:** `S0` unless `docs/STATUS.md` verifies a higher level from legacy work.
+- **Initial maturity:** `S1`
 - **Dependencies:** R1.1
 - **User Story:** As a user, I want running, paused, failed, cancelled and completed work to have truthful states so the UI never invents progress.
 - **Deliverables:**
   - Define allowed transitions for CREATED, CONTEXT_BUILDING, ROUTING, POLICY_CHECK, BUDGET_CHECK, PLANNING, READY, QUEUED, RUNNING, WAITING_FOR_APPROVAL, PAUSED, VERIFYING, COMPLETED, PARTIAL, BLOCKED, FAILED, TIMED_OUT, CANCELLED.
 - **Acceptance Criteria:**
-  - [ ] Illegal transition is rejected and audited.
-  - [ ] `COMPLETED` requires verification result.
+  - [x] Illegal transition is rejected and audited.
+  - [x] `COMPLETED` requires verification result.
 - **Required Evidence:**
-  - State-machine tests.
+  - State-machine tests (`tests/test_execution_state_machine.py`).
 
-### [ ] R1.3 — ExecutionCoordinator service
+### [x] R1.3 — ExecutionCoordinator service
 
 - **Migration:** `NEW`
 - **Target release:** `0.5`
-- **Initial maturity:** `S0` unless `docs/STATUS.md` verifies a higher level from legacy work.
+- **Initial maturity:** `S1`
 - **Dependencies:** R1.1, R1.2
 - **User Story:** As a maintainer, I want one entry point for model/tool/agent/workflow work so security, cost and telemetry cannot be bypassed accidentally.
 - **Deliverables:**
   - Create `ExecutionCoordinator`.
   - Define adapters around existing router, context builder, policy, budget, model and telemetry components.
 - **Acceptance Criteria:**
-  - [ ] No canonical product path invokes a provider/tool directly.
+  - [x] No canonical product path invokes a provider/tool directly.
 - **Required Evidence:**
-  - Architecture dependency test + integration trace.
+  - Architecture dependency test + integration trace (`tests/test_execution_coordinator.py`).
 
 ### [ ] R1.4 — Rewire chat to real execution
 

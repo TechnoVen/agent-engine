@@ -545,6 +545,43 @@ class StorageBackend(ABC):
         """Delete a room task."""
         return False
 
+    # --- 13. CANONICAL EXECUTIONS (R1.1) ---
+
+    def create_execution(self, execution: Dict[str, Any]) -> Dict[str, Any]:
+        """Create and persist an execution record."""
+        return execution
+
+    def get_execution(self, execution_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve an execution record by primary key."""
+        return None
+
+    def update_execution(
+        self, execution_id: str, updates: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Update an execution record."""
+        return None
+
+    def list_executions(
+        self,
+        project_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """List executions filtered by project, session, or status."""
+        return []
+
+    def record_execution_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist an append-only execution event."""
+        return event
+
+    def get_execution_events(
+        self, execution_id: str, after_sequence_num: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Retrieve ordered event stream for an execution."""
+        return []
+
 
 # Backward-compatible and semantic alias
 StorageRepository = StorageBackend

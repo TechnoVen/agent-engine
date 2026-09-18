@@ -2058,7 +2058,12 @@ def test_task_4_9_streamlit_demotion_and_process_lifecycle():
     assert "PID_OLLAMA" in sh_content
 
     # 5. Documentation
-    gui_doc = (repo_root / "docs" / "GUI.md").read_text()
+    gui_legacy = repo_root / "docs" / "archive" / "GUI_LEGACY.md"
+    gui_doc = (
+        gui_legacy.read_text()
+        if gui_legacy.exists()
+        else (repo_root / "docs" / "GUI.md").read_text()
+    )
     assert "Streamline to ONE" in gui_doc
     assert "Tauri shell as the only user-facing dashboard" in gui_doc
 

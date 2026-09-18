@@ -235,6 +235,40 @@ class SQLiteBackend(StorageBackend):
                         FOREIGN KEY (collection_id) REFERENCES skill_collections(id) ON DELETE CASCADE
                     );
                     CREATE INDEX IF NOT EXISTS idx_collection_skills_skill ON collection_skills(skill_id);
+
+                    CREATE TABLE IF NOT EXISTS executions (
+                        id TEXT PRIMARY KEY,
+                        session_id TEXT REFERENCES sessions(session_id) ON DELETE SET NULL,
+                        project_id TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        request_json TEXT NOT NULL,
+                        provider TEXT,
+                        model TEXT,
+                        routing_tier TEXT,
+                        input_tokens INTEGER DEFAULT 0,
+                        output_tokens INTEGER DEFAULT 0,
+                        total_cost_usd REAL DEFAULT 0.0,
+                        is_cost_estimated INTEGER NOT NULL DEFAULT 0,
+                        started_at TEXT,
+                        completed_at TEXT,
+                        error_code TEXT,
+                        error_message TEXT,
+                        created_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_executions_project ON executions(project_id);
+                    CREATE INDEX IF NOT EXISTS idx_executions_session ON executions(session_id);
+                    CREATE INDEX IF NOT EXISTS idx_executions_status ON executions(status);
+
+                    CREATE TABLE IF NOT EXISTS execution_events (
+                        id TEXT PRIMARY KEY,
+                        execution_id TEXT NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
+                        sequence_num INTEGER NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        event_type TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        UNIQUE(execution_id, sequence_num)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_events_execution ON execution_events(execution_id);
                 """)
                 conn.commit()
 
@@ -1872,6 +1906,260 @@ class SQLiteBackend(StorageBackend):
                 )
                 conn.commit()
                 return cursor.rowcount > 0
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    # --- 13. CANONICAL EXECUTIONS (R1.1) ---
+
+    def create_execution(self, execution: Dict[str, Any]) -> Dict[str, Any]:
+        """Create and persist an execution record."""
+        exec_id = execution["id"]
+        session_id = execution.get("session_id")
+        project_id = execution["project_id"]
+        status = execution.get("status", "created")
+        if isinstance(status, str):
+            status_val = status
+        else:
+            status_val = getattr(status, "value", str(status))
+
+        req = execution.get("request", {})
+        if isinstance(req, str):
+            req_json = req
+        elif hasattr(req, "model_dump_json"):
+            req_json = req.model_dump_json()
+        else:
+            req_json = json.dumps(req)
+
+        routing_tier = execution.get("routing_tier")
+        if routing_tier is not None and not isinstance(routing_tier, str):
+            routing_tier = getattr(routing_tier, "value", str(routing_tier))
+
+        created_at = execution.get("created_at") or datetime.now(timezone.utc).isoformat()
+
+        if session_id:
+            # Auto-ensure session exists if specified to satisfy relational foreign key
+            if not self.get_session(session_id):
+                try:
+                    self.create_session(
+                        session_id=session_id, user_id="default_user", title="Execution Session"
+                    )
+                except Exception:
+                    pass
+
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO executions (
+                        id, session_id, project_id, status, request_json,
+                        provider, model, routing_tier, input_tokens, output_tokens,
+                        total_cost_usd, is_cost_estimated, started_at, completed_at,
+                        error_code, error_message, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        exec_id,
+                        session_id,
+                        project_id,
+                        status_val,
+                        req_json,
+                        execution.get("provider"),
+                        execution.get("model"),
+                        routing_tier,
+                        execution.get("input_tokens", 0),
+                        execution.get("output_tokens", 0),
+                        float(execution.get("total_cost_usd", 0.0)),
+                        1 if execution.get("is_cost_estimated") else 0,
+                        execution.get("started_at"),
+                        execution.get("completed_at"),
+                        execution.get("error_code"),
+                        execution.get("error_message"),
+                        created_at,
+                    ),
+                )
+                conn.commit()
+                found = self.get_execution(exec_id)
+                return found if found is not None else execution
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_execution(self, execution_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve an execution record by primary key."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM executions WHERE id = ?", (execution_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                data = dict(row)
+                data["is_cost_estimated"] = bool(data.get("is_cost_estimated"))
+                if data.get("request_json"):
+                    try:
+                        data["request"] = json.loads(data["request_json"])
+                    except Exception:
+                        data["request"] = data["request_json"]
+                return data
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def update_execution(
+        self, execution_id: str, updates: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Update an execution record."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                set_clauses: List[str] = []
+                params: List[Any] = []
+
+                for k, v in updates.items():
+                    if k in ("id", "created_at"):
+                        continue
+                    if k == "status" and hasattr(v, "value"):
+                        v = v.value
+                    elif k == "routing_tier" and hasattr(v, "value"):
+                        v = v.value
+                    elif k == "is_cost_estimated":
+                        v = 1 if v else 0
+                    elif k in ("request", "request_json"):
+                        k = "request_json"
+                        if not isinstance(v, str):
+                            v = (
+                                v.model_dump_json()
+                                if hasattr(v, "model_dump_json")
+                                else json.dumps(v)
+                            )
+                    set_clauses.append(f"{k} = ?")
+                    params.append(v)
+
+                if not set_clauses:
+                    return self.get_execution(execution_id)
+
+                params.append(execution_id)
+                sql = f"UPDATE executions SET {', '.join(set_clauses)} WHERE id = ?"
+                cursor.execute(sql, tuple(params))
+                conn.commit()
+                return self.get_execution(execution_id)
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_executions(
+        self,
+        project_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """List executions filtered by project, session, or status."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                sql = "SELECT * FROM executions WHERE 1=1"
+                params: List[Any] = []
+                if project_id:
+                    sql += " AND project_id = ?"
+                    params.append(project_id)
+                if session_id:
+                    sql += " AND session_id = ?"
+                    params.append(session_id)
+                if status:
+                    if hasattr(status, "value"):
+                        status = status.value
+                    sql += " AND status = ?"
+                    params.append(status)
+                sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                params.extend([limit, offset])
+
+                cursor.execute(sql, tuple(params))
+                rows = cursor.fetchall()
+                results = []
+                for row in rows:
+                    data = dict(row)
+                    data["is_cost_estimated"] = bool(data.get("is_cost_estimated"))
+                    if data.get("request_json"):
+                        try:
+                            data["request"] = json.loads(data["request_json"])
+                        except Exception:
+                            data["request"] = data["request_json"]
+                    results.append(data)
+                return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def record_execution_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist an append-only execution event."""
+        evt_id = event["id"]
+        execution_id = event["execution_id"]
+        seq_num = event["sequence_num"]
+        timestamp = event.get("timestamp") or datetime.now(timezone.utc).isoformat()
+        evt_type = event["event_type"]
+        if hasattr(evt_type, "value"):
+            evt_type = evt_type.value
+
+        payload = event.get("payload", {})
+        if isinstance(payload, str):
+            payload_json = payload
+        elif hasattr(payload, "model_dump_json"):
+            payload_json = payload.model_dump_json()
+        else:
+            payload_json = json.dumps(payload)
+
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO execution_events (id, execution_id, sequence_num, timestamp, event_type, payload_json)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (evt_id, execution_id, seq_num, timestamp, evt_type, payload_json),
+                )
+                conn.commit()
+                return event
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_execution_events(
+        self, execution_id: str, after_sequence_num: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Retrieve ordered event stream for an execution."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                sql = "SELECT * FROM execution_events WHERE execution_id = ?"
+                params: List[Any] = [execution_id]
+                if after_sequence_num is not None:
+                    sql += " AND sequence_num > ?"
+                    params.append(after_sequence_num)
+                sql += " ORDER BY sequence_num ASC"
+
+                cursor.execute(sql, tuple(params))
+                rows = cursor.fetchall()
+                results = []
+                for row in rows:
+                    data = dict(row)
+                    if data.get("payload_json"):
+                        try:
+                            data["payload"] = json.loads(data["payload_json"])
+                        except Exception:
+                            data["payload"] = data["payload_json"]
+                    results.append(data)
+                return results
             finally:
                 if not self._is_memory:
                     conn.close()

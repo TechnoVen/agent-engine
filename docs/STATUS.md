@@ -173,10 +173,58 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
 
 ---
 
-## 5. Active Test Suite & Deprecation Warnings Log
+## 5. Canonical Task Tracking Matrix (Stage R1 — Execution Kernel Convergence)
 
-- **Test Suite Result:** `354 passed, 3 warnings in 37.81s` (`uv run pytest`)
+```yaml
+- id: R1.1
+  title: "Canonical Execution domain"
+  task_status: done
+  capability_maturity: S1
+  migration: NEW
+  owner: "Execution Kernel"
+  depends_on: [R0.4]
+  evidence:
+    - "core/execution/models.py"
+    - "core/storage/base.py"
+    - "core/storage/sqlite.py"
+    - "alembic/versions/003_canonical_executions.py"
+    - "tests/test_execution_models.py"
+    - "tests/test_execution_storage.py"
+  notes: "Execution, ExecutionRequest, ExecutionContext, ExecutionResult, ExecutionEvent defined with immutable IDs and SQLite/Alembic persistence."
+
+- id: R1.2
+  title: "Execution state machine"
+  task_status: done
+  capability_maturity: S1
+  migration: NEW
+  owner: "Execution Kernel"
+  depends_on: [R1.1]
+  evidence:
+    - "core/execution/state.py"
+    - "tests/test_execution_state_machine.py"
+  notes: "Deterministic transition graph with strict VerificationResult guard on COMPLETED state, invalid transition rejection, and append-only state change events."
+
+- id: R1.3
+  title: "ExecutionCoordinator service"
+  task_status: done
+  capability_maturity: S1
+  migration: NEW
+  owner: "Execution Kernel"
+  depends_on: [R1.1, R1.2]
+  evidence:
+    - "core/execution/coordinator.py"
+    - "core/execution/__init__.py"
+    - "tests/test_execution_coordinator.py"
+  notes: "Universal 10-phase execution coordinator integrating context building, routing, safety policy pre-flight, budget check, consequential gating, verification, and telemetry."
+```
+
+---
+
+## 6. Active Test Suite & Deprecation Warnings Log
+
+- **Test Suite Result:** `376 passed, 3 warnings in 46.60s` (`uv run pytest`)
 - **Documented Upstream Warnings (Non-blocking):**
   1. `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.` (Origin: `fastapi/testclient.py:1` — Upstream FastAPI/Starlette testclient deprecation notice; non-runtime).
   2. `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.` (Origin: `starlette/testclient.py:53` — Upstream Starlette/AnyIO import alias notice; non-runtime).
   3. `DeprecationWarning: 'asyncio.iscoroutinefunction' is deprecated and slated for removal in Python 3.16; use inspect.iscoroutinefunction() instead` (Origin: `chromadb/telemetry/opentelemetry/__init__.py:128` — Upstream ChromaDB telemetry compatibility notice for Python 3.16+; non-blocking on current Python 3.10–3.14).
+
