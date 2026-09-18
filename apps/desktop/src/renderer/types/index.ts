@@ -805,6 +805,96 @@ export interface SwarmRunResult {
   created_at: string;
 }
 
+export type WorkflowNodeType =
+  | 'pipeline'
+  | 'skill'
+  | 'agent'
+  | 'gate'
+  | 'condition'
+  | 'parallel'
+  | 'merge';
+
+export interface WorkflowPosition {
+  x: number;
+  y: number;
+}
+
+export interface WorkflowNode {
+  id: string;
+  type: WorkflowNodeType;
+  name: string;
+  description?: string;
+  config?: Record<string, any>;
+  inputs?: Record<string, any>;
+  outputs?: string[];
+  position?: WorkflowPosition;
+}
+
+export interface WorkflowEdge {
+  id: string;
+  source: string;
+  target: string;
+  condition?: string;
+}
+
+export interface WorkflowDefinition {
+  id: string;
+  name: string;
+  description?: string;
+  version?: string;
+  status?: string;
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  inputs_schema?: Record<string, any>;
+  tags?: string[];
+  steps?: string[];
+}
+
+export interface WorkflowStepResult {
+  node_id: string;
+  node_type: WorkflowNodeType;
+  status: string;
+  inputs?: Record<string, any>;
+  outputs?: Record<string, any>;
+  error?: string;
+  cost_usd?: number;
+  execution_time_ms?: number;
+}
+
+export interface WorkflowRun {
+  run_id: string;
+  workflow_id: string;
+  status: 'pending' | 'running' | 'waiting_approval' | 'completed' | 'failed';
+  current_node_id?: string;
+  pending_gate?: Record<string, any>;
+  inputs: Record<string, any>;
+  outputs?: Record<string, any>;
+  step_results: Record<string, WorkflowStepResult>;
+  total_cost_usd: number;
+  execution_time_ms: number;
+  created_at: string;
+  completed_at?: string;
+}
+
+export interface WorkflowValidationResult {
+  valid: boolean;
+  errors: string[];
+  node_count: number;
+  edge_count: number;
+}
+
+export interface PendingGateInfo {
+  run_id: string;
+  workflow_id: string;
+  workflow_name: string;
+  node_id: string;
+  gate_name: string;
+  inputs: Record<string, any>;
+  timeout_seconds: number;
+  created_at: string;
+}
+
+
 
 
 

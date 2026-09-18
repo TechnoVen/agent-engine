@@ -44,6 +44,10 @@ import {
   CreateRoomTaskPayload,
   SwarmCase,
   SwarmRunResult,
+  WorkflowDefinition,
+  WorkflowRun,
+  WorkflowValidationResult,
+  PendingGateInfo,
 } from '../types';
 
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
@@ -1746,6 +1750,187 @@ class SidecarClient {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || `Failed to run swarm: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  // Workflow Engine (Phase 7 - Milestone M5)
+  async listWorkflows(tag?: string): Promise<WorkflowDefinition[]> {
+    try {
+      const url = tag ? `${this.base}/v1/workflows?tag=${encodeURIComponent(tag)}` : `${this.base}/v1/workflows`;
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) return [];
+      return await res.json();
+    } catch {
+      return [];
+    }
+  }
+
+  async getWorkflow(id: string): Promise<WorkflowDefinition> {
+    const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch workflow: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async saveWorkflow(wf: WorkflowDefinition): Promise<WorkflowDefinition> {
+    const res = await fetch(`${this.base}/v1/workflows`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(wf),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to save workflow: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async updateWorkflow(id: string, wf: WorkflowDefinition): Promise<WorkflowDefinition> {
+    const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(wf),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to update workflow: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async deleteWorkflow(id: string): Promise<{ deleted: boolean }> {
+    const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to delete workflow: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async validateWorkflow(payload: { definition_yaml?: string; definition_json?: any }): Promise<WorkflowValidationResult> {
+    const res = await fetch(`${this.base}/v1/workflows/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Validation failed: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async dryRunWorkflow(id: string, inputs: Record<string, any> = {}): Promise<WorkflowRun> {
+    const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}/dry-run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ inputs }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Dry run failed: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async runWorkflow(id: string, inputs: Record<string, any> = {}): Promise<WorkflowRun> {
+    const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ inputs, dry_run: false }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Execution failed: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async listWorkflowRuns(id: string): Promise<WorkflowRun[]> {
+    try {
+      const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}/runs`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) return [];
+      return await res.json();
+    } catch {
+      return [];
+    }
+  }
+
+  async getWorkflowRun(id: string, runId: string): Promise<WorkflowRun> {
+    const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch run: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async listPendingGates(): Promise<PendingGateInfo[]> {
+    try {
+      const res = await fetch(`${this.base}/v1/workflows/gates/pending`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) return [];
+      return await res.json();
+    } catch {
+      return [];
+    }
+  }
+
+  async approveWorkflowGate(id: string, runId: string, reviewer: string = 'operator', inputOverrides?: Record<string, any>): Promise<WorkflowRun> {
+    const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}/approve`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reviewer, input_overrides: inputOverrides }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to approve gate: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async rejectWorkflowGate(id: string, runId: string, reviewer: string = 'operator', reason?: string): Promise<WorkflowRun> {
+    const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}/reject`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reviewer, reason }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to reject gate: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async redirectWorkflowGate(id: string, runId: string, targetNodeId: string, reviewer: string = 'operator', inputOverrides?: Record<string, any>): Promise<WorkflowRun> {
+    const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}/redirect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_node_id: targetNodeId, reviewer, input_overrides: inputOverrides }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to redirect gate: HTTP ${res.status}`);
     }
     return await res.json();
   }

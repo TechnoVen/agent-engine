@@ -774,3 +774,340 @@ def test_swarm_api_endpoints():
     assert len(run_data["agent_results"]) >= 3
     assert "Swarm Execution Synthesis" in run_data["aggregated_output"]
     assert run_data["total_cost_usd"] > 0.0
+
+
+def test_workflow_builder_canvas_payload_roundtrip():
+    """Verify lossless round-trip serialization between desktop canvas JSON and WorkflowDefinition."""
+    canvas_payload = {
+        "id": "wf_canvas_sample_roundtrip",
+        "name": "Canvas Interactive Pipeline",
+        "description": "Orchestrates prompt analysis, security check, and approval gate",
+        "version": "1.2.0",
+        "status": "active",
+        "nodes": [
+            {
+                "id": "node_input",
+                "type": "agent",
+                "name": "Input Analyzer",
+                "description": "Extracts intentions",
+                "position": {"x": 80.0, "y": 140.0},
+                "config": {"model_tier": "instant"},
+                "inputs": {"query": "$workflow.input.query"},
+                "outputs": ["parsed_plan"],
+            },
+            {
+                "id": "node_gate",
+                "type": "gate",
+                "name": "Operator Review",
+                "description": "Pauses for human approval",
+                "position": {"x": 360.0, "y": 140.0},
+                "config": {"timeout_seconds": 1200},
+                "inputs": {"plan": "{{node_input.parsed_plan}}"},
+                "outputs": ["approved", "reviewer"],
+            },
+            {
+                "id": "node_remediate",
+                "type": "skill",
+                "name": "Apply Fix",
+                "description": "Applies verified patch",
+                "position": {"x": 640.0, "y": 80.0},
+                "config": {"skill_id": "code_refactor"},
+                "inputs": {"plan": "{{node_input.parsed_plan}}"},
+                "outputs": ["diff"],
+            },
+            {
+                "id": "node_abort",
+                "type": "skill",
+                "name": "Audit Abort",
+                "description": "Logs rejection event",
+                "position": {"x": 640.0, "y": 240.0},
+                "inputs": {"reason": "Rejected by operator"},
+                "outputs": ["log_id"],
+            },
+        ],
+        "edges": [
+            {"id": "e_in_gate", "source": "node_input", "target": "node_gate"},
+            {
+                "id": "e_gate_rem",
+                "source": "node_gate",
+                "target": "node_remediate",
+                "condition": "approved",
+            },
+            {
+                "id": "e_gate_abort",
+                "source": "node_gate",
+                "target": "node_abort",
+                "condition": "false",
+            },
+        ],
+        "tags": ["canvas", "interactive", "safety"],
+    }
+
+    # 1. Parse into WorkflowDefinition
+    wf = WorkflowDefinition.model_validate(canvas_payload)
+    assert wf.id == "wf_canvas_sample_roundtrip"
+    assert len(wf.nodes) == 4
+    assert len(wf.edges) == 3
+    assert wf.nodes[0].position.x == 80.0
+    assert wf.nodes[0].position.y == 140.0
+    assert wf.edges[1].condition == "approved"
+
+    # 2. Serialize to YAML and back
+    yaml_str = WorkflowParser.to_yaml(wf)
+    assert "wf_canvas_sample_roundtrip" in yaml_str
+    assert "node_gate" in yaml_str
+    assert "approved" in yaml_str
+
+    wf_from_yaml = WorkflowParser.from_yaml(yaml_str)
+    assert wf_from_yaml.id == wf.id
+    assert len(wf_from_yaml.nodes) == len(wf.nodes)
+    assert len(wf_from_yaml.edges) == len(wf.edges)
+
+    # 3. Re-convert to dict
+    reconstructed = wf_from_yaml.to_dict()
+    assert reconstructed["id"] == canvas_payload["id"]
+    assert len(reconstructed["nodes"]) == len(canvas_payload["nodes"])
+    assert reconstructed["nodes"][0]["position"]["x"] == 80.0
+
+
+def test_workflow_builder_complex_dag_validation():
+    """Verify validation and topological ordering on complex multi-branch DAG graphs."""
+    nodes = [
+        WorkflowNode(
+            id="n_start",
+            type=WorkflowNodeType.AGENT,
+            name="Start Agent",
+            position=WorkflowPosition(x=50, y=100),
+        ),
+        WorkflowNode(
+            id="n_par1",
+            type=WorkflowNodeType.PARALLEL,
+            name="Parallel Fan-Out",
+            position=WorkflowPosition(x=250, y=100),
+        ),
+        WorkflowNode(
+            id="n_work_a",
+            type=WorkflowNodeType.SKILL,
+            name="Worker A",
+            position=WorkflowPosition(x=450, y=50),
+        ),
+        WorkflowNode(
+            id="n_work_b",
+            type=WorkflowNodeType.SKILL,
+            name="Worker B",
+            position=WorkflowPosition(x=450, y=150),
+        ),
+        WorkflowNode(
+            id="n_merge",
+            type=WorkflowNodeType.MERGE,
+            name="State Merge",
+            position=WorkflowPosition(x=650, y=100),
+        ),
+        WorkflowNode(
+            id="n_end",
+            type=WorkflowNodeType.SKILL,
+            name="Finalize",
+            position=WorkflowPosition(x=850, y=100),
+        ),
+    ]
+    edges = [
+        WorkflowEdge(id="e1", source="n_start", target="n_par1"),
+        WorkflowEdge(id="e2", source="n_par1", target="n_work_a"),
+        WorkflowEdge(id="e3", source="n_par1", target="n_work_b"),
+        WorkflowEdge(id="e4", source="n_work_a", target="n_merge"),
+        WorkflowEdge(id="e5", source="n_work_b", target="n_merge"),
+        WorkflowEdge(id="e6", source="n_merge", target="n_end"),
+    ]
+    wf = WorkflowDefinition(
+        id="wf_complex_fanout_merge",
+        name="Complex Fan-Out and Merge Pipeline",
+        nodes=nodes,
+        edges=edges,
+    )
+
+    is_valid, errors = WorkflowParser.validate(wf)
+    assert is_valid is True
+    assert errors == []
+
+    # Topological sort starts at n_start and ends at n_end
+    order = WorkflowParser.get_topological_sort(wf)
+    order_ids = [n.id for n in order]
+    assert order_ids[0] == "n_start"
+    assert order_ids[-1] == "n_end"
+    assert order_ids.index("n_merge") > order_ids.index("n_work_a")
+    assert order_ids.index("n_merge") > order_ids.index("n_work_b")
+
+
+def test_workflow_builder_malformed_dag_detection():
+    """Verify validation detects self-loops, duplicate node IDs, and missing node references."""
+    # 1. Self loop (node -> itself)
+    node_self = WorkflowNode(id="loop_node", type=WorkflowNodeType.AGENT, name="Looping Node")
+    edge_self = WorkflowEdge(id="e_self", source="loop_node", target="loop_node")
+    wf_self = WorkflowDefinition(
+        id="wf_self_loop", name="Self Loop WF", nodes=[node_self], edges=[edge_self]
+    )
+
+    is_valid_self, errors_self = WorkflowParser.validate(wf_self)
+    assert is_valid_self is False
+    assert any("Cycle detected" in err or "entry node" in err for err in errors_self)
+
+    # 2. Duplicate node IDs
+    dup_node1 = WorkflowNode(id="same_id", type=WorkflowNodeType.AGENT, name="First Instance")
+    dup_node2 = WorkflowNode(id="same_id", type=WorkflowNodeType.SKILL, name="Duplicate Instance")
+    wf_dup = WorkflowDefinition(
+        id="wf_dup", name="Duplicate Node WF", nodes=[dup_node1, dup_node2], edges=[]
+    )
+
+    is_valid_dup, errors_dup = WorkflowParser.validate(wf_dup)
+    assert is_valid_dup is False
+    assert any("Duplicate node ID detected" in err for err in errors_dup)
+
+
+def test_workflow_builder_end_to_end_api_lifecycle():
+    """Verify full end-to-end REST lifecycle for builder canvas workflows."""
+    client = TestClient(app)
+
+    builder_wf = {
+        "id": "wf_e2e_builder_lifecycle",
+        "name": "Lifecycle Pipeline",
+        "description": "Full lifecycle validation for interactive canvas",
+        "version": "2.0.0",
+        "status": "active",
+        "nodes": [
+            {
+                "id": "prep",
+                "type": "agent",
+                "name": "Data Preparer",
+                "position": {"x": 100.0, "y": 100.0},
+                "inputs": {"query": "$workflow.input.query"},
+                "outputs": ["clean_data"],
+            },
+            {
+                "id": "process",
+                "type": "skill",
+                "name": "Data Processor",
+                "position": {"x": 350.0, "y": 100.0},
+                "inputs": {"data": "{{prep.clean_data}}"},
+                "outputs": ["processed_result"],
+            },
+        ],
+        "edges": [{"id": "e_prep_proc", "source": "prep", "target": "process"}],
+        "tags": ["lifecycle", "e2e"],
+    }
+
+    # 1. Validate
+    val_res = client.post("/v1/workflows/validate", json={"definition_json": builder_wf})
+    assert val_res.status_code == 200
+    assert val_res.json()["valid"] is True
+
+    # 2. Create / Save
+    save_res = client.post("/v1/workflows", json=builder_wf)
+    assert save_res.status_code == 200
+    assert save_res.json()["id"] == "wf_e2e_builder_lifecycle"
+
+    # 3. Dry Run Simulation
+    dry_res = client.post(
+        f"/v1/workflows/{builder_wf['id']}/dry-run",
+        json={"inputs": {"query": "Test dry run query"}},
+    )
+    assert dry_res.status_code == 200
+    dry_data = dry_res.json()
+    assert dry_data["status"] == "completed"
+    assert dry_data["total_cost_usd"] == 0.0
+    assert "prep" in dry_data["step_results"]
+    assert "process" in dry_data["step_results"]
+
+    # 4. Live Execution
+    run_res = client.post(
+        f"/v1/workflows/{builder_wf['id']}/run",
+        json={"inputs": {"query": "Live production query"}, "dry_run": False},
+    )
+    assert run_res.status_code == 200
+    run_data = run_res.json()
+    run_id = run_data["run_id"]
+    assert run_data["status"] == "completed"
+    assert run_data["total_cost_usd"] > 0.0
+
+    # 5. List and Get Runs
+    runs_res = client.get(f"/v1/workflows/{builder_wf['id']}/runs")
+    assert runs_res.status_code == 200
+    runs = runs_res.json()
+    assert any(r["run_id"] == run_id for r in runs)
+
+    # 6. Cleanup
+    del_res = client.delete(f"/v1/workflows/{builder_wf['id']}")
+    assert del_res.status_code == 200
+    assert del_res.json()["deleted"] is True
+
+
+def test_workflow_builder_gate_interactive_flow():
+    """Verify builder workflow containing an approval gate correctly pauses and is queryable."""
+    client = TestClient(app)
+
+    gated_wf = {
+        "id": "wf_builder_gated_demo",
+        "name": "Builder Gate Demo",
+        "description": "Demonstrates interactive gate controls",
+        "nodes": [
+            {
+                "id": "start_agent",
+                "type": "agent",
+                "name": "Generate Draft",
+                "position": {"x": 100.0, "y": 100.0},
+                "inputs": {"prompt": "$workflow.input.prompt"},
+                "outputs": ["draft"],
+            },
+            {
+                "id": "gate_review",
+                "type": "gate",
+                "name": "Sign Off",
+                "position": {"x": 350.0, "y": 100.0},
+                "config": {"timeout_seconds": 900},
+                "inputs": {"draft": "{{start_agent.draft}}"},
+                "outputs": ["approved"],
+            },
+            {
+                "id": "publish",
+                "type": "skill",
+                "name": "Publish Post",
+                "position": {"x": 600.0, "y": 100.0},
+                "inputs": {"content": "{{start_agent.draft}}"},
+            },
+        ],
+        "edges": [
+            {"id": "e1", "source": "start_agent", "target": "gate_review"},
+            {"id": "e2", "source": "gate_review", "target": "publish", "condition": "approved"},
+        ],
+    }
+
+    # Save
+    client.post("/v1/workflows", json=gated_wf)
+
+    # Run -> pauses at gate
+    run_res = client.post(
+        f"/v1/workflows/{gated_wf['id']}/run",
+        json={"inputs": {"prompt": "New article draft"}, "dry_run": False},
+    )
+    assert run_res.status_code == 200
+    run_data = run_res.json()
+    assert run_data["status"] == "waiting_approval"
+    assert run_data["current_node_id"] == "gate_review"
+
+    # Pending gates listing
+    gates_res = client.get("/v1/workflows/gates/pending")
+    assert gates_res.status_code == 200
+    gates = gates_res.json()
+    assert any(g["run_id"] == run_data["run_id"] for g in gates)
+
+    # Approve
+    approve_res = client.post(
+        f"/v1/workflows/{gated_wf['id']}/runs/{run_data['run_id']}/approve",
+        json={"reviewer": "chief_editor"},
+    )
+    assert approve_res.status_code == 200
+    resumed = approve_res.json()
+    assert resumed["status"] == "completed"
+    assert "publish" in resumed["step_results"]
+
+    # Cleanup
+    client.delete(f"/v1/workflows/{gated_wf['id']}")

@@ -358,10 +358,11 @@
   - **Deliverables:** `core/workflows/swarm.py` (`SwarmCoordinator`, `SwarmCase`, `SwarmAgentSpec`, `SwarmRunResult`, 3 featured team configurations), REST API endpoints (`GET /v1/swarm/cases`, `POST /v1/swarm/estimate`, `POST /v1/swarm/run`), desktop client & types, `apps/desktop/src/renderer/screens/Swarm.tsx` (Route `/swarm`), live multi-agent progress strips, aggregated output view with agent attribution, cost estimator before execution, and tests in `tests/test_workflows.py`.
   - **Acceptance Criteria:** Parallel execution respects cost router; partial agent failures handled gracefully; total cost calculated across all agents; all 349 repo tests pass.
   - **Status:** ✅ DONE
-- [ ] **Task 7.5 — Workflow Builder Screen (React Flow Canvas)**
+- [x] **Task 7.5 — Workflow Builder Screen (React Flow Canvas)**
   - **User Story:** As an automation engineer, I want an interactive visual canvas to drag, drop, connect, and inspect pipeline nodes, approval gates, and conditions.
-  - **Deliverables:** `apps/desktop/src/renderer/screens/Workflows.tsx` (Route `/workflows`), React Flow canvas, node palette (Pipelines, Skills, Agents, Gates, Conditions, Merge), inspector panel, round-trip YAML exporter/importer, dry-run simulation mode.
-  - **Acceptance Criteria:** Round-trip YAML ↔ canvas is 100% lossless; dry-run visualizes execution path; human gates render as interactive pause nodes.
+  - **Deliverables:** `apps/desktop/src/renderer/screens/Workflows.tsx` (Route `/workflows`), interactive canvas with bezier curves, node palette (Pipelines, Skills, Agents, Gates, Conditions, Parallel, Merge), inspector panel, round-trip YAML exporter/importer, dry-run simulation mode, gate approval actions, sidecar client methods, and tests in `tests/test_workflows.py`.
+  - **Acceptance Criteria:** Round-trip YAML ↔ canvas is 100% lossless; dry-run visualizes execution path; human gates render as interactive pause nodes; all 354 repo tests pass.
+  - **Status:** ✅ DONE
 
 ---
 
