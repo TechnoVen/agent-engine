@@ -528,6 +528,20 @@ paths:
                   edge_count:
                     type: integer
 
+  /workflows/gates/pending:
+    get:
+      summary: List active runs waiting for gate approval
+      operationId: listPendingWorkflowGates
+      responses:
+        '200':
+          description: Pending gates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
   /workflows/{workflow_id}:
     get:
       summary: Get workflow definition by ID
@@ -744,6 +758,44 @@ paths:
       responses:
         '200':
           description: Resumed or cancelled run
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /workflows/{workflow_id}/runs/{run_id}/redirect:
+    post:
+      summary: Redirect workflow gate to target node
+      operationId: redirectWorkflowGate
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - target_node_id
+              properties:
+                target_node_id:
+                  type: string
+                reviewer:
+                  type: string
+                input_overrides:
+                  type: object
+      responses:
+        '200':
+          description: Resumed run redirected to target node
           content:
             application/json:
               schema:

@@ -85,6 +85,7 @@ from core.templates import TemplateManager
 from core.workflows import (
     WorkflowDefinition,
     WorkflowEngine,
+    WorkflowGateManager,
     WorkflowParser,
     WorkflowRunStatus,
     WorkflowStatus,
@@ -431,6 +432,14 @@ class WorkflowRunRequest(BaseModel):
 
 class WorkflowGateDecisionRequest(BaseModel):
     reviewer: str = "operator"
+    reason: Optional[str] = None
+    input_overrides: Optional[Dict[str, Any]] = None
+
+
+class WorkflowRedirectRequest(BaseModel):
+    target_node_id: str
+    reviewer: str = "operator"
+    input_overrides: Optional[Dict[str, Any]] = None
 
 
 class MemoryQueryResponse(BaseModel):
@@ -2219,6 +2228,14 @@ async def validate_workflow_endpoint(req: WorkflowValidateRequest):
     )
 
 
+@v1_router.get("/workflows/gates/pending")
+async def list_pending_workflow_gates_endpoint():
+    """List all active workflow runs waiting for human gate review."""
+    storage = get_workflow_storage()
+    gate_mgr = WorkflowGateManager(storage=storage)
+    return gate_mgr.list_pending_gates()
+
+
 @v1_router.get("/workflows/{workflow_id}")
 async def get_workflow_endpoint(workflow_id: str):
     """Fetch workflow definition by ID."""
@@ -2360,10 +2377,19 @@ async def approve_workflow_gate_endpoint(
             detail=f"Run '{run_id}' is not waiting for approval (current status: {run.status.value})",
         )
 
+    gate_mgr = WorkflowGateManager(storage=storage)
     reviewer = req.reviewer if req else "operator"
-    engine = WorkflowEngine(storage=storage)
-    resumed = engine.resume_gate(wf, run, approve=True, reviewer=reviewer)
-    return resumed.to_dict()
+    input_overrides = req.input_overrides if req else None
+    try:
+        resumed = gate_mgr.approve_gate(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            reviewer=reviewer,
+            input_overrides=input_overrides,
+        )
+        return resumed.to_dict()
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @v1_router.post("/workflows/{workflow_id}/runs/{run_id}/reject")
@@ -2374,28 +2400,41 @@ async def reject_workflow_gate_endpoint(
 ):
     """Reject a paused human review gate and route to rejection path or cancel."""
     storage = get_workflow_storage()
-    wf = storage.get_workflow(workflow_id)
-    if not wf:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Workflow '{workflow_id}' not found",
-        )
-    run = storage.get_run(run_id)
-    if not run or run.workflow_id != workflow_id:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Run '{run_id}' not found for workflow '{workflow_id}'",
-        )
-    if run.status != WorkflowRunStatus.WAITING_APPROVAL:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Run '{run_id}' is not waiting for approval (current status: {run.status.value})",
-        )
-
+    gate_mgr = WorkflowGateManager(storage=storage)
     reviewer = req.reviewer if req else "operator"
-    engine = WorkflowEngine(storage=storage)
-    resumed = engine.resume_gate(wf, run, approve=False, reviewer=reviewer)
-    return resumed.to_dict()
+    reason = req.reason if req else None
+    try:
+        resumed = gate_mgr.reject_gate(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            reviewer=reviewer,
+            reason=reason,
+        )
+        return resumed.to_dict()
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@v1_router.post("/workflows/{workflow_id}/runs/{run_id}/redirect")
+async def redirect_workflow_gate_endpoint(
+    workflow_id: str,
+    run_id: str,
+    req: WorkflowRedirectRequest,
+):
+    """Redirect execution of a paused human review gate to an alternate target node."""
+    storage = get_workflow_storage()
+    gate_mgr = WorkflowGateManager(storage=storage)
+    try:
+        resumed = gate_mgr.redirect_gate(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            target_node_id=req.target_node_id,
+            reviewer=req.reviewer,
+            input_overrides=req.input_overrides,
+        )
+        return resumed.to_dict()
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @v1_router.get("/pipelines", response_model=List[PipelineInfo])

@@ -12,6 +12,7 @@ from core.workflows import (
     WorkflowDefinition,
     WorkflowEdge,
     WorkflowEngine,
+    WorkflowGateManager,
     WorkflowNode,
     WorkflowNodeType,
     WorkflowParser,
@@ -410,6 +411,208 @@ def test_workflow_api_run_history():
     assert detail["run_id"] == run_id
     assert "extract_step" in detail["step_results"]
     assert detail["total_cost_usd"] > 0.0
+
+    # Cleanup
+    client.delete(f"/v1/workflows/{wf.id}")
+
+
+def _build_gated_workflow() -> WorkflowDefinition:
+    """Helper to build a workflow containing an interactive human approval gate with branch edges."""
+    node_prep = WorkflowNode(
+        id="prep_step",
+        type=WorkflowNodeType.AGENT,
+        name="Prepare Action",
+        description="Prepares a high risk operation",
+        config={"model_tier": "instant"},
+        inputs={"target": "$workflow.input.target"},
+        outputs=["plan", "risk_score"],
+    )
+    node_gate = WorkflowNode(
+        id="human_gate",
+        type=WorkflowNodeType.GATE,
+        name="Review & Approval",
+        description="Requires operator approval before deployment",
+        config={"timeout_seconds": 1800},
+        inputs={"plan": "{{prep_step.plan}}"},
+        outputs=["approved", "reviewer"],
+    )
+    node_deploy = WorkflowNode(
+        id="deploy_step",
+        type=WorkflowNodeType.SKILL,
+        name="Deploy Change",
+        description="Applies approved change",
+        inputs={"plan": "{{prep_step.plan}}"},
+        outputs=["deployed"],
+    )
+    node_rollback = WorkflowNode(
+        id="rollback_step",
+        type=WorkflowNodeType.SKILL,
+        name="Rollback Plan",
+        description="Rolls back on rejection",
+        inputs={"plan": "{{prep_step.plan}}"},
+        outputs=["rolled_back"],
+    )
+    node_sandbox = WorkflowNode(
+        id="sandbox_step",
+        type=WorkflowNodeType.SKILL,
+        name="Sandbox Test",
+        description="Alternative redirected target node",
+        inputs={"plan": "{{prep_step.plan}}"},
+        outputs=["sandboxed"],
+    )
+
+    edges = [
+        WorkflowEdge(id="e1", source="prep_step", target="human_gate"),
+        WorkflowEdge(id="e2", source="human_gate", target="deploy_step", condition="approved"),
+        WorkflowEdge(id="e3", source="human_gate", target="rollback_step", condition="false"),
+        WorkflowEdge(id="e4", source="human_gate", target="sandbox_step", condition="redirect"),
+    ]
+
+    return WorkflowDefinition(
+        id="gated_deploy_pipeline",
+        name="Gated Deployment Pipeline",
+        description="Pipeline requiring manual review before production execution",
+        version="1.0.0",
+        status=WorkflowStatus.ACTIVE,
+        nodes=[node_prep, node_gate, node_deploy, node_rollback, node_sandbox],
+        edges=edges,
+        inputs_schema={"target": {"type": "string"}},
+        tags=["deployment", "safety", "human-gate"],
+    )
+
+
+def test_workflow_gate_pausing():
+    """Verify workflow execution pauses at GATE node and collects pending gate metadata."""
+    wf = _build_gated_workflow()
+    engine = WorkflowEngine()
+
+    run = engine.run(wf, inputs={"target": "prod-database-cluster"}, dry_run=False)
+    assert run.status == WorkflowRunStatus.WAITING_APPROVAL
+    assert run.current_node_id == "human_gate"
+    assert run.pending_gate is not None
+    assert run.pending_gate["node_id"] == "human_gate"
+    assert "prod-database-cluster" in str(run.pending_gate["inputs"])
+    assert "prep_step" in run.step_results
+    assert "deploy_step" not in run.step_results
+
+
+def test_workflow_gate_manager_list_pending():
+    """Verify WorkflowGateManager queries and lists active pending gates across runs."""
+    storage = WorkflowStorage(db_path=":memory:")
+    wf = _build_gated_workflow()
+    storage.save_workflow(wf)
+
+    engine = WorkflowEngine(storage=storage)
+    run = engine.run(wf, inputs={"target": "staging-host"}, dry_run=False)
+    assert run.status == WorkflowRunStatus.WAITING_APPROVAL
+
+    gate_mgr = WorkflowGateManager(storage=storage, engine=engine)
+    pending_list = gate_mgr.list_pending_gates()
+    assert len(pending_list) == 1
+
+    entry = pending_list[0]
+    assert entry["run_id"] == run.run_id
+    assert entry["workflow_id"] == wf.id
+    assert entry["workflow_name"] == "Gated Deployment Pipeline"
+    assert entry["node_id"] == "human_gate"
+    assert entry["timeout_seconds"] == 1800
+
+
+def test_workflow_gate_approval_and_resumption():
+    """Verify approval of paused gate executes downstream approved branch."""
+    storage = WorkflowStorage(db_path=":memory:")
+    wf = _build_gated_workflow()
+    storage.save_workflow(wf)
+
+    engine = WorkflowEngine(storage=storage)
+    run = engine.run(wf, inputs={"target": "eu-central-1"}, dry_run=False)
+
+    gate_mgr = WorkflowGateManager(storage=storage, engine=engine)
+    resumed = gate_mgr.approve_gate(
+        workflow_id=wf.id,
+        run_id=run.run_id,
+        reviewer="senior_devops",
+    )
+
+    assert resumed.status == WorkflowRunStatus.COMPLETED
+    assert "human_gate" in resumed.step_results
+    assert resumed.step_results["human_gate"].status == "completed"
+    assert resumed.step_results["human_gate"].outputs["approved"] is True
+    assert resumed.step_results["human_gate"].outputs["reviewer"] == "senior_devops"
+
+    # Approved edge led to deploy_step
+    assert "deploy_step" in resumed.step_results
+    assert resumed.step_results["deploy_step"].status == "completed"
+    assert "rollback_step" not in resumed.step_results
+
+
+def test_workflow_gate_rejection_and_branching():
+    """Verify rejection of paused gate executes conditional rejection branch."""
+    storage = WorkflowStorage(db_path=":memory:")
+    wf = _build_gated_workflow()
+    storage.save_workflow(wf)
+
+    engine = WorkflowEngine(storage=storage)
+    run = engine.run(wf, inputs={"target": "unverified-env"}, dry_run=False)
+
+    gate_mgr = WorkflowGateManager(storage=storage, engine=engine)
+    resumed = gate_mgr.reject_gate(
+        workflow_id=wf.id,
+        run_id=run.run_id,
+        reviewer="compliance_officer",
+        reason="Security audit failed",
+    )
+
+    assert resumed.status == WorkflowRunStatus.COMPLETED
+    assert "human_gate" in resumed.step_results
+    assert resumed.step_results["human_gate"].status == "rejected"
+    assert resumed.step_results["human_gate"].outputs["approved"] is False
+
+    # Rejected edge (condition="false") led to rollback_step
+    assert "rollback_step" in resumed.step_results
+    assert resumed.step_results["rollback_step"].status == "completed"
+    assert "deploy_step" not in resumed.step_results
+
+
+def test_workflow_gate_api_redirect_and_endpoints():
+    """Verify REST API gate management, approval listing, and DAG redirection."""
+    client = TestClient(app)
+    wf = _build_gated_workflow()
+    wf.id = "api_gated_test_wf"
+    client.post("/v1/workflows", json=wf.to_dict())
+
+    # 1. Trigger execution -> pauses at gate
+    run_res = client.post(
+        f"/v1/workflows/{wf.id}/run",
+        json={"inputs": {"target": "critical-zone"}, "dry_run": False},
+    )
+    assert run_res.status_code == 200
+    run_data = run_res.json()
+    run_id = run_data["run_id"]
+    assert run_data["status"] == "waiting_approval"
+
+    # 2. Query pending gates
+    pending_res = client.get("/v1/workflows/gates/pending")
+    assert pending_res.status_code == 200
+    pending_gates = pending_res.json()
+    assert any(g["run_id"] == run_id for g in pending_gates)
+
+    # 3. Redirect to alternate node (sandbox_step)
+    redir_res = client.post(
+        f"/v1/workflows/{wf.id}/runs/{run_id}/redirect",
+        json={
+            "target_node_id": "sandbox_step",
+            "reviewer": "qa_lead",
+            "input_overrides": {"isolation_level": "strict"},
+        },
+    )
+    assert redir_res.status_code == 200
+    resumed = redir_res.json()
+    assert resumed["status"] == "completed"
+    assert "human_gate" in resumed["step_results"]
+    assert resumed["step_results"]["human_gate"]["status"] == "redirected"
+    assert resumed["step_results"]["human_gate"]["outputs"]["redirected_to"] == "sandbox_step"
+    assert "sandbox_step" in resumed["step_results"]
 
     # Cleanup
     client.delete(f"/v1/workflows/{wf.id}")

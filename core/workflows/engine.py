@@ -175,6 +175,9 @@ class WorkflowEngine:
                     "response": f"Agent response for: {str(prompt)[:60]}...",
                     "model_tier": model_tier,
                 }
+                for out_key in node.outputs:
+                    if out_key not in outputs:
+                        outputs[out_key] = f"Agent {out_key} for {str(prompt)[:40]}"
                 cost_usd = 0.002 if model_tier == "k3" else 0.0002
 
             elif node_type == WorkflowNodeType.CONDITION:
@@ -336,8 +339,10 @@ class WorkflowEngine:
         run: WorkflowRun,
         approve: bool,
         reviewer: str = "operator",
+        redirect_to: Optional[str] = None,
+        input_overrides: Optional[Dict[str, Any]] = None,
     ) -> WorkflowRun:
-        """Resume execution of a paused workflow run after human gate decision."""
+        """Resume execution of a paused workflow run after human gate decision, approval, or redirection."""
         if run.status != WorkflowRunStatus.WAITING_APPROVAL:
             raise ValueError(
                 f"Run '{run.run_id}' is not currently waiting for approval (status: {run.status})."
@@ -352,19 +357,33 @@ class WorkflowEngine:
         if not gate_node:
             raise ValueError(f"Gate node '{gate_node_id}' not found in workflow definition.")
 
+        if redirect_to and redirect_to not in node_map:
+            raise ValueError(
+                f"Target redirect node '{redirect_to}' not found in workflow definition."
+            )
+
+        if input_overrides:
+            run.inputs.update(input_overrides)
+
         # Record gate decision
+        gate_outputs: Dict[str, Any] = {"approved": approve, "reviewer": reviewer}
+        if redirect_to:
+            gate_outputs["redirected_to"] = redirect_to
+        if input_overrides:
+            gate_outputs["input_overrides"] = input_overrides
+
         gate_result = StepResult(
             node_id=gate_node_id,
             node_type=WorkflowNodeType.GATE,
-            status="completed" if approve else "rejected",
+            status="redirected" if redirect_to else ("completed" if approve else "rejected"),
             inputs=run.pending_gate.get("inputs", {}) if run.pending_gate else {},
-            outputs={"approved": approve, "reviewer": reviewer},
+            outputs=gate_outputs,
         )
         run.step_results[gate_node_id] = gate_result
         run.pending_gate = None
         run.current_node_id = None
 
-        if not approve:
+        if not approve and not redirect_to:
             # Check for rejection branch edge
             outgoing = [e for e in workflow.edges if e.source == gate_node_id]
             reject_edge = next(
@@ -376,27 +395,33 @@ class WorkflowEngine:
                 run.completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
                 return self._record_run(run)
 
-        # Continue execution from post-gate nodes
+        # Continue execution from post-gate or redirected nodes
         run.status = WorkflowRunStatus.RUNNING
         topological_nodes = WorkflowParser.get_topological_sort(workflow)
-        gate_idx = next((i for i, n in enumerate(topological_nodes) if n.id == gate_node_id), -1)
 
         step_outputs: Dict[str, Dict[str, Any]] = {
             nid: res.outputs for nid, res in run.step_results.items()
         }
 
-        # Active nodes from gate
-        outgoing = [e for e in workflow.edges if e.source == gate_node_id]
-        active_nodes: Set[str] = set()
-        for e in outgoing:
-            cond = str(e.condition or "").lower()
-            if approve and cond in ("", "true", "approved", "allow"):
-                active_nodes.add(e.target)
-            elif not approve and cond in ("false", "rejected", "deny"):
-                active_nodes.add(e.target)
+        if redirect_to:
+            start_idx = next((i for i, n in enumerate(topological_nodes) if n.id == redirect_to), 0)
+            active_nodes: Set[str] = {redirect_to}
+        else:
+            gate_idx = next(
+                (i for i, n in enumerate(topological_nodes) if n.id == gate_node_id), -1
+            )
+            start_idx = gate_idx + 1
+            outgoing = [e for e in workflow.edges if e.source == gate_node_id]
+            active_nodes = set()
+            for e in outgoing:
+                cond = str(e.condition or "").lower()
+                if approve and cond in ("", "true", "approved", "allow"):
+                    active_nodes.add(e.target)
+                elif not approve and cond in ("false", "rejected", "deny"):
+                    active_nodes.add(e.target)
 
         # Execute downstream nodes
-        for node in topological_nodes[gate_idx + 1 :]:
+        for node in topological_nodes[start_idx:]:
             if node.id not in active_nodes:
                 continue
 

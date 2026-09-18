@@ -352,7 +352,7 @@
 
 - [x] **Task 7.1 — Workflow Schema & Runtime**
 - [x] **Task 7.2 — Visual Workflow Builder**
-- [ ] **Task 7.3 — Human-in-the-Loop Gates**
+- [x] **Task 7.3 — Human-in-the-Loop Gates**
 - [ ] **Task 7.4 — Swarm Screen (Multi-Agent Parallel Execution)**
   - **User Story:** As a team lead, I want to dispatch a prompt to a parallel swarm of specialized agents and see their live progress strips and aggregated output.
   - **Deliverables:** `apps/desktop/src/renderer/screens/Swarm.tsx` (Route `/swarm`), `Swarm High` model selector, live multi-agent progress strips, aggregated output view with agent attribution, cost estimator before execution.

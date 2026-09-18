@@ -15,6 +15,7 @@ from core.workflows.models import (
     WorkflowRunStatus,
     WorkflowStatus,
 )
+from core.workflows.gates import WorkflowGateManager
 from core.workflows.parser import WorkflowParser
 from core.workflows.storage import WorkflowStorage
 
@@ -31,4 +32,5 @@ __all__ = [
     "WorkflowParser",
     "WorkflowEngine",
     "WorkflowStorage",
+    "WorkflowGateManager",
 ]
