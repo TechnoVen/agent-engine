@@ -19,6 +19,7 @@ This directory records all architectural conflict resolutions and structural dec
 | ADR-013 | Native Team Collaboration (No Switch Dependency) | Accepted | C13 |
 | ADR-014 | Collaborative Rooms as Project Overlay | Accepted | C14 |
 | ADR-015 | 90/9/1 Cost Optimization Discipline & Execution Routing | Accepted | C15 |
+| ADR-016 | Single Execution Kernel Invariant | Accepted | C16 / CTO Handoff |
 
 ---
 
@@ -74,6 +75,13 @@ This directory records all architectural conflict resolutions and structural dec
   - **Automated Fallback Tier:** In headless, containerized, or locked-keychain environments, automatically falls back to an AES-256-GCM encrypted file vault (`data/credentials.vault`) with PBKDF2-SHA256 (100,000 iterations) key derivation, machine/seed hardware anchoring, strict `0o600` permissions, and bit-flip tamper rejection.
   - **Zero Secret Leakage:** All credential query endpoints and logs enforce secret masking (`sk-...xxxx`). Plaintext values require explicit `reveal=true` parameter on individual item lookups.
 - **Consequences:** Zero plaintext secret footprint, 100% test compatibility across desktop and headless CI/CD environments, and backward compatibility with local environment variables.
+
+---
+
+### ADR-016: Single Execution Kernel Invariant
+- **Context:** Divergent execution runtimes across chat, Phase 7 workflows, and swarms created fragmented security policies, uncoordinated budget checks, and simulated/fabricated telemetry.
+- **Decision:** Establish `ExecutionCoordinator` as the sole authoritative execution engine. All requests (chat, DSPy, tools, workflow nodes, swarms, MCP, ACP) converge on the canonical 10-step execution pipeline. Direct LLM calls, standalone execution loops, and simulated node runs are prohibited in production paths. Visual canvas layout (`position: {x, y}`) is decoupled into non-semantic metadata (`layout.position`). Branching choices (`ApprovalTask`) are distinguished from cryptographic security gates (`ApprovalService`).
+- **Consequences:** Single point of governance for security, budget, context, and telemetry; zero fake success or mock costs; universal cooperative cancellation. See [`docs/ADR/016-single-execution-kernel-invariant.md`](016-single-execution-kernel-invariant.md).
 
 
 
