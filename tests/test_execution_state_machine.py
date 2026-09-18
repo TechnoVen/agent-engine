@@ -144,17 +144,99 @@ def test_cancellation_from_running(base_execution):
     assert base_execution.completed_at is not None
 
 
-def test_waiting_for_approval_and_resumption(base_execution):
-    """Verify approval gate flow: POLICY_CHECK -> WAITING_FOR_APPROVAL -> RUNNING."""
-    sm = ExecutionStateMachine(base_execution)
+def advance_to_approval(sm: ExecutionStateMachine) -> None:
     sm.transition(ExecutionStatus.CONTEXT_BUILDING)
     sm.transition(ExecutionStatus.ROUTING)
     sm.transition(ExecutionStatus.POLICY_CHECK)
+    sm.transition(ExecutionStatus.WAITING_FOR_APPROVAL)
 
-    # Gate on high-risk action
-    sm.transition(ExecutionStatus.WAITING_FOR_APPROVAL, reason="Destructive git checkout")
-    assert sm.status == ExecutionStatus.WAITING_FOR_APPROVAL
 
-    # Operator approves -> proceeds to RUNNING
+def advance_to_paused(sm: ExecutionStateMachine) -> None:
+    sm.transition(ExecutionStatus.CONTEXT_BUILDING)
+    sm.transition(ExecutionStatus.ROUTING)
+    sm.transition(ExecutionStatus.POLICY_CHECK)
+    sm.transition(ExecutionStatus.BUDGET_CHECK)
+    sm.transition(ExecutionStatus.READY)
     sm.transition(ExecutionStatus.RUNNING)
-    assert sm.status == ExecutionStatus.RUNNING
+    sm.transition(ExecutionStatus.PAUSED)
+
+
+def test_waiting_for_approval_and_resumption(base_execution):
+    """Verify approval gate flow: POLICY_CHECK -> WAITING_FOR_APPROVAL -> all resume and abort targets."""
+    # 1. WAITING_FOR_APPROVAL -> RUNNING
+    sm1 = ExecutionStateMachine(base_execution)
+    advance_to_approval(sm1)
+    sm1.transition(ExecutionStatus.RUNNING)
+    assert sm1.status == ExecutionStatus.RUNNING
+
+    # 2. WAITING_FOR_APPROVAL -> READY
+    req2 = ExecutionRequest(project_id="p2", prompt="test")
+    sm2 = ExecutionStateMachine(Execution(project_id="p2", request=req2))
+    advance_to_approval(sm2)
+    sm2.transition(ExecutionStatus.READY)
+    assert sm2.status == ExecutionStatus.READY
+
+    # 3. WAITING_FOR_APPROVAL -> QUEUED
+    req3 = ExecutionRequest(project_id="p3", prompt="test")
+    sm3 = ExecutionStateMachine(Execution(project_id="p3", request=req3))
+    advance_to_approval(sm3)
+    sm3.transition(ExecutionStatus.QUEUED)
+    assert sm3.status == ExecutionStatus.QUEUED
+
+    # 4. WAITING_FOR_APPROVAL -> BLOCKED (rejected by operator)
+    req4 = ExecutionRequest(project_id="p4", prompt="test")
+    sm4 = ExecutionStateMachine(Execution(project_id="p4", request=req4))
+    advance_to_approval(sm4)
+    sm4.transition(ExecutionStatus.BLOCKED, reason="Rejected by operator")
+    assert sm4.status == ExecutionStatus.BLOCKED
+
+    # 5. WAITING_FOR_APPROVAL -> CANCELLED
+    req5 = ExecutionRequest(project_id="p5", prompt="test")
+    sm5 = ExecutionStateMachine(Execution(project_id="p5", request=req5))
+    advance_to_approval(sm5)
+    sm5.transition(ExecutionStatus.CANCELLED)
+    assert sm5.status == ExecutionStatus.CANCELLED
+
+    # 6. WAITING_FOR_APPROVAL -> FAILED
+    req6 = ExecutionRequest(project_id="p6", prompt="test")
+    sm6 = ExecutionStateMachine(Execution(project_id="p6", request=req6))
+    advance_to_approval(sm6)
+    sm6.transition(ExecutionStatus.FAILED, error_message="Expired")
+    assert sm6.status == ExecutionStatus.FAILED
+
+
+def test_paused_resumption_and_abort_paths(base_execution):
+    """Verify PAUSED state supports resume (READY, QUEUED, RUNNING) and abort (CANCELLED, FAILED)."""
+    # 1. PAUSED -> RUNNING
+    sm1 = ExecutionStateMachine(base_execution)
+    advance_to_paused(sm1)
+    sm1.transition(ExecutionStatus.RUNNING)
+    assert sm1.status == ExecutionStatus.RUNNING
+
+    # 2. PAUSED -> READY
+    req2 = ExecutionRequest(project_id="p2", prompt="test")
+    sm2 = ExecutionStateMachine(Execution(project_id="p2", request=req2))
+    advance_to_paused(sm2)
+    sm2.transition(ExecutionStatus.READY)
+    assert sm2.status == ExecutionStatus.READY
+
+    # 3. PAUSED -> QUEUED
+    req3 = ExecutionRequest(project_id="p3", prompt="test")
+    sm3 = ExecutionStateMachine(Execution(project_id="p3", request=req3))
+    advance_to_paused(sm3)
+    sm3.transition(ExecutionStatus.QUEUED)
+    assert sm3.status == ExecutionStatus.QUEUED
+
+    # 4. PAUSED -> CANCELLED
+    req4 = ExecutionRequest(project_id="p4", prompt="test")
+    sm4 = ExecutionStateMachine(Execution(project_id="p4", request=req4))
+    advance_to_paused(sm4)
+    sm4.transition(ExecutionStatus.CANCELLED)
+    assert sm4.status == ExecutionStatus.CANCELLED
+
+    # 5. PAUSED -> FAILED
+    req5 = ExecutionRequest(project_id="p5", prompt="test")
+    sm5 = ExecutionStateMachine(Execution(project_id="p5", request=req5))
+    advance_to_paused(sm5)
+    sm5.transition(ExecutionStatus.FAILED, error_message="Worker timeout while paused")
+    assert sm5.status == ExecutionStatus.FAILED
