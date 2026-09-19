@@ -5,6 +5,13 @@ Provides the unified execution kernel models, state machine, and coordinator
 for Agent Engine.
 """
 
+from core.execution.cancellation import (
+    CancellationToken,
+    CancellationReason,
+    ExecutionCancelledError,
+    ProviderCancellationMode,
+    get_provider_cancellation_mode,
+)
 from core.execution.coordinator import ExecutionBlockedError, ExecutionCoordinator
 from core.execution.models import (
     Execution,
@@ -52,7 +59,12 @@ __all__ = [
     "ExecutionStateMachine",
     "InvalidStateTransitionError",
     "VerificationRequiredError",
-    # Coordinator
+    # Coordinator & Cancellation
     "ExecutionBlockedError",
     "ExecutionCoordinator",
+    "CancellationToken",
+    "CancellationReason",
+    "ExecutionCancelledError",
+    "ProviderCancellationMode",
+    "get_provider_cancellation_mode",
 ]

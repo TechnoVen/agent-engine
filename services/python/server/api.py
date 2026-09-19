@@ -68,6 +68,8 @@ from core.session import (
     get_session_store,
 )
 from core.execution import (
+    CancellationToken,
+    CancellationReason,
     ExecutionCoordinator,
     ExecutionEvent,
     ExecutionEventType,
@@ -1404,7 +1406,7 @@ async def chat_completions(req: ChatRequest):
     # 3. Handle Streaming Response with Real-Time Incremental Queue
     if req.stream:
         chunk_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
-        cancellation_token = asyncio.Event()
+        cancellation_token = CancellationToken(exec_req.id)
 
         def stream_event_listener(event: ExecutionEvent) -> None:
             if event.event_type == ExecutionEventType.OUTPUT_CHUNK:
@@ -1417,6 +1419,17 @@ async def chat_completions(req: ChatRequest):
                             "Streaming queue full for session %s, dropping chunk backpressure",
                             session_id,
                         )
+            elif event.event_type == ExecutionEventType.CANCELLED:
+                try:
+                    chunk_queue.put_nowait(
+                        {
+                            "event": "cancelled",
+                            "reason": event.payload.get("reason", "user_request"),
+                            "actor": event.payload.get("actor", "user"),
+                        }
+                    )
+                except Exception:
+                    pass
 
         async def run_coordinator():
             try:
@@ -1425,7 +1438,15 @@ async def chat_completions(req: ChatRequest):
                     cancellation_token=cancellation_token,
                     event_listener=stream_event_listener,
                 )
-                if res.status in (ExecutionStatus.FAILED, ExecutionStatus.BLOCKED):
+                if res.status == ExecutionStatus.CANCELLED:
+                    await chunk_queue.put(
+                        {
+                            "event": "cancelled",
+                            "reason": res.error or "Execution cancelled",
+                            "result": res,
+                        }
+                    )
+                elif res.status in (ExecutionStatus.FAILED, ExecutionStatus.BLOCKED):
                     _, err_code, err_msg = _map_execution_error(res)
                     await chunk_queue.put(
                         {
@@ -1468,6 +1489,19 @@ async def chat_completions(req: ChatRequest):
                         }
                         yield f"data: {json.dumps(payload)}\n\n"
 
+                    elif ev_type == "cancelled":
+                        reason = item.get("reason", "Execution cancelled")
+                        payload = {
+                            "event": "cancelled",
+                            "session_id": session_id,
+                            "execution_id": exec_req.id,
+                            "status": "CANCELLED",
+                            "reason": reason,
+                            "timestamp": datetime.datetime.now().isoformat(),
+                        }
+                        yield f"event: cancelled\ndata: {json.dumps(payload)}\n\n"
+                        break
+
                     elif ev_type == "error":
                         err_code = item.get("error_code", "DISPATCH_FAILED")
                         err_msg = item.get("error", "Execution failed")
@@ -1506,13 +1540,21 @@ async def chat_completions(req: ChatRequest):
 
             except (asyncio.CancelledError, GeneratorExit):
                 logger.info("Client disconnected from SSE stream for session %s", session_id)
-                cancellation_token.set()
+                coordinator.cancel(
+                    exec_req.id,
+                    reason=CancellationReason.CLIENT_DISCONNECT,
+                    actor="client",
+                )
                 if not coord_task.done():
                     coord_task.cancel()
                 raise
             finally:
                 if not coord_task.done():
-                    cancellation_token.set()
+                    coordinator.cancel(
+                        exec_req.id,
+                        reason=CancellationReason.CLIENT_DISCONNECT,
+                        actor="client",
+                    )
                     coord_task.cancel()
                     try:
                         await coord_task
@@ -1557,6 +1599,18 @@ async def chat_completions(req: ChatRequest):
 
     # 4. Handle Non-Streaming Execution
     result = await coordinator.execute(exec_req)
+
+    if result.status == ExecutionStatus.CANCELLED:
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "execution_id": result.execution_id,
+                "status": "cancelled",
+                "error_code": "CANCELLED",
+                "message": result.error or "Execution cancelled",
+                "partial_output": result.partial_output,
+            },
+        )
 
     if result.status in (ExecutionStatus.FAILED, ExecutionStatus.BLOCKED):
         http_status, error_code, error_msg = _map_execution_error(result)
@@ -1616,6 +1670,113 @@ async def chat_completions(req: ChatRequest):
         provider_used=result.provider_used,
         routing_tier=result.routing_tier.value if result.routing_tier else None,
     )
+
+
+class CancelExecutionRequest(BaseModel):
+    reason: Optional[str] = "user_request"
+    actor: Optional[str] = "user"
+
+
+@v1_router.post("/executions/{execution_id}/cancel")
+async def cancel_execution_endpoint(
+    execution_id: str,
+    req: Optional[CancelExecutionRequest] = None,
+    coordinator: ExecutionCoordinator = Depends(get_execution_coordinator),
+):
+    """Canonical cancellation endpoint for in-flight or queued executions."""
+    reason = req.reason if req and req.reason else "user_request"
+    actor = req.actor if req and req.actor else "user"
+
+    # 1. Inspect current execution state
+    record = coordinator.get_execution(execution_id)
+    if not record:
+        active_exec = coordinator._active_executions.get(execution_id)
+        if not active_exec:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Execution '{execution_id}' not found",
+            )
+        status_val = (
+            active_exec.status.value
+            if hasattr(active_exec.status, "value")
+            else str(active_exec.status)
+        )
+    else:
+        status_val = record.get("status")
+
+    # 2. Terminal state conflict check: completed cannot become cancelled
+    if status_val == "completed":
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "error_code": "TERMINAL_STATE_CONFLICT",
+                "detail": "Execution already completed",
+                "status": "completed",
+                "execution_id": execution_id,
+            },
+        )
+
+    # 3. Idempotent check: already cancelled
+    if status_val == "cancelled":
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "execution_id": execution_id,
+                "status": "cancelled",
+                "cancellation_requested": False,
+                "message": "Execution already cancelled",
+            },
+        )
+
+    # 4. Invoke coordinator.cancel
+    try:
+        res = coordinator.cancel(execution_id, reason=reason, actor=actor)
+    except ValueError as val_err:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(val_err),
+        )
+
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=res,
+    )
+
+
+@v1_router.get("/executions/{execution_id}")
+async def get_execution_endpoint(
+    execution_id: str,
+    coordinator: ExecutionCoordinator = Depends(get_execution_coordinator),
+):
+    """Retrieve execution details by ID."""
+    record = coordinator.get_execution(execution_id)
+    if not record:
+        active_exec = coordinator._active_executions.get(execution_id)
+        if active_exec:
+            record = active_exec.model_dump()
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution '{execution_id}' not found",
+        )
+    return JSONResponse(content=record)
+
+
+@v1_router.get("/executions/{execution_id}/events")
+async def get_execution_events_endpoint(
+    execution_id: str,
+    after_sequence_num: Optional[int] = Query(None),
+    coordinator: ExecutionCoordinator = Depends(get_execution_coordinator),
+):
+    """Retrieve durable events recorded for an execution."""
+    record = coordinator.get_execution(execution_id)
+    if not record and execution_id not in coordinator._active_executions:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution '{execution_id}' not found",
+        )
+    events = coordinator.get_execution_events(execution_id, after_sequence_num=after_sequence_num)
+    return JSONResponse(content={"execution_id": execution_id, "events": events})
 
 
 @v1_router.get("/events")

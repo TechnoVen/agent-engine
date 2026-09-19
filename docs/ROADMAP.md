@@ -492,11 +492,11 @@ A real desktop request travels through project/session context, routing, a real 
 - **Required Evidence:**
   - Streaming timing E2E test (`tests/test_r1_reconciliation.py`).
 
-### [ ] R1.9 — Real cancellation
+### [x] R1.9 — Real cancellation
 
 - **Migration:** `NEW`
 - **Target release:** `0.5`
-- **Initial maturity:** `S0` unless `docs/STATUS.md` verifies a higher level from legacy work.
+- **Initial maturity:** `S1`
 - **Dependencies:** R1.8
 - **User Story:** As Nadir, I want Stop to cancel actual model/tool work so I remain in control.
 - **Deliverables:**
@@ -504,10 +504,10 @@ A real desktop request travels through project/session context, routing, a real 
   - Provider/tool adapters implement cancellation where possible.
   - Graceful fallback where upstream cannot cancel.
 - **Acceptance Criteria:**
-  - [ ] Stop prevents further tool dispatch.
-  - [ ] Execution becomes CANCELLED, not COMPLETED.
+  - [x] Stop prevents further tool dispatch.
+  - [x] Execution becomes CANCELLED, not COMPLETED.
 - **Required Evidence:**
-  - Cancellation E2E test with slow provider/tool stubs.
+  - Cancellation E2E test with slow provider/tool stubs (`tests/test_cancellation.py`).
 
 ### [ ] R1.10 — Execution artifact model
 

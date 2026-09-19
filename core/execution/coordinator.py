@@ -7,11 +7,17 @@ References: docs/EXECUTION_MODEL.md, docs/DATA_MODEL.md, docs/ROADMAP.md
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import logging
 import time
 from typing import Any, Callable, Dict, List, Optional
 
 from core.context.builder import ContextSpec, build_context, estimate_tokens
+from core.execution.cancellation import (
+    CancellationToken,
+    CancellationReason,
+    ExecutionCancelledError,
+)
 from core.execution.models import (
     Execution,
     ExecutionContext,
@@ -22,10 +28,11 @@ from core.execution.models import (
     ExecutionStatus,
     RoutingTier,
     VerificationResult,
+    current_timestamp_iso,
     generate_execution_id,
 )
 from core.execution.state import ExecutionStateMachine
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
     from core.router.model_router import ResolvedModel
@@ -76,6 +83,128 @@ class ExecutionCoordinator:
         self.pending_registry = pending_registry or PendingOperationRegistry()
         self._dispatch_override = dispatch_override
         self._active_executions: Dict[str, Execution] = {}
+        self._active_tokens: Dict[str, CancellationToken] = {}
+        self._active_state_machines: Dict[str, ExecutionStateMachine] = {}
+
+    def get_cancellation_token(self, execution_id: str) -> Optional[CancellationToken]:
+        """Lookup in-flight cancellation token for an execution."""
+        return self._active_tokens.get(execution_id)
+
+    def cancel(
+        self,
+        execution_id: str,
+        reason: str | CancellationReason = CancellationReason.USER_REQUEST,
+        actor: Optional[str] = "user",
+    ) -> Dict[str, Any]:
+        """Request cancellation of an active or queued execution.
+
+        Idempotent, safe against races, and strictly respects terminal state immutability.
+        """
+        reason_str = reason.value if isinstance(reason, CancellationReason) else str(reason)
+        actor_str = actor or "user"
+
+        # Signal in-flight token if registered
+        token = self._active_tokens.get(execution_id)
+
+        # Retrieve execution from memory or storage
+        execution = self._active_executions.get(execution_id)
+        if not execution:
+            persisted = self.storage.get_execution(execution_id)
+            if persisted:
+                execution = Execution.model_validate(persisted)
+
+        if not execution:
+            raise ValueError(f"Execution '{execution_id}' not found")
+
+        # Canonicalize to execution primary key
+        execution_id = execution.id
+        if not token:
+            token = self._active_tokens.get(execution_id)
+        if token:
+            token.cancel(reason=reason_str, actor=actor_str)
+
+        # Terminal state handling: immutable outcome
+        if execution.status in (
+            ExecutionStatus.COMPLETED,
+            ExecutionStatus.FAILED,
+            ExecutionStatus.CANCELLED,
+            ExecutionStatus.TIMED_OUT,
+            ExecutionStatus.BLOCKED,
+        ):
+            return {
+                "execution_id": execution_id,
+                "status": execution.status.value,
+                "cancellation_requested": False,
+                "message": f"Execution already terminated with status '{execution.status.value}'",
+                "cancelled_at": getattr(token, "cancelled_at", None),
+            }
+
+        # For states waiting or paused or not actively in async loop, transition directly
+        sm = self._active_state_machines.get(execution_id)
+        cancelled_at = token.cancelled_at if token else datetime.now(timezone.utc).isoformat()
+        if sm and execution.status in (
+            ExecutionStatus.QUEUED,
+            ExecutionStatus.WAITING_FOR_APPROVAL,
+            ExecutionStatus.PAUSED,
+            ExecutionStatus.READY,
+            ExecutionStatus.CREATED,
+        ):
+            try:
+                sm.transition(
+                    ExecutionStatus.CANCELLED,
+                    reason=f"Cancelled by {actor_str}: {reason_str}",
+                )
+                execution.status = ExecutionStatus.CANCELLED
+                execution.error_code = "CANCELLED"
+                execution.error_message = reason_str
+                execution.completed_at = cancelled_at
+                self.storage.update_execution(execution_id, execution.model_dump())
+                ev = ExecutionEvent(
+                    execution_id=execution_id,
+                    sequence_num=sm.current_sequence_num,
+                    event_type=ExecutionEventType.CANCELLED,
+                    payload={
+                        "reason": reason_str,
+                        "actor": actor_str,
+                        "cancelled_at": cancelled_at,
+                    },
+                )
+                self.storage.record_execution_event(ev.model_dump())
+                sm.current_sequence_num += 1
+            except Exception as ex:
+                logger.warning("Error transitioning %s to CANCELLED: %s", execution_id, ex)
+        elif not sm and execution.status in (
+            ExecutionStatus.QUEUED,
+            ExecutionStatus.WAITING_FOR_APPROVAL,
+            ExecutionStatus.PAUSED,
+            ExecutionStatus.READY,
+            ExecutionStatus.CREATED,
+        ):
+            execution.status = ExecutionStatus.CANCELLED
+            execution.error_code = "CANCELLED"
+            execution.error_message = reason_str
+            execution.completed_at = cancelled_at
+            self.storage.update_execution(execution_id, execution.model_dump())
+            ev = ExecutionEvent(
+                execution_id=execution_id,
+                sequence_num=999,
+                event_type=ExecutionEventType.CANCELLED,
+                payload={
+                    "reason": reason_str,
+                    "actor": actor_str,
+                    "cancelled_at": cancelled_at,
+                },
+            )
+            self.storage.record_execution_event(ev.model_dump())
+
+        return {
+            "execution_id": execution_id,
+            "status": ExecutionStatus.CANCELLED.value,
+            "cancellation_requested": True,
+            "reason": reason_str,
+            "actor": actor_str,
+            "cancelled_at": cancelled_at,
+        }
 
     def _resolve_routing(self, request: ExecutionRequest) -> Any:
         """Resolve routing tier, provider, and concrete model name using ModelRouter."""
@@ -189,7 +318,7 @@ class ExecutionCoordinator:
     async def execute(
         self,
         request: ExecutionRequest,
-        cancellation_token: Optional[asyncio.Event] = None,
+        cancellation_token: Optional[Union[CancellationToken, asyncio.Event]] = None,
         event_listener: Optional[Callable[[ExecutionEvent], None]] = None,
     ) -> ExecutionResult:
         """
@@ -224,6 +353,85 @@ class ExecutionCoordinator:
         state_machine = ExecutionStateMachine(execution, event_sink=combined_event_sink)
         self.storage.create_execution(execution.model_dump())
         self._active_executions[exec_id] = execution
+        self._active_executions[request.id] = execution
+
+        # Setup canonical cancellation token
+        if cancellation_token is None:
+            token = CancellationToken(exec_id)
+        elif isinstance(cancellation_token, CancellationToken):
+            token = cancellation_token
+        elif isinstance(cancellation_token, asyncio.Event):
+            token = CancellationToken(exec_id)
+            if cancellation_token.is_set():
+                token.cancel()
+        else:
+            token = CancellationToken(exec_id)
+
+        self._active_tokens[exec_id] = token
+        self._active_tokens[request.id] = token
+        self._active_state_machines[exec_id] = state_machine
+        self._active_state_machines[request.id] = state_machine
+
+        def handle_cancellation(
+            stage_name: str, partial_text: Optional[str] = None
+        ) -> ExecutionResult:
+            if (
+                state_machine.status == ExecutionStatus.COMPLETED
+                or execution.status == ExecutionStatus.COMPLETED
+            ):
+                duration_ms = (time.perf_counter() - start_time) * 1000.0
+                return ExecutionResult(
+                    execution_id=exec_id,
+                    status=ExecutionStatus.COMPLETED,
+                    outputs={"response": partial_text or ""},
+                    duration_ms=duration_ms,
+                    model_used=execution.model,
+                    provider_used=execution.provider,
+                    routing_tier=execution.routing_tier,
+                )
+            reason = token.reason or "user_request"
+            actor = token.actor or "user"
+            cancelled_at = token.cancelled_at or current_timestamp_iso()
+            if not state_machine.is_terminal:
+                try:
+                    state_machine.transition(
+                        ExecutionStatus.CANCELLED,
+                        reason=f"Cancelled during {stage_name} by {actor}: {reason}",
+                    )
+                except Exception:
+                    pass
+                combined_event_sink(
+                    ExecutionEvent(
+                        execution_id=exec_id,
+                        sequence_num=state_machine.current_sequence_num,
+                        event_type=ExecutionEventType.CANCELLED,
+                        payload={
+                            "reason": reason,
+                            "actor": actor,
+                            "cancelled_at": cancelled_at,
+                            "stage": stage_name,
+                        },
+                    )
+                )
+                state_machine.current_sequence_num += 1
+            execution.status = ExecutionStatus.CANCELLED
+            execution.error_code = "CANCELLED"
+            execution.error_message = reason
+            execution.completed_at = cancelled_at
+            self.storage.update_execution(exec_id, execution.model_dump())
+            duration_ms = (time.perf_counter() - start_time) * 1000.0
+            return ExecutionResult(
+                execution_id=exec_id,
+                status=ExecutionStatus.CANCELLED,
+                outputs={"partial_output": partial_text} if partial_text else {},
+                partial_output=partial_text,
+                error=f"Execution cancelled: {reason}",
+                error_code="CANCELLED",
+                duration_ms=duration_ms,
+                model_used=execution.model,
+                provider_used=execution.provider,
+                routing_tier=execution.routing_tier,
+            )
 
         # Emit initial state event
         combined_event_sink(
@@ -238,17 +446,8 @@ class ExecutionCoordinator:
 
         try:
             # Early cancellation check
-            if cancellation_token and cancellation_token.is_set():
-                state_machine.transition(
-                    ExecutionStatus.CANCELLED, reason="Cancelled before context building"
-                )
-                self.storage.update_execution(exec_id, execution.model_dump())
-                return ExecutionResult(
-                    execution_id=exec_id,
-                    status=ExecutionStatus.CANCELLED,
-                    error="Execution cancelled by user",
-                    error_code="CANCELLED",
-                )
+            if token.is_cancelled:
+                return handle_cancellation("pre_context")
 
             # Phase 2: Context Assembly
             state_machine.transition(ExecutionStatus.CONTEXT_BUILDING)
@@ -380,6 +579,7 @@ class ExecutionCoordinator:
                 conversation_history=conversation_history,
                 context_provenance=context_provenance,
                 token_budget=request.token_budget,
+                cancellation_token=token,
             )
 
             # Phase 3: Routing & Tier Resolution
@@ -518,17 +718,8 @@ class ExecutionCoordinator:
                 )
 
             # Cancellation check before running
-            if cancellation_token and cancellation_token.is_set():
-                state_machine.transition(
-                    ExecutionStatus.CANCELLED, reason="Cancelled before dispatch"
-                )
-                self.storage.update_execution(exec_id, execution.model_dump())
-                return ExecutionResult(
-                    execution_id=exec_id,
-                    status=ExecutionStatus.CANCELLED,
-                    error="Execution cancelled by user",
-                    error_code="CANCELLED",
-                )
+            if token.is_cancelled:
+                return handle_cancellation("pre_dispatch")
 
             # Phase 7: Execution Dispatch
             state_machine.transition(ExecutionStatus.RUNNING)
@@ -542,6 +733,8 @@ class ExecutionCoordinator:
 
             def emit_chunk(chunk_str: str) -> None:
                 nonlocal chunks_emitted
+                if token.is_cancelled:
+                    return
                 if chunk_str:
                     combined_event_sink(
                         ExecutionEvent(
@@ -558,32 +751,53 @@ class ExecutionCoordinator:
                 res = self._dispatch_override(exec_context, tier, provider, model_name)
                 if hasattr(res, "__aiter__"):
                     collected = []
-                    async for chunk in res:
-                        if cancellation_token and cancellation_token.is_set():
-                            break
-                        chunk_text = (
-                            chunk
-                            if isinstance(chunk, str)
-                            else chunk.get("chunk", chunk.get("response", str(chunk)))
-                        )
-                        collected.append(chunk_text)
-                        emit_chunk(chunk_text)
+                    try:
+                        async for chunk in res:
+                            if token.is_cancelled:
+                                if hasattr(res, "aclose"):
+                                    await res.aclose()
+                                break
+                            chunk_text = (
+                                chunk
+                                if isinstance(chunk, str)
+                                else chunk.get("chunk", chunk.get("response", str(chunk)))
+                            )
+                            collected.append(chunk_text)
+                            emit_chunk(chunk_text)
+                    except (asyncio.CancelledError, ExecutionCancelledError):
+                        token.cancel(reason=CancellationReason.CLIENT_DISCONNECT, actor="client")
+                    if token.is_cancelled:
+                        return handle_cancellation("dispatch_override", "".join(collected))
                     outputs = {"response": "".join(collected)}
                 elif hasattr(res, "__iter__") and not isinstance(res, (dict, list, str, bytes)):
                     collected = []
-                    for chunk in res:
-                        if cancellation_token and cancellation_token.is_set():
-                            break
-                        chunk_text = (
-                            chunk
-                            if isinstance(chunk, str)
-                            else chunk.get("chunk", chunk.get("response", str(chunk)))
-                        )
-                        collected.append(chunk_text)
-                        emit_chunk(chunk_text)
+                    try:
+                        for chunk in res:
+                            if token.is_cancelled:
+                                if hasattr(res, "close"):
+                                    res.close()
+                                break
+                            chunk_text = (
+                                chunk
+                                if isinstance(chunk, str)
+                                else chunk.get("chunk", chunk.get("response", str(chunk)))
+                            )
+                            collected.append(chunk_text)
+                            emit_chunk(chunk_text)
+                    except (asyncio.CancelledError, ExecutionCancelledError):
+                        token.cancel(reason=CancellationReason.CLIENT_DISCONNECT, actor="client")
+                    if token.is_cancelled:
+                        return handle_cancellation("dispatch_override", "".join(collected))
                     outputs = {"response": "".join(collected)}
                 elif asyncio.iscoroutine(res):
-                    awaited = await res
+                    task = asyncio.create_task(res)
+                    token.add_callback(task.cancel)
+                    try:
+                        awaited = await task
+                    except (asyncio.CancelledError, ExecutionCancelledError):
+                        return handle_cancellation("dispatch_override")
+                    if token.is_cancelled:
+                        return handle_cancellation("dispatch_override")
                     if isinstance(awaited, dict):
                         outputs = awaited
                     else:
@@ -647,14 +861,26 @@ class ExecutionCoordinator:
                     assembled += f"User: {request.prompt}\nAssistant:"
 
                     try:
+                        if token.is_cancelled:
+                            return handle_cancellation("pre_provider")
                         lm, _ = self.model_router.create_lm(provider, model_name=model_name)
                         if hasattr(lm, "stream") and request.inputs.get("stream"):
                             chunks = []
-                            for c in lm.stream(assembled):
-                                if cancellation_token and cancellation_token.is_set():
-                                    break
-                                chunks.append(c)
-                                emit_chunk(c)
+                            stream_gen = lm.stream(assembled)
+                            try:
+                                for c in stream_gen:
+                                    if token.is_cancelled:
+                                        if hasattr(stream_gen, "close"):
+                                            stream_gen.close()
+                                        break
+                                    chunks.append(c)
+                                    emit_chunk(c)
+                            except (asyncio.CancelledError, ExecutionCancelledError):
+                                token.cancel(
+                                    reason=CancellationReason.CLIENT_DISCONNECT, actor="client"
+                                )
+                            if token.is_cancelled:
+                                return handle_cancellation("provider_stream", "".join(chunks))
                             full_text = "".join(chunks)
                         else:
                             raw_res = lm(assembled)
@@ -667,6 +893,10 @@ class ExecutionCoordinator:
                         }
                         completion_tokens = max(1, estimate_tokens(full_text))
                     except Exception as prov_err:
+                        if token.is_cancelled:
+                            return handle_cancellation(
+                                "provider_stream", "".join(locals().get("chunks", []))
+                            )
                         logger.warning(
                             "Provider '%s/%s' dispatch failed: %s", provider, model_name, prov_err
                         )
@@ -685,16 +915,31 @@ class ExecutionCoordinator:
                                 "Failing over to fallback provider '%s/%s'", fb_provider, fb_model
                             )
                             try:
+                                if token.is_cancelled:
+                                    return handle_cancellation("pre_provider")
                                 lm, _ = self.model_router.create_lm(
                                     fb_provider, model_name=fb_model
                                 )
                                 if hasattr(lm, "stream") and request.inputs.get("stream"):
                                     chunks = []
-                                    for c in lm.stream(assembled):
-                                        if cancellation_token and cancellation_token.is_set():
-                                            break
-                                        chunks.append(c)
-                                        emit_chunk(c)
+                                    stream_gen = lm.stream(assembled)
+                                    try:
+                                        for c in stream_gen:
+                                            if token.is_cancelled:
+                                                if hasattr(stream_gen, "close"):
+                                                    stream_gen.close()
+                                                break
+                                            chunks.append(c)
+                                            emit_chunk(c)
+                                    except (asyncio.CancelledError, ExecutionCancelledError):
+                                        token.cancel(
+                                            reason=CancellationReason.CLIENT_DISCONNECT,
+                                            actor="client",
+                                        )
+                                    if token.is_cancelled:
+                                        return handle_cancellation(
+                                            "provider_stream", "".join(chunks)
+                                        )
                                     full_text = "".join(chunks)
                                 else:
                                     raw_res = lm(assembled)
@@ -713,6 +958,8 @@ class ExecutionCoordinator:
                                 execution.model = model_name
                                 completion_tokens = max(1, estimate_tokens(full_text))
                             except Exception as fb_err:
+                                if token.is_cancelled:
+                                    return handle_cancellation("provider_stream")
                                 raise RuntimeError(
                                     f"Fallback provider '{fb_provider}' also failed: {fb_err}"
                                 ) from fb_err
@@ -726,19 +973,12 @@ class ExecutionCoordinator:
                 emit_chunk(str(outputs.get("response", "")))
 
             # Cancellation check during/after execution
-            if cancellation_token and cancellation_token.is_set():
-                state_machine.transition(
-                    ExecutionStatus.CANCELLED, reason="Cancelled during dispatch"
-                )
-                self.storage.update_execution(exec_id, execution.model_dump())
-                return ExecutionResult(
-                    execution_id=exec_id,
-                    status=ExecutionStatus.CANCELLED,
-                    error="Execution cancelled during dispatch",
-                    error_code="CANCELLED",
-                )
+            if token.is_cancelled:
+                return handle_cancellation("post_dispatch", str(outputs.get("response", "")))
 
             # Phase 8: Output Verification
+            if token.is_cancelled:
+                return handle_cancellation("pre_verification", str(outputs.get("response", "")))
             state_machine.transition(ExecutionStatus.VERIFYING)
             combined_event_sink(
                 ExecutionEvent(
@@ -781,6 +1021,9 @@ class ExecutionCoordinator:
             execution.input_tokens = prompt_tokens
             execution.output_tokens = completion_tokens
             execution.total_cost_usd = cost_usd
+
+            if token.is_cancelled:
+                return handle_cancellation("pre_completion", str(outputs.get("response", "")))
 
             if verification.passed:
                 state_machine.transition(ExecutionStatus.COMPLETED, verification=verification)
@@ -826,7 +1069,14 @@ class ExecutionCoordinator:
                 verification=verification,
             )
 
+        except (asyncio.CancelledError, ExecutionCancelledError) as c_err:
+            reason = getattr(c_err, "reason", None) or token.reason or "user_request"
+            actor = getattr(c_err, "actor", None) or token.actor or "user"
+            token.cancel(reason=reason, actor=actor)
+            return handle_cancellation("interrupted")
         except Exception as err:
+            if token.is_cancelled:
+                return handle_cancellation("interrupted")
             logger.exception("Execution '%s' encountered an unhandled error: %s", exec_id, err)
             err_str = str(err)
             if "CROSS_PROJECT_VIOLATION" in err_str:
@@ -871,6 +1121,11 @@ class ExecutionCoordinator:
             )
         finally:
             self._active_executions.pop(exec_id, None)
+            self._active_executions.pop(request.id, None)
+            self._active_tokens.pop(exec_id, None)
+            self._active_tokens.pop(request.id, None)
+            self._active_state_machines.pop(exec_id, None)
+            self._active_state_machines.pop(request.id, None)
 
     def get_execution(self, execution_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve execution by primary key."""

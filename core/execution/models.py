@@ -114,6 +114,8 @@ class ExecutionRequest(BaseModel):
 class ExecutionContext(BaseModel):
     """Assembled operational context passed to dispatch."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     execution_id: str
     project_id: str
     project_root: str
@@ -126,6 +128,7 @@ class ExecutionContext(BaseModel):
     context_provenance: Dict[str, Any] = Field(default_factory=dict)
     token_budget: int = 8000
     security_policy_id: str = "default"
+    cancellation_token: Optional[Any] = None
     created_at: str = Field(default_factory=current_timestamp_iso)
 
 

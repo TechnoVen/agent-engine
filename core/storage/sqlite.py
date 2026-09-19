@@ -2256,7 +2256,7 @@ class SQLiteBackend(StorageBackend):
     def get_execution_events(
         self, execution_id: str, after_sequence_num: Optional[int] = None
     ) -> List[Dict[str, Any]]:
-        """Retrieve ordered event stream for an execution."""
+        """Retrieve ordered event stream for an execution by execution_id or request_id."""
         with self._lock:
             conn = self._get_connection()
             try:

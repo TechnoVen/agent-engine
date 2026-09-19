@@ -285,13 +285,28 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/execution/coordinator.py"
     - "tests/test_r1_reconciliation.py"
   notes: "Implemented genuine real-time incremental provider streaming over bounded queues (maxsize=1000) with backpressure and client disconnect cancellation. Eliminated SQLite write amplification for transient token deltas/output chunks while forwarding live SSE chunks. Assistant message persisted to UnifiedSessionStore exactly once upon stream completion, with structured domain error codes on mid-stream failure."
+
+- id: R1.9
+  title: "Real cancellation"
+  task_status: done
+  capability_maturity: S1
+  migration: NEW
+  owner: "Execution Kernel"
+  depends_on: [R1.8]
+  evidence:
+    - "core/execution/cancellation.py"
+    - "core/execution/coordinator.py"
+    - "services/python/server/api.py"
+    - "tests/test_cancellation.py"
+  notes: "Implemented canonical CancellationToken primitive with cancellation reason/actor/timestamp metadata, cooperative generator cancellation via aclose()/close(), process termination registry with bounded SIGTERM-to-SIGKILL escalation, REST cancellation API endpoints (POST /v1/executions/{id}/cancel, GET /v1/executions/{id}, GET /v1/executions/{id}/events), SSE cancellation events, zero chunk emission after cancellation, strict terminal state immutability, and guarantee of zero assistant turn persistence to UnifiedSessionStore on cancelled executions."
 ```
 
 ---
 
 ## 6. Active Test Suite & Deprecation Warnings Log
 
-- **Test Suite Result:** `406 passed, 3 warnings in 55.05s` (`uv run pytest`)
+- **Test Suite Result:** `423 passed, 3 warnings in 57.73s` (`uv run pytest`)
+- **Cancellation Suite:** `14 passed in 6.42s` (`uv run pytest tests/test_cancellation.py`)
 - **Documented Upstream Warnings (Non-blocking):**
   1. `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.` (Origin: `fastapi/testclient.py:1` — Upstream FastAPI/Starlette testclient deprecation notice; non-runtime).
   2. `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.` (Origin: `starlette/testclient.py:53` — Upstream Starlette/AnyIO import alias notice; non-runtime).
