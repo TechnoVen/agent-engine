@@ -65,6 +65,16 @@ class ExecutionEventType(str, Enum):
     CANCELLED = "cancelled"
     ERROR = "error"
 
+    @property
+    def is_durable(self) -> bool:
+        """Whether this event type must be durably stored in the SQLite execution ledger."""
+        return self not in (ExecutionEventType.TOKEN_DELTA, ExecutionEventType.OUTPUT_CHUNK)
+
+    @property
+    def is_transient(self) -> bool:
+        """Whether this event type is ephemeral/transient for streaming UI responsiveness."""
+        return not self.is_durable
+
 
 def generate_execution_id() -> str:
     return f"exec_{uuid.uuid4().hex[:16]}"
@@ -135,6 +145,7 @@ class ExecutionResult(BaseModel):
     execution_id: str
     status: ExecutionStatus
     outputs: Dict[str, Any] = Field(default_factory=dict)
+    partial_output: Optional[str] = None
     error: Optional[str] = None
     error_code: Optional[str] = None
     total_tokens: int = 0
@@ -160,6 +171,21 @@ class ExecutionEvent(BaseModel):
     timestamp: str = Field(default_factory=current_timestamp_iso)
     event_type: ExecutionEventType
     payload: Dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def is_durable(self) -> bool:
+        """Whether this event must be durably stored in the SQLite execution ledger."""
+        if isinstance(self.event_type, ExecutionEventType):
+            return self.event_type.is_durable
+        try:
+            return ExecutionEventType(str(self.event_type)).is_durable
+        except Exception:
+            return True
+
+    @property
+    def is_transient(self) -> bool:
+        """Whether this event is ephemeral/transient for streaming UI responsiveness."""
+        return not self.is_durable
 
 
 class Execution(BaseModel):

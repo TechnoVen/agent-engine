@@ -208,11 +208,8 @@ class ExecutionCoordinator:
         )
 
         def combined_event_sink(event: ExecutionEvent) -> None:
-            # Persist event to storage (transient token/output chunks bypass SQLite to avoid write amplification)
-            if event.event_type not in (
-                ExecutionEventType.OUTPUT_CHUNK,
-                ExecutionEventType.TOKEN_DELTA,
-            ):
+            # Persist durable events to storage (transient token/output chunks bypass SQLite to avoid write amplification)
+            if event.is_durable:
                 try:
                     self.storage.record_execution_event(event.model_dump())
                 except Exception as ex:

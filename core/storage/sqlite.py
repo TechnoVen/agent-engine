@@ -297,21 +297,80 @@ class SQLiteBackend(StorageBackend):
                 cursor.execute(
                     "CREATE INDEX IF NOT EXISTS idx_projects_is_default ON projects(is_default)"
                 )
-                # Migrate any legacy 'default' project to 'proj_default'
+                # Migrate any legacy 'default' or 'proj_default' project records to a canonical proj_<hex12> ID
+                cursor.execute("SELECT id FROM projects WHERE id IN ('default', 'proj_default')")
+                legacy_rows = cursor.fetchall()
+                if legacy_rows:
+                    legacy_ids = [row[0] for row in legacy_rows]
+                    cursor.execute(
+                        "SELECT id FROM projects WHERE is_default = 1 AND id NOT IN ('default', 'proj_default') LIMIT 1"
+                    )
+                    existing_canonical_default = cursor.fetchone()
+                    if existing_canonical_default:
+                        canonical_default_id = existing_canonical_default[0]
+                        for lid in legacy_ids:
+                            cursor.execute(
+                                "UPDATE executions SET project_id = ? WHERE project_id = ?",
+                                (canonical_default_id, lid),
+                            )
+                            cursor.execute(
+                                "UPDATE cost_records SET project = ? WHERE project = ?",
+                                (canonical_default_id, lid),
+                            )
+                            cursor.execute("DELETE FROM projects WHERE id = ?", (lid,))
+                    else:
+                        canonical_default_id = f"proj_{uuid.uuid4().hex[:12]}"
+                        first_lid = legacy_ids[0]
+                        cursor.execute(
+                            "UPDATE projects SET id = ?, is_default = 1 WHERE id = ?",
+                            (canonical_default_id, first_lid),
+                        )
+                        cursor.execute(
+                            "UPDATE executions SET project_id = ? WHERE project_id = ?",
+                            (canonical_default_id, first_lid),
+                        )
+                        cursor.execute(
+                            "UPDATE cost_records SET project = ? WHERE project = ?",
+                            (canonical_default_id, first_lid),
+                        )
+                        for other_lid in legacy_ids[1:]:
+                            cursor.execute(
+                                "UPDATE executions SET project_id = ? WHERE project_id = ?",
+                                (canonical_default_id, other_lid),
+                            )
+                            cursor.execute(
+                                "UPDATE cost_records SET project = ? WHERE project = ?",
+                                (canonical_default_id, other_lid),
+                            )
+                            cursor.execute("DELETE FROM projects WHERE id = ?", (other_lid,))
+                    conn.commit()
+
+                # Cascade any executions or cost records still referencing legacy aliases to the canonical default project
                 cursor.execute(
-                    "UPDATE projects SET id = 'proj_default', is_default = 1 WHERE id = 'default'"
+                    "SELECT id FROM projects WHERE is_default = 1 ORDER BY created_at ASC LIMIT 1"
                 )
-                cursor.execute(
-                    "UPDATE executions SET project_id = 'proj_default' WHERE project_id = 'default'"
-                )
-                cursor.execute(
-                    "UPDATE cost_records SET project = 'proj_default' WHERE project = 'default'"
-                )
-                cursor.execute("""
-                    INSERT OR IGNORE INTO projects (id, name, description, root_path, instructions, settings_json, is_default, created_at, updated_at)
-                    VALUES ('proj_default', 'Default Project', 'Default workspace project', '/workspace', '', '{}', 1, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
-                """)
-                conn.commit()
+                def_row = cursor.fetchone()
+                if def_row:
+                    target_def_id = def_row[0]
+                    cursor.execute(
+                        "UPDATE executions SET project_id = ? WHERE project_id IN ('default', 'proj_default')",
+                        (target_def_id,),
+                    )
+                    cursor.execute(
+                        "UPDATE cost_records SET project = ? WHERE project IN ('default', 'proj_default')",
+                        (target_def_id,),
+                    )
+                    conn.commit()
+                else:
+                    canonical_default_id = f"proj_{uuid.uuid4().hex[:12]}"
+                    cursor.execute(
+                        """
+                        INSERT INTO projects (id, name, description, root_path, instructions, settings_json, is_default, created_at, updated_at)
+                        VALUES (?, 'Default Project', 'Default workspace project', '/workspace', '', '{}', 1, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+                    """,
+                        (canonical_default_id,),
+                    )
+                    conn.commit()
 
                 # Migration check: ensure 'project' column exists in existing database
                 cursor.execute("PRAGMA table_info(cost_records)")
@@ -2229,7 +2288,7 @@ class SQLiteBackend(StorageBackend):
 
     def create_project(self, project: Dict[str, Any]) -> Dict[str, Any]:
         """Create and persist a canonical project."""
-        proj_id = project["id"]
+        proj_id = project.get("id") or f"proj_{uuid.uuid4().hex[:12]}"
         name = project["name"]
         description = project.get("description")
         root_path = project.get("root_path", f"/workspace/{proj_id}")
@@ -2247,6 +2306,8 @@ class SQLiteBackend(StorageBackend):
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
+                if is_default:
+                    cursor.execute("UPDATE projects SET is_default = 0 WHERE is_default = 1")
                 cursor.execute(
                     """
                     INSERT INTO projects (id, name, description, root_path, instructions, settings_json, is_default, created_at, updated_at)
@@ -2272,15 +2333,14 @@ class SQLiteBackend(StorageBackend):
                     conn.close()
 
     def get_project(self, project_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieve a project by primary key or default alias."""
+        """Retrieve a project by canonical primary key or resolve backward-compatible aliases."""
         with self._lock:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
                 if project_id in ("default", "proj_default"):
                     cursor.execute(
-                        "SELECT * FROM projects WHERE id = ? OR is_default = 1 ORDER BY is_default DESC LIMIT 1",
-                        (project_id,),
+                        "SELECT * FROM projects WHERE is_default = 1 ORDER BY created_at ASC LIMIT 1"
                     )
                 else:
                     cursor.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
@@ -2302,8 +2362,30 @@ class SQLiteBackend(StorageBackend):
                     conn.close()
 
     def get_default_project(self) -> Optional[Dict[str, Any]]:
-        """Retrieve the canonical default project."""
-        return self.get_project("proj_default")
+        """Retrieve the canonical default project (where is_default = 1)."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM projects WHERE is_default = 1 ORDER BY created_at ASC LIMIT 1"
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                data = dict(row)
+                data["is_default"] = bool(data.get("is_default", 0))
+                if data.get("settings_json"):
+                    try:
+                        data["settings"] = json.loads(data["settings_json"])
+                    except Exception:
+                        data["settings"] = {}
+                else:
+                    data["settings"] = {}
+                return data
+            finally:
+                if not self._is_memory:
+                    conn.close()
 
     def update_project(self, project_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Update an existing project."""
@@ -2311,6 +2393,11 @@ class SQLiteBackend(StorageBackend):
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
+                if updates.get("is_default"):
+                    cursor.execute(
+                        "UPDATE projects SET is_default = 0 WHERE is_default = 1 AND id != ?",
+                        (project_id,),
+                    )
                 set_clauses: List[str] = []
                 params: List[Any] = []
 

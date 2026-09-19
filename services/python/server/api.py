@@ -76,7 +76,6 @@ from core.execution import (
     ExecutionStatus,
 )
 from core.projects import (
-    DEFAULT_PROJECT_ID,
     Project,
     ProjectSettings,
     generate_project_id,
@@ -1318,24 +1317,34 @@ async def chat_completions(req: ChatRequest):
     # 1. Session & Project Persistence: store user prompt in session store
     store = get_session_store()
     session = store.get_session(session_id)
+    storage = get_storage_backend()
     resolved_project_id = req.project_id
+
+    # Resolve canonical default project if none provided or legacy alias provided
+    if not resolved_project_id or resolved_project_id in ("default", "proj_default"):
+        default_proj = storage.get_default_project()
+        if default_proj:
+            resolved_project_id = default_proj["id"]
+
     if not session:
         session = store.create_session(
             session_id=session_id,
             title=req.prompt[:40] + ("..." if len(req.prompt) > 40 else ""),
             channel="desktop",
-            metadata={"project_id": resolved_project_id or DEFAULT_PROJECT_ID},
+            metadata={"project_id": resolved_project_id},
         )
-    elif not resolved_project_id:
-        resolved_project_id = (
-            session.metadata.get("project_id", DEFAULT_PROJECT_ID)
-            if session.metadata
-            else DEFAULT_PROJECT_ID
-        )
-
-    resolved_project_id = resolved_project_id or DEFAULT_PROJECT_ID
-    if resolved_project_id == "default":
-        resolved_project_id = DEFAULT_PROJECT_ID
+    elif not req.project_id:
+        sess_proj = session.metadata.get("project_id") if session.metadata else None
+        if sess_proj:
+            resolved_project_id = sess_proj
+            if resolved_project_id in ("default", "proj_default"):
+                default_proj = storage.get_default_project()
+                if default_proj:
+                    resolved_project_id = default_proj["id"]
+        elif not resolved_project_id:
+            default_proj = storage.get_default_project()
+            if default_proj:
+                resolved_project_id = default_proj["id"]
 
     store.append_message(
         session_id=session_id,

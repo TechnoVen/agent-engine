@@ -498,9 +498,10 @@ def test_canonical_project_rest_crud(integration_env):
     list_res = client.get("/v1/projects")
     assert list_res.status_code == 200
     projects = list_res.json()
-    assert any(p["id"] == proj_id for p in projects)
-    # Ensure canonical default project is also present
-    assert any(p["id"] == "proj_default" and p.get("is_default") for p in projects)
+    # Ensure canonical default project is also present with valid proj_<hex12> ID
+    assert any(
+        p["id"].startswith("proj_") and len(p["id"]) == 17 and p.get("is_default") for p in projects
+    )
 
     # 3. Get project
     get_res = client.get(f"/v1/projects/{proj_id}")

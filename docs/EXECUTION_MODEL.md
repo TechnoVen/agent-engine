@@ -165,7 +165,31 @@ class ExecutionResult(BaseModel):
 1. **In-Flight Cancellation:**
    * Every execution holds an `asyncio.Event` cancellation token.
    * Model HTTP streams are aborted using client timeouts and socket drops.
-   * Subprocess executions (e.g., skill scripts, compilers) are launched in dedicated process groups and terminated with `SIGTERM` followed by `SIGKILL` if unyielding after 3 seconds.
+   * Subprocess executions (e.g., skill scripts, compilers) are launched in dedicated process groups and terminated with `SIGTERM` followed by `SIGKILL` if unyielding after 1.5 seconds.
 2. **Worktree Isolation for Coding:**
    * High-risk code alterations run in isolated Git worktrees (`git worktree add`).
    * Working branches are never merged into the user's canonical branch without explicit test validation and operator approval.
+
+---
+
+## 6. Event Durability & Persistence Classification
+
+Execution events are explicitly categorized into **Durable** and **Transient** tiers:
+
+| Tier | Event Types | Persistence Invariant | Purpose |
+|---|---|---|---|
+| **Durable Events** | `STATE_CHANGE`, `ROUTING_RESOLVED`, `APPROVAL_REQUIRED`, `APPROVAL_RESOLVED`, `TOOL_CALL_STARTED`, `TOOL_CALL_COMPLETED`, `VERIFICATION_STARTED`, `VERIFICATION_COMPLETED`, `COMPLETED`, `FAILED`, `CANCELLED` | Persisted immediately to SQLite `execution_events` ledger. | Authoritative execution reconstruction, audit provenance, replay, and restart recovery. |
+| **Transient Events** | `TOKEN_DELTA`, `OUTPUT_CHUNK` | In-memory only; bypass SQLite disk ledger; streamed live via SSE bounded queue. | Real-time UI responsiveness without disk write amplification. Process restart does not reconstruct individual token deltas. |
+
+---
+
+## 7. Partial-Output Semantics Across Terminal States
+
+When execution concludes or terminates prematurely, generated outputs are governed by strict semantic invariants:
+
+- **`COMPLETED`**: Persist full, verified assistant response to `UnifiedSessionStore`.
+- **`PARTIAL`**: Persist clearly marked partial output in execution metadata/drafts; marked explicitly as partial.
+- **`CANCELLED`**: Partial output is retained in execution diagnostics / drafts (`ExecutionResult.partial_output`), but is **never** persisted to `UnifiedSessionStore` as a successful assistant response.
+- **`FAILED`**: Partial output is retained in execution diagnostic evidence for debugging; never represented as a successful assistant message.
+- **`TIMED_OUT`**: Partial output is retained in execution diagnostic evidence; never represented as a completed response.
+

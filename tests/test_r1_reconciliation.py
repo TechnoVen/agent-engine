@@ -16,15 +16,16 @@ from typing import List
 import pytest
 from fastapi.testclient import TestClient
 
+import re
 from core.execution.coordinator import ExecutionCoordinator
 from core.execution.models import (
     ExecutionContext,
+    ExecutionEvent,
     ExecutionEventType,
     ExecutionRequest,
     ExecutionStatus,
     RoutingTier,
 )
-from core.projects.models import DEFAULT_PROJECT_ID
 from core.router.model_router import ModelRouter, ResolvedModel
 from core.safety.policy import PolicyEngine
 from core.session.store import UnifiedSessionStore, reset_session_store
@@ -82,30 +83,77 @@ def recon_env(tmp_path, monkeypatch):
 
 
 def test_canonical_default_project_seeded(recon_env):
-    """Verify that proj_default is seeded with is_default=True."""
+    """Verify that default project is seeded with canonical proj_<hex12> ID and is_default=True."""
     storage = recon_env["storage"]
     default_proj = storage.get_default_project()
     assert default_proj is not None
-    assert default_proj["id"] == DEFAULT_PROJECT_ID
-    assert default_proj["id"] == "proj_default"
+    assert re.match(r"^proj_[0-9a-f]{12}$", default_proj["id"])
     assert default_proj["is_default"] is True
+    assert default_proj["name"] == "Default Project"
 
 
 def test_default_project_alias_resolution(recon_env):
-    """Verify get_project resolves both 'default' and 'proj_default'."""
+    """Verify get_project resolves compatibility aliases 'default' and 'proj_default' to canonical project."""
     storage = recon_env["storage"]
+    canonical_def = storage.get_default_project()
+    assert canonical_def is not None
+
     p1 = storage.get_project("default")
     p2 = storage.get_project("proj_default")
     assert p1 is not None
     assert p2 is not None
-    assert p1["id"] == "proj_default"
-    assert p2["id"] == "proj_default"
+    assert p1["id"] == canonical_def["id"]
+    assert p2["id"] == canonical_def["id"]
+    assert re.match(r"^proj_[0-9a-f]{12}$", p1["id"])
     assert p1["is_default"] is True
 
 
-def test_legacy_default_migration_converts_id(tmp_path):
-    """Verify that an existing database with id='default' is cleanly migrated to 'proj_default'."""
-    legacy_db = str(tmp_path / "legacy.db")
+def test_canonical_id_format(recon_env):
+    """Verify all generated project IDs strictly adhere to proj_<hex12> with no magic exceptions."""
+    storage = recon_env["storage"]
+    p = storage.create_project(
+        {
+            "name": "Canonical Format Test",
+            "root_path": "/workspace/canonical_format",
+        }
+    )
+    assert p is not None
+    assert re.match(r"^proj_[0-9a-f]{12}$", p["id"])
+    assert p["is_default"] is False
+
+
+def test_exactly_one_default_project(recon_env):
+    """Verify setting is_default=True on another project enforces exactly one default project."""
+    storage = recon_env["storage"]
+    first_default = storage.get_default_project()
+    assert first_default is not None
+
+    new_default = storage.create_project(
+        {
+            "name": "New Primary Workspace",
+            "root_path": "/workspace/new_primary",
+            "is_default": True,
+        }
+    )
+    assert new_default["is_default"] is True
+
+    # Check that previous default was demoted
+    old_def_refetched = storage.get_project(first_default["id"])
+    assert old_def_refetched["is_default"] is False
+
+    # Check that get_default_project returns the new default
+    active_default = storage.get_default_project()
+    assert active_default["id"] == new_default["id"]
+
+    # Verify query count of projects with is_default=1 is strictly 1
+    projects = storage.list_projects(limit=100)
+    defaults = [p for p in projects if p.get("is_default")]
+    assert len(defaults) == 1
+
+
+def test_legacy_default_and_proj_default_migration_with_foreign_keys(tmp_path):
+    """Verify that an existing database with 'default' and 'proj_default' projects and foreign keys is cleanly migrated."""
+    legacy_db = str(tmp_path / "legacy_migration.db")
     raw_conn = sqlite3.connect(legacy_db)
     raw_conn.execute("""
         CREATE TABLE projects (
@@ -120,8 +168,49 @@ def test_legacy_default_migration_converts_id(tmp_path):
         );
     """)
     raw_conn.execute("""
+        CREATE TABLE executions (
+            id TEXT PRIMARY KEY,
+            session_id TEXT,
+            project_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            request_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+    """)
+    raw_conn.execute("""
+        CREATE TABLE cost_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT NOT NULL,
+            agent_name TEXT NOT NULL,
+            model_name TEXT NOT NULL,
+            prompt_tokens INTEGER NOT NULL,
+            completion_tokens INTEGER NOT NULL,
+            cost_usd REAL NOT NULL,
+            project TEXT NOT NULL
+        );
+    """)
+    # Insert legacy projects
+    raw_conn.execute("""
         INSERT INTO projects (id, name, description, root_path, instructions, settings_json, created_at, updated_at)
-        VALUES ('default', 'Legacy Default', 'Old project', '/workspace', '', '{}', '2025-01-01T00:00:00', '2025-01-01T00:00:00');
+        VALUES ('default', 'Legacy Default', 'Old project', '/workspace/old', '', '{}', '2025-01-01T00:00:00', '2025-01-01T00:00:00');
+    """)
+    # Insert executions referencing legacy default and proj_default
+    raw_conn.execute("""
+        INSERT INTO executions (id, project_id, status, request_json, created_at)
+        VALUES ('exec_1', 'default', 'completed', '{}', '2025-01-01T00:00:00');
+    """)
+    raw_conn.execute("""
+        INSERT INTO executions (id, project_id, status, request_json, created_at)
+        VALUES ('exec_2', 'proj_default', 'completed', '{}', '2025-01-01T00:00:00');
+    """)
+    # Insert cost records referencing legacy default and proj_default
+    raw_conn.execute("""
+        INSERT INTO cost_records (timestamp, agent_name, model_name, prompt_tokens, completion_tokens, cost_usd, project)
+        VALUES ('2025-01-01T00:00:00', 'agent', 'model', 10, 10, 0.001, 'default');
+    """)
+    raw_conn.execute("""
+        INSERT INTO cost_records (timestamp, agent_name, model_name, prompt_tokens, completion_tokens, cost_usd, project)
+        VALUES ('2025-01-01T00:00:00', 'agent', 'model', 10, 10, 0.001, 'proj_default');
     """)
     raw_conn.commit()
     raw_conn.close()
@@ -129,16 +218,33 @@ def test_legacy_default_migration_converts_id(tmp_path):
     # Opening with SQLiteBackend triggers automated migration
     backend = SQLiteBackend(db_path=legacy_db)
     try:
-        migrated = backend.get_project("proj_default")
-        assert migrated is not None
-        assert migrated["id"] == "proj_default"
-        assert migrated["is_default"] is True
-        assert migrated["name"] == "Legacy Default"
+        # Verify default project is now canonical proj_<hex12>
+        canonical_def = backend.get_default_project()
+        assert canonical_def is not None
+        assert re.match(r"^proj_[0-9a-f]{12}$", canonical_def["id"])
+        assert canonical_def["is_default"] is True
+        assert canonical_def["name"] == "Legacy Default"
 
-        # Old alias still resolves
-        alias = backend.get_project("default")
-        assert alias is not None
-        assert alias["id"] == "proj_default"
+        # Verify old aliases resolve to this canonical project
+        alias_default = backend.get_project("default")
+        alias_proj_default = backend.get_project("proj_default")
+        assert alias_default is not None
+        assert alias_default["id"] == canonical_def["id"]
+        assert alias_proj_default is not None
+        assert alias_proj_default["id"] == canonical_def["id"]
+
+        # Verify foreign keys in executions were updated
+        conn = sqlite3.connect(legacy_db)
+        cursor = conn.cursor()
+        cursor.execute("SELECT project_id FROM executions")
+        exec_proj_ids = [row[0] for row in cursor.fetchall()]
+        assert all(pid == canonical_def["id"] for pid in exec_proj_ids)
+
+        # Verify foreign keys in cost_records were updated
+        cursor.execute("SELECT project FROM cost_records")
+        cost_proj_ids = [row[0] for row in cursor.fetchall()]
+        assert all(pid == canonical_def["id"] for pid in cost_proj_ids)
+        conn.close()
     finally:
         backend.close()
 
@@ -157,6 +263,41 @@ def test_create_project_with_is_default_flag(recon_env):
     proj = storage.get_project("proj_custom_123")
     assert proj is not None
     assert proj["is_default"] is False
+
+
+def test_event_durability_classification():
+    """Verify durable vs transient event classification properties."""
+    durable_types = [
+        ExecutionEventType.STATE_CHANGE,
+        ExecutionEventType.ROUTING_RESOLVED,
+        ExecutionEventType.APPROVAL_REQUIRED,
+        ExecutionEventType.APPROVAL_RESOLVED,
+        ExecutionEventType.TOOL_CALL_STARTED,
+        ExecutionEventType.TOOL_CALL_COMPLETED,
+        ExecutionEventType.VERIFICATION_STARTED,
+        ExecutionEventType.VERIFICATION_COMPLETED,
+        ExecutionEventType.COMPLETED,
+        ExecutionEventType.FAILED,
+        ExecutionEventType.CANCELLED,
+    ]
+    transient_types = [
+        ExecutionEventType.TOKEN_DELTA,
+        ExecutionEventType.OUTPUT_CHUNK,
+    ]
+
+    for dt in durable_types:
+        assert dt.is_durable is True
+        assert dt.is_transient is False
+        evt = ExecutionEvent(execution_id="exec_1", sequence_num=0, event_type=dt)
+        assert evt.is_durable is True
+        assert evt.is_transient is False
+
+    for tt in transient_types:
+        assert tt.is_durable is False
+        assert tt.is_transient is True
+        evt = ExecutionEvent(execution_id="exec_1", sequence_num=0, event_type=tt)
+        assert evt.is_durable is False
+        assert evt.is_transient is True
 
 
 # ===========================================================================
@@ -273,7 +414,8 @@ async def test_bounded_history_within_budget_retains_all_turns(recon_env):
     store = recon_env["session_store"]
 
     sess_id = "sess_small_history"
-    store.create_session(session_id=sess_id, metadata={"project_id": "proj_default"})
+    def_proj = recon_env["storage"].get_default_project()["id"]
+    store.create_session(session_id=sess_id, metadata={"project_id": def_proj})
     store.append_message(session_id=sess_id, role="user", content="Hello!")
     store.append_message(session_id=sess_id, role="assistant", content="Hi there! How can I help?")
 
@@ -286,7 +428,7 @@ async def test_bounded_history_within_budget_retains_all_turns(recon_env):
     coordinator._dispatch_override = inspect_dispatch
 
     req = ExecutionRequest(
-        project_id="proj_default",
+        project_id=def_proj,
         session_id=sess_id,
         prompt="Tell me a joke",
         token_budget=4000,
@@ -318,7 +460,8 @@ async def test_bounded_history_drops_oldest_turns_when_budget_exceeded(recon_env
     store = recon_env["session_store"]
 
     sess_id = "sess_large_history"
-    store.create_session(session_id=sess_id, metadata={"project_id": "proj_default"})
+    def_proj = recon_env["storage"].get_default_project()["id"]
+    store.create_session(session_id=sess_id, metadata={"project_id": def_proj})
     # Append 8 distinct turns
     for i in range(8):
         role = "user" if i % 2 == 0 else "assistant"
@@ -338,7 +481,7 @@ async def test_bounded_history_drops_oldest_turns_when_budget_exceeded(recon_env
 
     # Set token budget small so budget_for_history (~120 tokens) only fits ~2 turns
     req = ExecutionRequest(
-        project_id="proj_default",
+        project_id=def_proj,
         session_id=sess_id,
         prompt="Summarize recent turns",
         token_budget=240,
@@ -539,7 +682,8 @@ def test_streaming_persists_assistant_message_exactly_once(recon_env):
     store = recon_env["session_store"]
 
     sess_id = "sess_stream_once"
-    store.create_session(session_id=sess_id, metadata={"project_id": "proj_default"})
+    def_proj = recon_env["storage"].get_default_project()["id"]
+    store.create_session(session_id=sess_id, metadata={"project_id": def_proj})
 
     async def chunked_dispatch(context, tier, provider, model):
         yield "Part 1, "
