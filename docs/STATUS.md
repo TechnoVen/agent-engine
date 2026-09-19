@@ -310,22 +310,39 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
   evidence:
     - "core/artifacts/models.py"
     - "core/artifacts/service.py"
+    - "core/artifacts/storage.py"
     - "core/artifacts/__init__.py"
     - "core/storage/base.py"
     - "core/storage/sqlite.py"
     - "alembic/versions/005_canonical_artifacts.py"
     - "services/python/server/api.py"
     - "tests/test_artifacts.py"
-  notes: "Implemented canonical Artifact domain model (art_<hex12> ID, project_id, execution_id, type, mime_type, storage_kind, file_path, inline_content, sha256_hash, size_bytes, status, lineage, created_by, created_at) with SQLite metadata table and managed filesystem root. Enforced automatic storage tiering (inline for text <= 8KB, filesystem for binary or > 8KB). Enforced strict cryptographic SHA-256 integrity verification, hard project isolation (cross-project access rejected with 403), path traversal protection, symlink escape detection, partial-output artifact creation on cancellation with ARTIFACT_CREATED durable events, Alembic migration 005_canonical_artifacts, and complete REST API CRUD and content streaming endpoints."
+  notes: "Implemented canonical Artifact domain model (art_<hex12> ID, project_id, execution_id, type, mime_type, storage_kind, file_path, inline_content, sha256_hash, size_bytes, status, lineage, created_by, created_at) with ArtifactPayloadStore abstraction, tombstone deletion preservation (status=deleted, deleted_at=<timestamp>, payload removed), managed filesystem root with path traversal and symlink escape detection. Enforced automatic storage tiering, cryptographic SHA-256 integrity verification, project-scope integrity verification, partial-output artifact creation on cancellation with ARTIFACT_CREATED durable events, Alembic migration 005_canonical_artifacts, and complete REST API CRUD and content streaming endpoints."
+
+- id: R1.11
+  title: "Execution ledger"
+  task_status: done
+  capability_maturity: S1
+  migration: INTEGRATE
+  owner: "Execution Kernel"
+  depends_on: [R1.3, R1.10]
+  evidence:
+    - "core/ledger/models.py"
+    - "core/ledger/service.py"
+    - "core/ledger/__init__.py"
+    - "services/python/server/api.py"
+    - "tests/test_ledger.py"
+  notes: "Implemented authoritative Execution Ledger read-side projection answering 'what actually happened during this execution?' without duplicate write tables. Assembles immutable ExecutionTrace from executions, execution_events, cost_records, and artifacts. Projects requested vs resolved vs actual model/provider, runtime fallback history, context provenance (project_root, instructions SHA-256 hash without secret leakage, turn statistics), tool invocations, approval gates, artifact references, usage/cost accounting with provenance (calculated, estimated, provider_reported, unavailable), verification outcomes, and strictly monotonic durable event sequences. Exposes REST endpoints (GET /v1/executions/{id}/trace with project-scope integrity and GET /v1/projects/{id}/executions with pagination). 15/15 behavioral tests passing."
 ```
 
 ---
 
 ## 6. Active Test Suite & Deprecation Warnings Log
 
-- **Cancellation Suite:** `17 passed in 177.98s` (`uv run pytest tests/test_cancellation.py`)
-- **Artifacts Suite:** `15 passed in 6.45s` (`uv run pytest tests/test_artifacts.py`)
-- **Execution Kernel Suite:** `37 passed in 8.33s` (`uv run pytest tests/test_execution_*.py`)
+- **Execution Kernel Core Suite:** `47 passed in 12.04s` (`uv run pytest tests/test_artifacts.py tests/test_cancellation.py tests/test_ledger.py`)
+  - **Cancellation Suite:** `17 passed in 7.35s` (`uv run pytest tests/test_cancellation.py`)
+  - **Artifacts Suite:** `15 passed in 6.95s` (`uv run pytest tests/test_artifacts.py`)
+  - **Ledger Suite:** `15 passed in 6.00s` (`uv run pytest tests/test_ledger.py`)
 - **Documented Upstream Warnings (Non-blocking):**
   1. `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.` (Origin: `fastapi/testclient.py:1` — Upstream FastAPI/Starlette testclient deprecation notice; non-runtime).
   2. `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.` (Origin: `starlette/testclient.py:53` — Upstream Starlette/AnyIO import alias notice; non-runtime).

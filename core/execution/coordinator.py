@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+import hashlib
 import logging
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -598,18 +599,30 @@ class ExecutionCoordinator:
                 },
             )
 
+            instructions_hash = (
+                hashlib.sha256(project_instructions.encode("utf-8")).hexdigest()
+                if project_instructions
+                else None
+            )
+
             context_provenance = {
                 "project_id": request.project_id,
+                "project_root": project_root,
                 "project_instructions_loaded": bool(project_instructions),
+                "project_instructions_hash": instructions_hash,
                 "session_id": request.session_id,
                 "total_available_turns": total_available_turns,
+                "session_turns_available": total_available_turns,
                 "retained_turns_count": retained_turns_count,
+                "session_turns_retained": retained_turns_count,
                 "dropped_turns_count": dropped_turns_count,
+                "session_turns_dropped": dropped_turns_count,
                 "history_truncated": history_truncated,
                 "history_tokens": history_tokens,
                 "history_turn_count": retained_turns_count,
-                "prompt_tokens": prompt_tokens_est,
-                "instruction_tokens": instruction_tokens_est,
+                "prompt_tokens_estimated": prompt_tokens_est,
+                "instruction_tokens_estimated": instruction_tokens_est,
+                "context_tokens_estimated": reserved_tokens + history_tokens,
                 "token_budget": request.token_budget,
             }
 
@@ -653,6 +666,7 @@ class ExecutionCoordinator:
                         "fallback_chain": resolved.fallback_chain,
                         "fallback_reason": resolved.reason if resolved.is_fallback else None,
                         "reason": resolved.reason,
+                        "context_provenance": context_provenance,
                     },
                 )
             )
@@ -961,6 +975,23 @@ class ExecutionCoordinator:
                             logger.info(
                                 "Failing over to fallback provider '%s/%s'", fb_provider, fb_model
                             )
+                            combined_event_sink(
+                                ExecutionEvent(
+                                    execution_id=exec_id,
+                                    sequence_num=state_machine.current_sequence_num,
+                                    event_type=ExecutionEventType.ROUTING_RESOLVED,
+                                    payload={
+                                        "tier": tier.value if hasattr(tier, "value") else str(tier),
+                                        "provider": fb_provider,
+                                        "model": fb_model,
+                                        "is_fallback": True,
+                                        "fallback_reason": str(prov_err),
+                                        "failed_provider": provider,
+                                        "failed_model": model_name,
+                                    },
+                                )
+                            )
+                            state_machine.current_sequence_num += 1
                             try:
                                 if token.is_cancelled:
                                     return handle_cancellation("pre_provider")

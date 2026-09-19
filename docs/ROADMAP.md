@@ -524,20 +524,20 @@ A real desktop request travels through project/session context, routing, a real 
 - **Required Evidence:**
   - Artifact round-trip tests (`tests/test_artifacts.py`).
 
-### [ ] R1.11 — Execution ledger
+### [x] R1.11 — Execution ledger
 
 - **Migration:** `INTEGRATE`
 - **Target release:** `0.5`
-- **Initial maturity:** `S0` unless `docs/STATUS.md` verifies a higher level from legacy work.
+- **Initial maturity:** `S1` (Implemented; full trace reconstruction, zero-duplicate projection, 15/15 tests passing)
 - **Dependencies:** R1.3, R1.10
 - **User Story:** As Nadir, I want a truthful record of models, tools, skills, approvals, tokens, cost and artifacts so I can audit what Agent Engine did.
 - **Deliverables:**
   - Unify cost, token, tool, approval and event records by `execution_id`.
   - Expose execution detail API/UI.
 - **Acceptance Criteria:**
-  - [ ] One execution can be reconstructed from persisted events/records.
+  - [x] One execution can be reconstructed from persisted events/records.
 - **Required Evidence:**
-  - Golden execution trace fixture.
+  - Golden execution trace fixture and behavioral test suite (`tests/test_ledger.py`).
 
 ### [ ] R1.12 — Rewire DSPy pipeline registry
 

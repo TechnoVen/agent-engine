@@ -84,6 +84,10 @@ from core.execution import (
     ExecutionResult,
     ExecutionStatus,
 )
+from core.ledger import (
+    ExecutionLedgerService,
+    LedgerSecurityError,
+)
 from core.projects import (
     Project,
     ProjectSettings,
@@ -227,6 +231,26 @@ def get_artifact_service() -> ArtifactService:
 def set_artifact_service(service: ArtifactService) -> None:
     global artifact_service_instance
     artifact_service_instance = service
+
+
+ledger_service_instance: Optional[ExecutionLedgerService] = None
+
+
+def get_ledger_service() -> ExecutionLedgerService:
+    global ledger_service_instance
+    if ledger_service_instance is None:
+        storage = get_storage_backend()
+        art_service = get_artifact_service()
+        ledger_service_instance = ExecutionLedgerService(
+            storage=storage,
+            artifact_service=art_service,
+        )
+    return ledger_service_instance
+
+
+def set_ledger_service(service: ExecutionLedgerService) -> None:
+    global ledger_service_instance
+    ledger_service_instance = service
 
 
 # In-memory queues for global SSE event subscribers
@@ -1804,6 +1828,50 @@ async def get_execution_events_endpoint(
         )
     events = coordinator.get_execution_events(execution_id, after_sequence_num=after_sequence_num)
     return JSONResponse(content={"execution_id": execution_id, "events": events})
+
+
+# ---------------------------------------------------------------------------
+# CANONICAL EXECUTION LEDGER & TRACE ENDPOINTS (R1.11)
+# ---------------------------------------------------------------------------
+
+
+@v1_router.get("/executions/{execution_id}/trace")
+async def get_execution_trace_endpoint(
+    execution_id: str,
+    project_id: Optional[str] = Query(None),
+    x_project_id: Optional[str] = Header(None, alias="X-Project-ID"),
+    ledger_service: ExecutionLedgerService = Depends(get_ledger_service),
+):
+    """Retrieve authoritative execution trace projection with project-scope integrity verification."""
+    effective_project_id = project_id or x_project_id
+    try:
+        trace = ledger_service.get_execution_trace(execution_id, project_id=effective_project_id)
+        if not trace:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Execution '{execution_id}' not found",
+            )
+        return JSONResponse(content=trace.to_dict())
+    except LedgerSecurityError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+
+
+@v1_router.get("/projects/{project_id}/executions")
+async def list_project_executions_endpoint(
+    project_id: str,
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    ledger_service: ExecutionLedgerService = Depends(get_ledger_service),
+):
+    """List execution summaries belonging to a project."""
+    backend = get_storage_backend()
+    if hasattr(backend, "get_project") and not backend.get_project(project_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project '{project_id}' not found",
+        )
+    summaries = ledger_service.list_project_executions(project_id, limit=limit, offset=offset)
+    return JSONResponse(content=[s.to_dict() for s in summaries])
 
 
 # ---------------------------------------------------------------------------

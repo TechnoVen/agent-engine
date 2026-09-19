@@ -2263,7 +2263,7 @@ class SQLiteBackend(StorageBackend):
         if hasattr(evt_type, "value"):
             evt_type = evt_type.value
 
-        payload = event.get("payload", {})
+        payload = event.get("payload") if "payload" in event else event.get("payload_json", {})
         if isinstance(payload, str):
             payload_json = payload
         elif hasattr(payload, "model_dump_json"):
