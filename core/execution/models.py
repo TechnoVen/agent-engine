@@ -108,6 +108,7 @@ class ExecutionRequest(BaseModel):
     isolation_mode: str = "standard"  # "standard", "worktree", "read_only"
     parent_execution_id: Optional[str] = None
     token_budget: int = 8000
+    cancel_on_disconnect: bool = True
     created_at: str = Field(default_factory=current_timestamp_iso)
 
 
@@ -129,6 +130,7 @@ class ExecutionContext(BaseModel):
     token_budget: int = 8000
     security_policy_id: str = "default"
     cancellation_token: Optional[Any] = None
+    cancel_on_disconnect: bool = True
     created_at: str = Field(default_factory=current_timestamp_iso)
 
 

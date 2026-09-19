@@ -28,11 +28,14 @@ from fastapi.testclient import TestClient
 from core.execution import (
     CancellationToken,
     CancellationReason,
+    Execution,
     ExecutionCoordinator,
     ExecutionEvent,
     ExecutionEventType,
     ExecutionRequest,
+    ExecutionStateMachine,
     ExecutionStatus,
+    InvalidStateTransitionError,
 )
 from core.router.model_router import ModelRouter
 from core.safety.policy import PolicyDecision, PolicyEngine
@@ -632,3 +635,135 @@ async def test_disconnect_uses_canonical_cancellation_path(test_env):
         if (m.role == "assistant" or getattr(m.role, "value", None) == "assistant")
     ]
     assert len(assistant_msgs) == 0
+
+
+@pytest.mark.anyio
+async def test_partial_execution_cannot_become_cancelled_or_modified(test_env):
+    """15. PARTIAL execution is a canonical terminal state: cannot become CANCELLED, FAILED, or COMPLETED."""
+    coordinator = test_env["coordinator"]
+    storage = test_env["storage"]
+    project_id = test_env["project_id"]
+    client = test_env["client"]
+
+    # 1. State machine transition check
+    req = ExecutionRequest(
+        project_id=project_id,
+        prompt="Partial state test",
+    )
+    exec_record = Execution(
+        id="exec_partial_test_1",
+        project_id=project_id,
+        request=req,
+        status=ExecutionStatus.RUNNING,
+    )
+    sm = ExecutionStateMachine(exec_record)
+    sm.transition(ExecutionStatus.PARTIAL, reason="Token limit reached early")
+    assert exec_record.status == ExecutionStatus.PARTIAL
+    assert sm.is_terminal is True
+
+    # State machine must reject transitions to CANCELLED, FAILED, COMPLETED
+    with pytest.raises(InvalidStateTransitionError):
+        sm.transition(ExecutionStatus.CANCELLED)
+    with pytest.raises(InvalidStateTransitionError):
+        sm.transition(ExecutionStatus.FAILED)
+    with pytest.raises(InvalidStateTransitionError):
+        sm.transition(ExecutionStatus.COMPLETED)
+
+    # 2. Persist to storage and check coordinator.cancel()
+    storage.create_execution(exec_record.model_dump())
+    cancel_res = coordinator.cancel(exec_record.id, reason="attempted_cancel_on_partial")
+    assert cancel_res["cancellation_requested"] is False
+    assert cancel_res["status"] == "partial"
+
+    persisted = coordinator.get_execution(exec_record.id)
+    assert persisted["status"] == "partial"
+
+    # 3. Via REST API endpoint POST /v1/executions/{id}/cancel
+    api_cancel = client.post(
+        f"/v1/executions/{exec_record.id}/cancel",
+        json={"reason": "api_cancel_partial"},
+    )
+    assert api_cancel.status_code == 409
+    data = api_cancel.json()
+    assert data.get("error_code") == "TERMINAL_STATE_CONFLICT"
+    assert data.get("status") == "partial"
+
+
+@pytest.mark.anyio
+async def test_subprocess_graceful_to_force_termination_abstraction():
+    """16. Cross-platform subprocess cancellation abstraction: graceful termination -> bounded wait -> force termination."""
+    token = CancellationToken("exec_test_proc")
+
+    class MockSubprocess:
+        def __init__(self):
+            self.pid = 99999
+            self.returncode = None
+            self.terminated = False
+            self.killed = False
+
+        def terminate(self):
+            self.terminated = True
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        async def wait(self):
+            # Simulate a stubborn process that does not exit immediately on terminate()
+            while self.returncode is None:
+                await asyncio.sleep(0.01)
+            return self.returncode
+
+    proc = MockSubprocess()
+    token.register_process(proc)
+
+    # Trigger cancellation with timeout escalation
+    task = asyncio.create_task(token._ensure_process_terminated(proc, timeout=0.05))
+    token.cancel(reason="test_proc_cancel")
+
+    assert proc.terminated is True
+    await asyncio.wait_for(task, timeout=1.0)
+    assert proc.killed is True
+    assert proc.returncode == -9
+
+
+@pytest.mark.anyio
+async def test_disconnect_does_not_cancel_when_policy_disabled(test_env):
+    """17. When cancel_on_disconnect=False, client disconnect does NOT cancel the background execution."""
+    coordinator = test_env["coordinator"]
+    session_store = test_env["session_store"]
+    project_id = test_env["project_id"]
+
+    session = session_store.create_session(
+        title="Durable Job Session", metadata={"project_id": project_id}
+    )
+
+    started = asyncio.Event()
+    completed = asyncio.Event()
+
+    async def durable_stream(ctx, tier, prov, model):
+        started.set()
+        for i in range(5):
+            await asyncio.sleep(0.02)
+            yield f"item_{i} "
+        completed.set()
+
+    coordinator._dispatch_override = durable_stream
+
+    req = ExecutionRequest(
+        project_id=project_id,
+        session_id=session.session_id,
+        prompt="Durable execution",
+        inputs={"stream": True},
+        cancel_on_disconnect=False,
+    )
+
+    token = CancellationToken(req.id)
+    task = asyncio.create_task(coordinator.execute(req, cancellation_token=token))
+    await asyncio.wait_for(started.wait(), timeout=5.0)
+
+    # Transport disconnect event does NOT cancel background execution
+    assert req.cancel_on_disconnect is False
+    res = await asyncio.wait_for(task, timeout=5.0)
+    assert res.status == ExecutionStatus.COMPLETED
+    assert completed.is_set() is True

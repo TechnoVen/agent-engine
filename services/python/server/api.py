@@ -1540,16 +1540,17 @@ async def chat_completions(req: ChatRequest):
 
             except (asyncio.CancelledError, GeneratorExit):
                 logger.info("Client disconnected from SSE stream for session %s", session_id)
-                coordinator.cancel(
-                    exec_req.id,
-                    reason=CancellationReason.CLIENT_DISCONNECT,
-                    actor="client",
-                )
-                if not coord_task.done():
-                    coord_task.cancel()
+                if exec_req.cancel_on_disconnect:
+                    coordinator.cancel(
+                        exec_req.id,
+                        reason=CancellationReason.CLIENT_DISCONNECT,
+                        actor="client",
+                    )
+                    if not coord_task.done():
+                        coord_task.cancel()
                 raise
             finally:
-                if not coord_task.done():
+                if exec_req.cancel_on_disconnect and not coord_task.done():
                     coordinator.cancel(
                         exec_req.id,
                         reason=CancellationReason.CLIENT_DISCONNECT,
@@ -1704,14 +1705,14 @@ async def cancel_execution_endpoint(
     else:
         status_val = record.get("status")
 
-    # 2. Terminal state conflict check: completed cannot become cancelled
-    if status_val == "completed":
+    # 2. Terminal state conflict check: completed/partial/terminal cannot become cancelled
+    if status_val in ("completed", "partial", "blocked", "failed", "timed_out"):
         return JSONResponse(
             status_code=status.HTTP_409_CONFLICT,
             content={
                 "error_code": "TERMINAL_STATE_CONFLICT",
-                "detail": "Execution already completed",
-                "status": "completed",
+                "detail": f"Execution already terminated with status '{status_val}'",
+                "status": status_val,
                 "execution_id": execution_id,
             },
         )

@@ -119,12 +119,13 @@ class CancellationToken:
         self._event.set()
 
         # Terminate any registered subprocesses to prevent orphan processes
+        # Cross-platform abstraction: graceful termination -> bounded wait -> force termination
         for proc in self._registered_processes:
             try:
                 if proc.returncode is None:
                     proc.terminate()
-                    # Schedule bounded SIGKILL escalation in background if still running
-                    asyncio.create_task(self._ensure_process_killed(proc, timeout=1.5))
+                    # Schedule bounded force-termination escalation in background if still running
+                    asyncio.create_task(self._ensure_process_terminated(proc, timeout=1.5))
             except Exception as e:
                 logger.warning("Error terminating process %s: %s", getattr(proc, "pid", "?"), e)
 
@@ -139,10 +140,15 @@ class CancellationToken:
 
         return True
 
-    async def _ensure_process_killed(
+    async def _ensure_process_terminated(
         self, proc: asyncio.subprocess.Process, timeout: float = 1.5
     ) -> None:
-        """Wait bounded time after SIGTERM; escalate to SIGKILL if unyielding."""
+        """Cross-platform termination contract:
+
+        1. Request graceful termination (terminate() / SIGTERM / TerminateProcess).
+        2. Bounded wait for process completion.
+        3. Escalate to forced termination (kill() / SIGKILL / TerminateProcess) if unyielding.
+        """
         try:
             await asyncio.wait_for(proc.wait(), timeout=timeout)
         except asyncio.TimeoutError:
@@ -152,8 +158,15 @@ class CancellationToken:
                     await proc.wait()
             except ProcessLookupError:
                 pass
+            except Exception as ex:
+                logger.debug("Error force-killing process: %s", ex)
         except ProcessLookupError:
             pass
+        except Exception as ex:
+            logger.debug("Error during process termination wait: %s", ex)
+
+    # Backward-compatible alias
+    _ensure_process_killed = _ensure_process_terminated
 
     def register_process(self, proc: asyncio.subprocess.Process) -> None:
         """Register a subprocess for graceful termination upon cancellation."""
@@ -161,7 +174,7 @@ class CancellationToken:
             try:
                 if proc.returncode is None:
                     proc.terminate()
-                    asyncio.create_task(self._ensure_process_killed(proc, timeout=1.5))
+                    asyncio.create_task(self._ensure_process_terminated(proc, timeout=1.5))
             except Exception:
                 pass
         else:

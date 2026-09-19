@@ -31,7 +31,7 @@ from core.execution.models import (
     current_timestamp_iso,
     generate_execution_id,
 )
-from core.execution.state import ExecutionStateMachine
+from core.execution.state import TERMINAL_STATES, ExecutionStateMachine
 from typing import TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
@@ -123,14 +123,8 @@ class ExecutionCoordinator:
         if token:
             token.cancel(reason=reason_str, actor=actor_str)
 
-        # Terminal state handling: immutable outcome
-        if execution.status in (
-            ExecutionStatus.COMPLETED,
-            ExecutionStatus.FAILED,
-            ExecutionStatus.CANCELLED,
-            ExecutionStatus.TIMED_OUT,
-            ExecutionStatus.BLOCKED,
-        ):
+        # Terminal state handling: immutable outcome across all canonical terminal states
+        if execution.status in TERMINAL_STATES:
             return {
                 "execution_id": execution_id,
                 "status": execution.status.value,
@@ -580,6 +574,7 @@ class ExecutionCoordinator:
                 context_provenance=context_provenance,
                 token_budget=request.token_budget,
                 cancellation_token=token,
+                cancel_on_disconnect=request.cancel_on_disconnect,
             )
 
             # Phase 3: Routing & Tier Resolution
