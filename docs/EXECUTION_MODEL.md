@@ -91,6 +91,7 @@ class ExecutionEventType(str, Enum):
     FAILED = "failed"
     CANCELLED = "cancelled"
 
+
 class ExecutionEvent(BaseModel):
     event_id: str
     execution_id: str

@@ -331,8 +331,8 @@ def test_cross_project_session_isolation(integration_env):
             "stream": False,
         },
     )
-    # ExecutionCoordinator flags cross-project breach and fails
-    assert res.status_code == 502
+    # ExecutionCoordinator flags cross-project breach and returns HTTP 403 Forbidden
+    assert res.status_code == 403
     assert "CROSS_PROJECT_VIOLATION" in res.text or "not authorized" in res.text
 
 
@@ -362,9 +362,11 @@ def test_no_provider_fails_explicitly(integration_env):
         "/v1/chat/completions",
         json={"prompt": "Will this fail honestly?", "stream": False},
     )
-    assert res.status_code == 502
+    assert res.status_code == 503
     data = res.json()
-    assert "NO_AVAILABLE_PROVIDER" in data["detail"]
+    assert data.get("error_code") == "NO_AVAILABLE_PROVIDER" or "NO_AVAILABLE_PROVIDER" in str(
+        data.get("detail", "")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -379,7 +381,7 @@ def test_provider_error_produces_failed(integration_env):
     storage = integration_env["storage"]
 
     def failing_dispatch(context, tier, provider, model):
-        raise RuntimeError("Provider connection timeout (HTTP 504)")
+        raise RuntimeError("Provider connection reset: dispatch failed")
 
     coordinator._dispatch_override = failing_dispatch
 
@@ -497,8 +499,8 @@ def test_canonical_project_rest_crud(integration_env):
     assert list_res.status_code == 200
     projects = list_res.json()
     assert any(p["id"] == proj_id for p in projects)
-    # Ensure default project is also present
-    assert any(p["id"] == "default" for p in projects)
+    # Ensure canonical default project is also present
+    assert any(p["id"] == "proj_default" and p.get("is_default") for p in projects)
 
     # 3. Get project
     get_res = client.get(f"/v1/projects/{proj_id}")

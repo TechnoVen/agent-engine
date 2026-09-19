@@ -460,37 +460,37 @@ A real desktop request travels through project/session context, routing, a real 
 - **Required Evidence:**
   - Cross-project isolation E2E test (`tests/test_chat_execution_integration.py`).
 
-### [ ] R1.7 — Bounded real conversation history
+### [x] R1.7 — Bounded real conversation history
 
 - **Migration:** `INTEGRATE`
 - **Target release:** `0.5`
-- **Initial maturity:** `S0` unless `docs/STATUS.md` verifies a higher level from legacy work.
+- **Initial maturity:** `S1`
 - **Dependencies:** R1.3, R1.6
 - **User Story:** As an Everyday User, I want follow-up questions to remember the conversation without sending unlimited history to the model.
 - **Deliverables:**
   - Load authorized session history.
   - Apply context budget before inference.
 - **Acceptance Criteria:**
-  - [ ] Two-turn recall test passes.
-  - [ ] History outside the current authorized session is excluded unless retrieved explicitly.
+  - [x] Two-turn recall test passes.
+  - [x] History outside the current authorized session is excluded unless retrieved explicitly.
 - **Required Evidence:**
-  - Conversation-context E2E test.
+  - Conversation-context E2E test (`tests/test_r1_reconciliation.py`, `tests/test_chat_execution_integration.py`).
 
-### [ ] R1.8 — Real streaming
+### [x] R1.8 — Real streaming
 
 - **Migration:** `REFACTOR`
 - **Target release:** `0.5`
-- **Initial maturity:** `S0` unless `docs/STATUS.md` verifies a higher level from legacy work.
+- **Initial maturity:** `S1`
 - **Dependencies:** R1.3, R1.4
 - **User Story:** As Nadir, I want tokens/events to appear while work is actually running so progress reflects upstream execution rather than a post-completion animation.
 - **Deliverables:**
   - Use provider streaming where available.
   - Define canonical SSE/event stream.
 - **Acceptance Criteria:**
-  - [ ] First output event reaches UI before provider completion.
-  - [ ] Disconnect handling leaves execution in a truthful state.
+  - [x] First output event reaches UI before provider completion.
+  - [x] Disconnect handling leaves execution in a truthful state.
 - **Required Evidence:**
-  - Streaming timing E2E test.
+  - Streaming timing E2E test (`tests/test_r1_reconciliation.py`).
 
 ### [ ] R1.9 — Real cancellation
 

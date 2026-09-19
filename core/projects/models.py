@@ -12,6 +12,9 @@ from typing import Any, Dict, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
+DEFAULT_PROJECT_ID = "proj_default"
+
+
 def generate_project_id() -> str:
     return f"proj_{uuid.uuid4().hex[:12]}"
 
@@ -41,5 +44,6 @@ class Project(BaseModel):
     root_path: str
     instructions: str = ""
     settings: ProjectSettings = Field(default_factory=ProjectSettings)
+    is_default: bool = False
     created_at: str = Field(default_factory=current_timestamp_iso)
     updated_at: str = Field(default_factory=current_timestamp_iso)

@@ -27,12 +27,15 @@ def upgrade() -> None:
         sa.Column("root_path", sa.Text(), nullable=False, unique=True),
         sa.Column("instructions", sa.Text(), nullable=False, server_default=""),
         sa.Column("settings_json", sa.Text(), nullable=False, server_default="{}"),
+        sa.Column("is_default", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("created_at", sa.Text(), nullable=False),
         sa.Column("updated_at", sa.Text(), nullable=False),
     )
     op.create_index("idx_projects_name", "projects", ["name"])
+    op.create_index("idx_projects_is_default", "projects", ["is_default"])
 
 
 def downgrade() -> None:
+    op.drop_index("idx_projects_is_default", table_name="projects")
     op.drop_index("idx_projects_name", table_name="projects")
     op.drop_table("projects")

@@ -228,7 +228,7 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "services/python/server/api.py"
     - "core/execution/coordinator.py"
     - "tests/test_chat_execution_integration.py"
-  notes: "Eliminated all test-trigger/fake-success routes in chat completions. Wired POST /v1/chat/completions directly through ExecutionCoordinator with strict fail-closed 502 / error SSE handling and 90/9/1 cost optimization."
+  notes: "Eliminated all test-trigger/fake-success routes in chat completions. Wired POST /v1/chat/completions directly through ExecutionCoordinator with strict fail-closed decoupled HTTP status codes (503/403/504/502/400) / error SSE handling and deterministic-first routing with quality-adjusted cost routing."
 
 - id: R1.5
   title: "Real provider/model resolution"
@@ -258,17 +258,44 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "alembic/versions/004_canonical_projects.py"
     - "services/python/server/api.py"
     - "tests/test_chat_execution_integration.py"
-  notes: "Created canonical Project domain model, SQLite persistence with auto-seeded default workspace, full REST CRUD endpoints (/v1/projects), context assembly injection, and cross-project session isolation enforcement."
+  notes: "Created canonical Project domain model, SQLite persistence with auto-seeded default workspace (proj_default, is_default=1), full REST CRUD endpoints (/v1/projects), context assembly injection, and cross-project session isolation enforcement."
+
+- id: R1.7
+  title: "Bounded real conversation history"
+  task_status: done
+  capability_maturity: S1
+  migration: INTEGRATE
+  owner: "Execution Kernel"
+  depends_on: [R1.3, R1.6]
+  evidence:
+    - "core/execution/coordinator.py"
+    - "tests/test_r1_reconciliation.py"
+    - "tests/test_chat_execution_integration.py"
+  notes: "Implemented bounded conversation history budget allocation: current prompt and project instructions are protected from eviction. History is capped to min(token_budget // 2, remaining_budget) preserving chronological order of retained turns, with full audit provenance (history_truncated, total_available_turns, retained_turns_count, dropped_turns_count, history_tokens, prompt_tokens, instruction_tokens, token_budget)."
+
+- id: R1.8
+  title: "Real streaming"
+  task_status: done
+  capability_maturity: S1
+  migration: REFACTOR
+  owner: "Execution Kernel"
+  depends_on: [R1.3, R1.4]
+  evidence:
+    - "services/python/server/api.py"
+    - "core/execution/coordinator.py"
+    - "tests/test_r1_reconciliation.py"
+  notes: "Implemented genuine real-time incremental provider streaming over bounded queues (maxsize=1000) with backpressure and client disconnect cancellation. Eliminated SQLite write amplification for transient token deltas/output chunks while forwarding live SSE chunks. Assistant message persisted to UnifiedSessionStore exactly once upon stream completion, with structured domain error codes on mid-stream failure."
 ```
 
 ---
 
 ## 6. Active Test Suite & Deprecation Warnings Log
 
-- **Test Suite Result:** `389 passed, 3 warnings in 48.32s` (`uv run pytest`)
+- **Test Suite Result:** `406 passed, 3 warnings in 55.05s` (`uv run pytest`)
 - **Documented Upstream Warnings (Non-blocking):**
   1. `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.` (Origin: `fastapi/testclient.py:1` — Upstream FastAPI/Starlette testclient deprecation notice; non-runtime).
   2. `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.` (Origin: `starlette/testclient.py:53` — Upstream Starlette/AnyIO import alias notice; non-runtime).
   3. `DeprecationWarning: 'asyncio.iscoroutinefunction' is deprecated and slated for removal in Python 3.16; use inspect.iscoroutinefunction() instead` (Origin: `chromadb/telemetry/opentelemetry/__init__.py:128` — Upstream ChromaDB telemetry compatibility notice for Python 3.16+; non-blocking on current Python 3.10–3.14).
+
 
 

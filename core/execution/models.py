@@ -37,7 +37,7 @@ class ExecutionStatus(str, Enum):
 
 
 class RoutingTier(str, Enum):
-    """Execution tiers defined by the 90/9/1 cost optimization framework."""
+    """Execution tiers defined by deterministic-first routing and quality-adjusted cost routing."""
 
     CODE = "code"
     CACHE = "cache"
@@ -136,6 +136,7 @@ class ExecutionResult(BaseModel):
     status: ExecutionStatus
     outputs: Dict[str, Any] = Field(default_factory=dict)
     error: Optional[str] = None
+    error_code: Optional[str] = None
     total_tokens: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0

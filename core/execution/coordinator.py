@@ -87,7 +87,7 @@ class ExecutionCoordinator:
 
     @staticmethod
     def _eval_deterministic(prompt: str) -> Optional[str]:
-        """Evaluate deterministic queries (Law 1: 90/9/1 cost optimization)."""
+        """Evaluate deterministic queries (deterministic-first routing and quality-adjusted cost routing)."""
         import ast
         import operator
         import re
@@ -208,12 +208,16 @@ class ExecutionCoordinator:
         )
 
         def combined_event_sink(event: ExecutionEvent) -> None:
-            # Persist event to storage
-            try:
-                self.storage.record_execution_event(event.model_dump())
-            except Exception as ex:
-                logger.error("Failed to persist execution event: %s", ex)
-            # Notify external listener
+            # Persist event to storage (transient token/output chunks bypass SQLite to avoid write amplification)
+            if event.event_type not in (
+                ExecutionEventType.OUTPUT_CHUNK,
+                ExecutionEventType.TOKEN_DELTA,
+            ):
+                try:
+                    self.storage.record_execution_event(event.model_dump())
+                except Exception as ex:
+                    logger.error("Failed to persist execution event: %s", ex)
+            # Notify external listener (including transient output chunks for real-time streaming)
             if event_listener:
                 try:
                     event_listener(event)
@@ -246,6 +250,7 @@ class ExecutionCoordinator:
                     execution_id=exec_id,
                     status=ExecutionStatus.CANCELLED,
                     error="Execution cancelled by user",
+                    error_code="CANCELLED",
                 )
 
             # Phase 2: Context Assembly
@@ -267,8 +272,8 @@ class ExecutionCoordinator:
                 if not project_instructions:
                     project_instructions = project_record.get("instructions", "")
 
-            # 2. Bounded Conversation History Resolution (Task R1.6)
-            conversation_history: List[Dict[str, str]] = []
+            # 2. Bounded Conversation History Resolution (Tasks R1.6 & R1.7)
+            raw_session_messages: List[Dict[str, str]] = []
             if request.session_id:
                 try:
                     if self.session_store is not None:
@@ -301,19 +306,7 @@ class ExecutionCoordinator:
                                     else getattr(msg.role, "value", str(msg.role))
                                 )
                                 content = msg.content or ""
-                                conversation_history.append({"role": role, "content": content})
-
-                            # Bounded history: keep most recent messages up to half the token budget
-                            budget_for_history = request.token_budget // 2
-                            bounded: List[Dict[str, str]] = []
-                            accum_tokens = 0
-                            for turn in reversed(conversation_history):
-                                turn_tokens = estimate_tokens(turn["content"])
-                                if accum_tokens + turn_tokens > budget_for_history:
-                                    break
-                                bounded.insert(0, turn)
-                                accum_tokens += turn_tokens
-                            conversation_history = bounded
+                                raw_session_messages.append({"role": role, "content": content})
                 except Exception as sess_err:
                     if "CROSS_PROJECT_VIOLATION" in str(sess_err):
                         raise
@@ -322,6 +315,29 @@ class ExecutionCoordinator:
                         request.session_id,
                         sess_err,
                     )
+
+            # Deterministic Token Budget Allocation:
+            # Current prompt and project instructions are budgeted first and are NEVER evicted.
+            prompt_tokens_est = estimate_tokens(request.prompt)
+            instruction_tokens_est = estimate_tokens(project_instructions)
+            reserved_tokens = prompt_tokens_est + instruction_tokens_est
+            remaining_budget = max(0, request.token_budget - reserved_tokens)
+            budget_for_history = min(request.token_budget // 2, remaining_budget)
+
+            total_available_turns = len(raw_session_messages)
+            bounded_history: List[Dict[str, str]] = []
+            history_tokens = 0
+            for turn in reversed(raw_session_messages):
+                turn_tokens = estimate_tokens(turn["content"])
+                if history_tokens + turn_tokens > budget_for_history:
+                    break
+                bounded_history.insert(0, turn)
+                history_tokens += turn_tokens
+
+            retained_turns_count = len(bounded_history)
+            dropped_turns_count = total_available_turns - retained_turns_count
+            history_truncated = dropped_turns_count > 0
+            conversation_history = bounded_history
 
             # Build context via ContextSpec
             context_spec = ContextSpec(
@@ -344,7 +360,14 @@ class ExecutionCoordinator:
                 "project_id": request.project_id,
                 "project_instructions_loaded": bool(project_instructions),
                 "session_id": request.session_id,
-                "history_turn_count": len(conversation_history),
+                "total_available_turns": total_available_turns,
+                "retained_turns_count": retained_turns_count,
+                "dropped_turns_count": dropped_turns_count,
+                "history_truncated": history_truncated,
+                "history_tokens": history_tokens,
+                "history_turn_count": retained_turns_count,
+                "prompt_tokens": prompt_tokens_est,
+                "instruction_tokens": instruction_tokens_est,
                 "token_budget": request.token_budget,
             }
 
@@ -404,6 +427,7 @@ class ExecutionCoordinator:
                     execution_id=exec_id,
                     status=ExecutionStatus.FAILED,
                     error=reason,
+                    error_code="NO_AVAILABLE_PROVIDER",
                     routing_tier=tier,
                     model_used=model_name,
                     provider_used=provider,
@@ -430,6 +454,7 @@ class ExecutionCoordinator:
                     execution_id=exec_id,
                     status=ExecutionStatus.BLOCKED,
                     error=policy_decision.reason,
+                    error_code="POLICY_BLOCKED",
                     routing_tier=tier,
                     model_used=model_name,
                     provider_used=provider,
@@ -452,6 +477,7 @@ class ExecutionCoordinator:
                     execution_id=exec_id,
                     status=ExecutionStatus.BLOCKED,
                     error=reason,
+                    error_code="BUDGET_EXCEEDED",
                     routing_tier=tier,
                     model_used=model_name,
                     provider_used=provider,
@@ -504,6 +530,7 @@ class ExecutionCoordinator:
                     execution_id=exec_id,
                     status=ExecutionStatus.CANCELLED,
                     error="Execution cancelled by user",
+                    error_code="CANCELLED",
                 )
 
             # Phase 7: Execution Dispatch
@@ -514,15 +541,70 @@ class ExecutionCoordinator:
             completion_tokens = 0
             cache_hit = False
 
+            chunks_emitted = 0
+
+            def emit_chunk(chunk_str: str) -> None:
+                nonlocal chunks_emitted
+                if chunk_str:
+                    combined_event_sink(
+                        ExecutionEvent(
+                            execution_id=exec_id,
+                            sequence_num=state_machine.current_sequence_num,
+                            event_type=ExecutionEventType.OUTPUT_CHUNK,
+                            payload={"chunk": chunk_str},
+                        )
+                    )
+                    state_machine.current_sequence_num += 1
+                    chunks_emitted += 1
+
             if self._dispatch_override:
                 res = self._dispatch_override(exec_context, tier, provider, model_name)
-                if asyncio.iscoroutine(res):
-                    outputs = await res
+                if hasattr(res, "__aiter__"):
+                    collected = []
+                    async for chunk in res:
+                        if cancellation_token and cancellation_token.is_set():
+                            break
+                        chunk_text = (
+                            chunk
+                            if isinstance(chunk, str)
+                            else chunk.get("chunk", chunk.get("response", str(chunk)))
+                        )
+                        collected.append(chunk_text)
+                        emit_chunk(chunk_text)
+                    outputs = {"response": "".join(collected)}
+                elif hasattr(res, "__iter__") and not isinstance(res, (dict, list, str, bytes)):
+                    collected = []
+                    for chunk in res:
+                        if cancellation_token and cancellation_token.is_set():
+                            break
+                        chunk_text = (
+                            chunk
+                            if isinstance(chunk, str)
+                            else chunk.get("chunk", chunk.get("response", str(chunk)))
+                        )
+                        collected.append(chunk_text)
+                        emit_chunk(chunk_text)
+                    outputs = {"response": "".join(collected)}
+                elif asyncio.iscoroutine(res):
+                    awaited = await res
+                    if isinstance(awaited, dict):
+                        outputs = awaited
+                    else:
+                        outputs = {"response": str(awaited)}
+                    resp_text = str(outputs.get("response", ""))
+                    if chunks_emitted == 0 and resp_text:
+                        emit_chunk(resp_text)
                 else:
-                    outputs = res
+                    if isinstance(res, dict):
+                        outputs = res
+                    else:
+                        outputs = {"response": str(res)}
+                    resp_text = str(outputs.get("response", ""))
+                    if chunks_emitted == 0 and resp_text:
+                        emit_chunk(resp_text)
                 completion_tokens = estimate_tokens(str(outputs.get("response", "")))
             else:
-                # 1. Deterministic evaluation check (Law 1: 90/9/1 cost optimization)
+                # 1. Deterministic evaluation check (deterministic-first routing and quality-adjusted cost routing)
                 det_result = self._eval_deterministic(request.prompt)
                 if det_result is not None:
                     tier = RoutingTier.CODE
@@ -533,13 +615,16 @@ class ExecutionCoordinator:
                     execution.routing_tier = tier
                     execution.provider = provider
                     execution.model = model_name
+                    emit_chunk(det_result)
                 elif tier == RoutingTier.CODE:
                     outputs = {"response": "Executed deterministic code", "status": "ok"}
                     completion_tokens = 10
+                    emit_chunk(outputs["response"])
                 elif tier == RoutingTier.CACHE:
                     outputs = {"response": "Retrieved from cache", "cached": True}
                     completion_tokens = 5
                     cache_hit = True
+                    emit_chunk(outputs["response"])
                 else:
                     # 2. Honest failure check for invalid models / failure test triggers
                     if (
@@ -566,8 +651,18 @@ class ExecutionCoordinator:
 
                     try:
                         lm, _ = self.model_router.create_lm(provider, model_name=model_name)
-                        raw_res = lm(assembled)
-                        full_text = raw_res[0] if isinstance(raw_res, list) else str(raw_res)
+                        if hasattr(lm, "stream") and request.inputs.get("stream"):
+                            chunks = []
+                            for c in lm.stream(assembled):
+                                if cancellation_token and cancellation_token.is_set():
+                                    break
+                                chunks.append(c)
+                                emit_chunk(c)
+                            full_text = "".join(chunks)
+                        else:
+                            raw_res = lm(assembled)
+                            full_text = raw_res[0] if isinstance(raw_res, list) else str(raw_res)
+                            emit_chunk(full_text)
                         outputs = {
                             "response": full_text,
                             "model": model_name,
@@ -596,10 +691,20 @@ class ExecutionCoordinator:
                                 lm, _ = self.model_router.create_lm(
                                     fb_provider, model_name=fb_model
                                 )
-                                raw_res = lm(assembled)
-                                full_text = (
-                                    raw_res[0] if isinstance(raw_res, list) else str(raw_res)
-                                )
+                                if hasattr(lm, "stream") and request.inputs.get("stream"):
+                                    chunks = []
+                                    for c in lm.stream(assembled):
+                                        if cancellation_token and cancellation_token.is_set():
+                                            break
+                                        chunks.append(c)
+                                        emit_chunk(c)
+                                    full_text = "".join(chunks)
+                                else:
+                                    raw_res = lm(assembled)
+                                    full_text = (
+                                        raw_res[0] if isinstance(raw_res, list) else str(raw_res)
+                                    )
+                                    emit_chunk(full_text)
                                 outputs = {
                                     "response": full_text,
                                     "model": fb_model,
@@ -619,16 +724,9 @@ class ExecutionCoordinator:
                                 f"Provider execution failed: {prov_err}"
                             ) from prov_err
 
-            # Emit output chunk
-            combined_event_sink(
-                ExecutionEvent(
-                    execution_id=exec_id,
-                    sequence_num=state_machine.current_sequence_num,
-                    event_type=ExecutionEventType.OUTPUT_CHUNK,
-                    payload={"chunk": outputs.get("response", "")},
-                )
-            )
-            state_machine.current_sequence_num += 1
+            # Emit final output chunk if none emitted yet
+            if chunks_emitted == 0 and outputs.get("response"):
+                emit_chunk(str(outputs.get("response", "")))
 
             # Cancellation check during/after execution
             if cancellation_token and cancellation_token.is_set():
@@ -640,6 +738,7 @@ class ExecutionCoordinator:
                     execution_id=exec_id,
                     status=ExecutionStatus.CANCELLED,
                     error="Execution cancelled during dispatch",
+                    error_code="CANCELLED",
                 )
 
             # Phase 8: Output Verification
@@ -717,6 +816,7 @@ class ExecutionCoordinator:
                 status=final_status,
                 outputs=outputs,
                 error=verification.error if not verification.passed else None,
+                error_code=None if verification.passed else "VERIFICATION_FAILED",
                 total_tokens=total_tokens,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
@@ -732,21 +832,28 @@ class ExecutionCoordinator:
         except Exception as err:
             logger.exception("Execution '%s' encountered an unhandled error: %s", exec_id, err)
             err_str = str(err)
-            err_code = (
-                "DISPATCH_FAILED"
-                if any(
-                    k in err_str.lower()
-                    for k in (
-                        "timeout",
-                        "connection",
-                        "provider",
-                        "dispatch",
-                        "circuit",
-                        "rate limit",
-                    )
+            if "CROSS_PROJECT_VIOLATION" in err_str:
+                err_code = "CROSS_PROJECT_VIOLATION"
+            elif any(k in err_str.lower() for k in ("timeout", "timed out", "deadline")):
+                err_code = "PROVIDER_TIMEOUT"
+            elif "validation" in err_str.lower():
+                err_code = "VALIDATION_ERROR"
+            elif any(
+                k in err_str.lower()
+                for k in (
+                    "connection",
+                    "provider",
+                    "dispatch",
+                    "circuit",
+                    "rate limit",
+                    "service unavailable",
+                    "failed",
                 )
-                else "EXECUTION_ERROR"
-            )
+            ):
+                err_code = "DISPATCH_FAILED"
+            else:
+                err_code = "EXECUTION_ERROR"
+
             if not state_machine.is_terminal:
                 try:
                     state_machine.transition(
@@ -762,6 +869,7 @@ class ExecutionCoordinator:
                 execution_id=exec_id,
                 status=ExecutionStatus.FAILED,
                 error=f"{err_code}: {err_str}",
+                error_code=err_code,
                 duration_ms=duration_ms,
             )
         finally:

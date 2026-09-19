@@ -20,7 +20,7 @@ if PROJECT_ROOT not in sys.path:
 import numpy  # noqa: F401
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from core.adapters import (
@@ -69,10 +69,14 @@ from core.session import (
 )
 from core.execution import (
     ExecutionCoordinator,
+    ExecutionEvent,
+    ExecutionEventType,
     ExecutionRequest,
+    ExecutionResult,
     ExecutionStatus,
 )
 from core.projects import (
+    DEFAULT_PROJECT_ID,
     Project,
     ProjectSettings,
     generate_project_id,
@@ -1320,14 +1324,18 @@ async def chat_completions(req: ChatRequest):
             session_id=session_id,
             title=req.prompt[:40] + ("..." if len(req.prompt) > 40 else ""),
             channel="desktop",
-            metadata={"project_id": resolved_project_id or "default"},
+            metadata={"project_id": resolved_project_id or DEFAULT_PROJECT_ID},
         )
     elif not resolved_project_id:
         resolved_project_id = (
-            session.metadata.get("project_id", "default") if session.metadata else "default"
+            session.metadata.get("project_id", DEFAULT_PROJECT_ID)
+            if session.metadata
+            else DEFAULT_PROJECT_ID
         )
 
-    resolved_project_id = resolved_project_id or "default"
+    resolved_project_id = resolved_project_id or DEFAULT_PROJECT_ID
+    if resolved_project_id == "default":
+        resolved_project_id = DEFAULT_PROJECT_ID
 
     store.append_message(
         session_id=session_id,
@@ -1354,32 +1362,210 @@ async def chat_completions(req: ChatRequest):
         },
     )
 
+    def _map_execution_error(res: ExecutionResult) -> tuple[int, str, str]:
+        """Map domain execution error to HTTP status code and structured detail."""
+        err_msg = res.error or "Provider execution failed"
+        err_code = res.error_code or "DISPATCH_FAILED"
+
+        if not res.error_code:
+            if "NO_AVAILABLE_PROVIDER" in err_msg:
+                err_code = "NO_AVAILABLE_PROVIDER"
+            elif "CROSS_PROJECT_VIOLATION" in err_msg:
+                err_code = "CROSS_PROJECT_VIOLATION"
+            elif any(k in err_msg.lower() for k in ("timeout", "timed out", "deadline")):
+                err_code = "PROVIDER_TIMEOUT"
+            elif "validation" in err_msg.lower():
+                err_code = "VALIDATION_ERROR"
+            elif "policy" in err_msg.lower() or "budget" in err_msg.lower():
+                err_code = "POLICY_BLOCKED"
+
+        status_map = {
+            "NO_AVAILABLE_PROVIDER": status.HTTP_503_SERVICE_UNAVAILABLE,
+            "CROSS_PROJECT_VIOLATION": status.HTTP_403_FORBIDDEN,
+            "PROVIDER_TIMEOUT": status.HTTP_504_GATEWAY_TIMEOUT,
+            "DISPATCH_FAILED": status.HTTP_502_BAD_GATEWAY,
+            "VALIDATION_ERROR": status.HTTP_400_BAD_REQUEST,
+            "POLICY_BLOCKED": status.HTTP_403_FORBIDDEN,
+            "BUDGET_EXCEEDED": status.HTTP_403_FORBIDDEN,
+        }
+        return status_map.get(err_code, status.HTTP_502_BAD_GATEWAY), err_code, err_msg
+
+    local_keywords = ["qwen", "llama", "local", "ollama", "mistral", "deepseek"]
+
+    # 3. Handle Streaming Response with Real-Time Incremental Queue
+    if req.stream:
+        chunk_queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
+        cancellation_token = asyncio.Event()
+
+        def stream_event_listener(event: ExecutionEvent) -> None:
+            if event.event_type == ExecutionEventType.OUTPUT_CHUNK:
+                chunk = event.payload.get("chunk", "")
+                if chunk:
+                    try:
+                        chunk_queue.put_nowait({"event": "token", "delta": chunk})
+                    except asyncio.QueueFull:
+                        logger.warning(
+                            "Streaming queue full for session %s, dropping chunk backpressure",
+                            session_id,
+                        )
+
+        async def run_coordinator():
+            try:
+                res = await coordinator.execute(
+                    exec_req,
+                    cancellation_token=cancellation_token,
+                    event_listener=stream_event_listener,
+                )
+                if res.status in (ExecutionStatus.FAILED, ExecutionStatus.BLOCKED):
+                    _, err_code, err_msg = _map_execution_error(res)
+                    await chunk_queue.put(
+                        {
+                            "event": "error",
+                            "error": err_msg,
+                            "error_code": err_code,
+                            "result": res,
+                        }
+                    )
+                else:
+                    await chunk_queue.put({"event": "result", "result": res})
+            except Exception as ex:
+                logger.exception("Error in background coordinator streaming task: %s", ex)
+                await chunk_queue.put(
+                    {
+                        "event": "error",
+                        "error": str(ex),
+                        "error_code": "DISPATCH_FAILED",
+                    }
+                )
+
+        coord_task = asyncio.create_task(run_coordinator())
+
+        async def event_generator() -> AsyncGenerator[str, None]:
+            accumulated_response: List[str] = []
+            final_result: Optional[ExecutionResult] = None
+            try:
+                while True:
+                    item = await chunk_queue.get()
+                    ev_type = item.get("event")
+
+                    if ev_type == "token":
+                        delta = item.get("delta", "")
+                        accumulated_response.append(delta)
+                        payload = {
+                            "event": "token",
+                            "session_id": session_id,
+                            "delta": delta,
+                            "timestamp": datetime.datetime.now().isoformat(),
+                        }
+                        yield f"data: {json.dumps(payload)}\n\n"
+
+                    elif ev_type == "error":
+                        err_code = item.get("error_code", "DISPATCH_FAILED")
+                        err_msg = item.get("error", "Execution failed")
+                        payload = {
+                            "event": "error",
+                            "session_id": session_id,
+                            "error_code": err_code,
+                            "error": err_msg,
+                            "timestamp": datetime.datetime.now().isoformat(),
+                        }
+                        yield f"data: {json.dumps(payload)}\n\n"
+                        break
+
+                    elif ev_type == "result":
+                        final_result = item["result"]
+                        cost_event = {
+                            "event": "cost_update",
+                            "session_id": session_id,
+                            "model": final_result.model_used or req.model or "default",
+                            "prompt_tokens": final_result.prompt_tokens,
+                            "completion_tokens": final_result.completion_tokens,
+                            "cost_usd": final_result.total_cost_usd,
+                            "execution_id": final_result.execution_id,
+                            "timestamp": datetime.datetime.now().isoformat(),
+                        }
+                        yield f"data: {json.dumps(cost_event)}\n\n"
+
+                        done_event = {
+                            "event": "done",
+                            "session_id": session_id,
+                            "execution_id": final_result.execution_id,
+                            "timestamp": datetime.datetime.now().isoformat(),
+                        }
+                        yield f"data: {json.dumps(done_event)}\n\n"
+                        break
+
+            except (asyncio.CancelledError, GeneratorExit):
+                logger.info("Client disconnected from SSE stream for session %s", session_id)
+                cancellation_token.set()
+                if not coord_task.done():
+                    coord_task.cancel()
+                raise
+            finally:
+                if not coord_task.done():
+                    cancellation_token.set()
+                    coord_task.cancel()
+                    try:
+                        await coord_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+                # Persist assistant turn to session store EXACTLY ONCE on success
+                if final_result and final_result.status == ExecutionStatus.COMPLETED:
+                    full_text = "".join(accumulated_response) or final_result.outputs.get(
+                        "response", ""
+                    )
+                    store.append_message(
+                        session_id=session_id,
+                        role=MessageRole.ASSISTANT.value,
+                        content=full_text,
+                        metadata={
+                            "model": final_result.model_used or req.model or "default",
+                            "provider": final_result.provider_used,
+                            "execution_id": final_result.execution_id,
+                            "prompt_tokens": final_result.prompt_tokens,
+                            "completion_tokens": final_result.completion_tokens,
+                            "cost_usd": final_result.total_cost_usd,
+                            "timestamp": datetime.datetime.now().isoformat(),
+                        },
+                    )
+
+                    model_lower = (final_result.model_used or req.model or "").lower()
+                    if any(k in model_lower for k in local_keywords) or (
+                        final_result.provider_used in ["ollama", "llamacpp"]
+                    ):
+                        hw_tracker = get_hardware_telemetry_tracker()
+                        hw_tracker.record_inference_speed(
+                            tokens=max(1, final_result.completion_tokens),
+                            elapsed_seconds=max(0.05, final_result.completion_tokens * 0.016),
+                            model=final_result.model_used or req.model or "qwen2.5-coder:7b",
+                            runtime="ollama"
+                            if ("ollama" in model_lower or final_result.provider_used == "ollama")
+                            else "local",
+                        )
+
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+    # 4. Handle Non-Streaming Execution
     result = await coordinator.execute(exec_req)
 
-    # 3. Handle Failure or Policy Block
     if result.status in (ExecutionStatus.FAILED, ExecutionStatus.BLOCKED):
-        error_msg = result.error or "Provider execution failed: upstream service unavailable"
-        if req.stream:
+        http_status, error_code, error_msg = _map_execution_error(result)
+        return JSONResponse(
+            status_code=http_status,
+            content={
+                "detail": f"{error_code}: {error_msg}",
+                "error_code": error_code,
+                "message": error_msg,
+            },
+        )
 
-            async def err_gen():
-                payload = {
-                    "event": "error",
-                    "session_id": session_id,
-                    "error": error_msg,
-                    "timestamp": datetime.datetime.now().isoformat(),
-                }
-                yield f"data: {json.dumps(payload)}\n\n"
-
-            return StreamingResponse(err_gen(), media_type="text/event-stream")
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=error_msg)
-
-    # 4. Handle Success
     full_response_text = result.outputs.get("response", "")
     prompt_tokens = result.prompt_tokens
     completion_tokens = result.completion_tokens
     cost_usd = result.total_cost_usd
 
-    # Persist assistant turn to session store
+    # Persist assistant turn to session store exactly once
     store.append_message(
         session_id=session_id,
         role=MessageRole.ASSISTANT.value,
@@ -1396,7 +1582,6 @@ async def chat_completions(req: ChatRequest):
     )
 
     # Record local throughput in hardware tracker if local model was used
-    local_keywords = ["qwen", "llama", "local", "ollama", "mistral", "deepseek"]
     model_lower = (result.model_used or req.model or "").lower()
     if any(k in model_lower for k in local_keywords) or (
         result.provider_used in ["ollama", "llamacpp"]
@@ -1411,46 +1596,6 @@ async def chat_completions(req: ChatRequest):
             else "local",
         )
 
-    # 5. Output Response (Streaming or Non-streaming)
-    if req.stream:
-        import re
-
-        tokens = re.findall(r"\S+|\s+", full_response_text) if full_response_text else [""]
-
-        async def event_generator() -> AsyncGenerator[str, None]:
-            for t in tokens:
-                payload = {
-                    "event": "token",
-                    "session_id": session_id,
-                    "delta": t,
-                    "timestamp": datetime.datetime.now().isoformat(),
-                }
-                yield f"data: {json.dumps(payload)}\n\n"
-                await asyncio.sleep(0.005)
-
-            cost_event = {
-                "event": "cost_update",
-                "session_id": session_id,
-                "model": result.model_used or req.model or "default",
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "cost_usd": cost_usd,
-                "execution_id": result.execution_id,
-                "timestamp": datetime.datetime.now().isoformat(),
-            }
-            yield f"data: {json.dumps(cost_event)}\n\n"
-
-            done_event = {
-                "event": "done",
-                "session_id": session_id,
-                "execution_id": result.execution_id,
-                "timestamp": datetime.datetime.now().isoformat(),
-            }
-            yield f"data: {json.dumps(done_event)}\n\n"
-
-        return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-    # Non-streaming response
     return ChatResponse(
         response=full_response_text,
         session_id=session_id,

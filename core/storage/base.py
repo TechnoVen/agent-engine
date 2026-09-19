@@ -592,6 +592,10 @@ class StorageBackend(ABC):
         """Retrieve a project by primary key."""
         return None
 
+    def get_default_project(self) -> Optional[Dict[str, Any]]:
+        """Retrieve the canonical default project."""
+        return None
+
     def update_project(self, project_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Update an existing project."""
         return None
