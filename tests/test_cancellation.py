@@ -119,14 +119,14 @@ async def test_running_execution_can_be_cancelled(test_env):
     )
 
     task = asyncio.create_task(coordinator.execute(req))
-    await asyncio.wait_for(chunk_started.wait(), timeout=5.0)
+    await asyncio.wait_for(chunk_started.wait(), timeout=1.0)
 
     # Cancel while running
     cancel_res = coordinator.cancel(req.id, reason=CancellationReason.USER_REQUEST, actor="user")
     assert cancel_res["cancellation_requested"] is True
     assert cancel_res["status"] == "cancelled"
 
-    result = await asyncio.wait_for(task, timeout=5.0)
+    result = await asyncio.wait_for(task, timeout=1.0)
     assert result.status == ExecutionStatus.CANCELLED
     assert result.error_code == "CANCELLED"
     assert "user_request" in (result.error or "")
@@ -162,10 +162,10 @@ async def test_cancellation_reaches_provider_fixture(test_env):
 
     req = ExecutionRequest(project_id=project_id, prompt="Cooperative test")
     task = asyncio.create_task(coordinator.execute(req))
-    await asyncio.wait_for(started.wait(), timeout=5.0)
+    await asyncio.wait_for(started.wait(), timeout=1.0)
 
     coordinator.cancel(req.id, reason="provider_test")
-    res = await asyncio.wait_for(task, timeout=5.0)
+    res = await asyncio.wait_for(task, timeout=1.0)
 
     assert res.status == ExecutionStatus.CANCELLED
     assert provider_closed is True
@@ -194,10 +194,10 @@ async def test_no_chunks_emitted_after_cancellation_terminal_event(test_env):
 
     req = ExecutionRequest(project_id=project_id, prompt="No chunk leak")
     task = asyncio.create_task(coordinator.execute(req, event_listener=event_listener))
-    await asyncio.wait_for(started.wait(), timeout=5.0)
+    await asyncio.wait_for(started.wait(), timeout=1.0)
 
     coordinator.cancel(req.id, reason="stop_now")
-    await asyncio.wait_for(task, timeout=5.0)
+    await asyncio.wait_for(task, timeout=1.0)
 
     cancelled_idx = None
     for idx, ev in enumerate(events_recorded):
@@ -231,7 +231,7 @@ async def test_cancel_is_idempotent(test_env):
     coordinator._dispatch_override = slow_stream
     req = ExecutionRequest(project_id=project_id, prompt="Idempotence test")
     task = asyncio.create_task(coordinator.execute(req))
-    await asyncio.wait_for(started.wait(), timeout=5.0)
+    await asyncio.wait_for(started.wait(), timeout=1.0)
 
     # First cancel
     r1 = coordinator.cancel(req.id, reason="first_call")
@@ -242,7 +242,7 @@ async def test_cancel_is_idempotent(test_env):
     r2 = coordinator.cancel(req.id, reason="second_call")
     assert r2["status"] == "cancelled"
 
-    res = await asyncio.wait_for(task, timeout=5.0)
+    res = await asyncio.wait_for(task, timeout=1.0)
     assert res.status == ExecutionStatus.CANCELLED
 
     # Third cancel after completed using canonical execution_id
@@ -370,7 +370,7 @@ async def test_double_cancellation_is_safe(test_env):
     coordinator._dispatch_override = slow_stream
     req = ExecutionRequest(project_id=project_id, prompt="Concurrent cancel")
     task = asyncio.create_task(coordinator.execute(req))
-    await asyncio.wait_for(started.wait(), timeout=5.0)
+    await asyncio.wait_for(started.wait(), timeout=1.0)
 
     # Concurrent cancel calls
     r1, r2 = await asyncio.wait_for(
@@ -378,13 +378,13 @@ async def test_double_cancellation_is_safe(test_env):
             asyncio.to_thread(coordinator.cancel, req.id, "worker_1", "user"),
             asyncio.to_thread(coordinator.cancel, req.id, "worker_2", "user"),
         ),
-        timeout=5.0,
+        timeout=1.0,
     )
 
     assert r1["status"] == "cancelled"
     assert r2["status"] == "cancelled"
 
-    res = await asyncio.wait_for(task, timeout=5.0)
+    res = await asyncio.wait_for(task, timeout=1.0)
     assert res.status == ExecutionStatus.CANCELLED
 
 
@@ -405,10 +405,10 @@ async def test_cancel_vs_complete_race_has_one_terminal_result(test_env):
         coordinator._dispatch_override = quick_stream
         req = ExecutionRequest(project_id=project_id, prompt="Race test")
         task = asyncio.create_task(coordinator.execute(req))
-        await asyncio.wait_for(ready_to_finish.wait(), timeout=5.0)
+        await asyncio.wait_for(ready_to_finish.wait(), timeout=1.0)
 
         coordinator.cancel(req.id, reason="race_test")
-        res = await asyncio.wait_for(task, timeout=5.0)
+        res = await asyncio.wait_for(task, timeout=1.0)
 
         assert res.status in (ExecutionStatus.COMPLETED, ExecutionStatus.CANCELLED)
 
@@ -441,10 +441,10 @@ async def test_cancellation_persists_across_execution_ledger(test_env):
     coordinator._dispatch_override = stream_fn
     req = ExecutionRequest(project_id=project_id, prompt="Ledger persistence test")
     task = asyncio.create_task(coordinator.execute(req))
-    await asyncio.wait_for(started.wait(), timeout=5.0)
+    await asyncio.wait_for(started.wait(), timeout=1.0)
 
     coordinator.cancel(req.id, reason="ledger_check")
-    res = await asyncio.wait_for(task, timeout=5.0)
+    res = await asyncio.wait_for(task, timeout=1.0)
 
     # Query SQLite directly
     persisted = storage.get_execution(res.execution_id)
@@ -480,10 +480,10 @@ async def test_cancellation_reason_recorded(test_env):
     coordinator._dispatch_override = stream_fn
     req = ExecutionRequest(project_id=project_id, prompt="Reason test")
     task = asyncio.create_task(coordinator.execute(req))
-    await asyncio.wait_for(started.wait(), timeout=5.0)
+    await asyncio.wait_for(started.wait(), timeout=1.0)
 
     coordinator.cancel(req.id, reason="custom_rate_limit_exceeded", actor="rate_limiter_service")
-    res = await asyncio.wait_for(task, timeout=5.0)
+    res = await asyncio.wait_for(task, timeout=1.0)
 
     assert res.error == "Execution cancelled: custom_rate_limit_exceeded"
     persisted = coordinator.get_execution(res.execution_id)
@@ -530,10 +530,10 @@ async def test_partial_generated_text_is_not_persisted_as_successful_response(te
         inputs={"stream": True},
     )
     task = asyncio.create_task(coordinator.execute(req))
-    await asyncio.wait_for(started.wait(), timeout=5.0)
+    await asyncio.wait_for(started.wait(), timeout=1.0)
 
     coordinator.cancel(req.id, reason="user_stop")
-    res = await asyncio.wait_for(task, timeout=5.0)
+    res = await asyncio.wait_for(task, timeout=1.0)
 
     assert res.status == ExecutionStatus.CANCELLED
     assert res.partial_output is not None
@@ -615,10 +615,10 @@ async def test_disconnect_uses_canonical_cancellation_path(test_env):
 
     token = CancellationToken(req.id)
     task = asyncio.create_task(coordinator.execute(req, cancellation_token=token))
-    await asyncio.wait_for(started.wait(), timeout=5.0)
+    await asyncio.wait_for(started.wait(), timeout=1.0)
 
     coordinator.cancel(req.id, reason=CancellationReason.CLIENT_DISCONNECT, actor="client")
-    res = await asyncio.wait_for(task, timeout=5.0)
+    res = await asyncio.wait_for(task, timeout=1.0)
 
     assert res.status == ExecutionStatus.CANCELLED
     assert res.error_code == "CANCELLED"
@@ -692,7 +692,7 @@ async def test_partial_execution_cannot_become_cancelled_or_modified(test_env):
 @pytest.mark.anyio
 async def test_subprocess_graceful_to_force_termination_abstraction():
     """16. Cross-platform subprocess cancellation abstraction: graceful termination -> bounded wait -> force termination."""
-    token = CancellationToken("exec_test_proc")
+    token = CancellationToken("exec_test_proc", process_kill_timeout=0.05)
 
     class MockSubprocess:
         def __init__(self):
@@ -760,10 +760,10 @@ async def test_disconnect_does_not_cancel_when_policy_disabled(test_env):
 
     token = CancellationToken(req.id)
     task = asyncio.create_task(coordinator.execute(req, cancellation_token=token))
-    await asyncio.wait_for(started.wait(), timeout=5.0)
+    await asyncio.wait_for(started.wait(), timeout=1.0)
 
     # Transport disconnect event does NOT cancel background execution
     assert req.cancel_on_disconnect is False
-    res = await asyncio.wait_for(task, timeout=5.0)
+    res = await asyncio.wait_for(task, timeout=1.0)
     assert res.status == ExecutionStatus.COMPLETED
     assert completed.is_set() is True

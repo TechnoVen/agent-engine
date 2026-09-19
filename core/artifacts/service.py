@@ -8,8 +8,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.artifacts.models import (
@@ -20,6 +18,11 @@ from core.artifacts.models import (
     current_timestamp_iso,
     generate_artifact_id,
 )
+from core.artifacts.storage import (
+    ArtifactPayloadStore,
+    ArtifactSecurityError,
+    LocalFilesystemPayloadStore,
+)
 from core.storage.base import StorageBackend
 
 logger = logging.getLogger("agent_engine.artifacts.service")
@@ -27,14 +30,8 @@ logger = logging.getLogger("agent_engine.artifacts.service")
 DEFAULT_INLINE_THRESHOLD_BYTES = 8192  # 8 KB threshold for inline storage
 
 
-class ArtifactSecurityError(Exception):
-    """Raised when an artifact operation violates project isolation or filesystem boundary."""
-
-    pass
-
-
 class ArtifactNotFoundError(Exception):
-    """Raised when an artifact cannot be found."""
+    """Raised when an artifact cannot be found or has been deleted."""
 
     pass
 
@@ -46,59 +43,37 @@ class ArtifactIntegrityError(Exception):
 
 
 class ArtifactService:
-    """Canonical service managing artifact creation, retrieval, integrity, and isolation."""
+    """Canonical service managing artifact creation, retrieval, integrity, and project-scope boundaries.
+
+    Trust boundary note:
+    Stage R1 enforces project-scope integrity (preventing accidental cross-project data access or path escape).
+    Stage R2 will introduce authenticated actor identity and RBAC project authorization.
+    TODO(R2): Integrate authenticated actor identity in Stage R2 project authorization.
+    """
 
     def __init__(
         self,
         storage: StorageBackend,
         base_artifacts_dir: Optional[str] = None,
+        payload_store: Optional[ArtifactPayloadStore] = None,
         inline_threshold_bytes: int = DEFAULT_INLINE_THRESHOLD_BYTES,
     ):
         self.storage = storage
-        if base_artifacts_dir:
-            self.base_artifacts_dir = os.path.abspath(base_artifacts_dir)
+        if payload_store:
+            self.payload_store = payload_store
+            self.base_artifacts_dir = getattr(payload_store, "base_dir", "")
         else:
-            repo_root = Path(__file__).resolve().parents[2]
-            self.base_artifacts_dir = str(repo_root / "data" / "artifacts")
+            self.payload_store = LocalFilesystemPayloadStore(base_dir=base_artifacts_dir)
+            self.base_artifacts_dir = self.payload_store.base_dir
         self.inline_threshold_bytes = inline_threshold_bytes
-        os.makedirs(self.base_artifacts_dir, exist_ok=True)
 
     def _resolve_safe_project_dir(self, project_id: str) -> str:
         """Resolve and validate the base storage directory for a specific project."""
+        if hasattr(self.payload_store, "resolve_safe_project_dir"):
+            return self.payload_store.resolve_safe_project_dir(project_id)
         if not project_id or ".." in project_id or "/" in project_id or "\\" in project_id:
             raise ArtifactSecurityError(f"Invalid project_id for artifact storage: '{project_id}'")
-
-        project_dir = os.path.realpath(os.path.join(self.base_artifacts_dir, project_id))
-        base_dir_real = os.path.realpath(self.base_artifacts_dir)
-
-        # Validate containment
-        if os.path.commonpath([base_dir_real, project_dir]) != base_dir_real:
-            raise ArtifactSecurityError(
-                f"Project directory '{project_dir}' escapes base artifacts directory"
-            )
-
-        os.makedirs(project_dir, exist_ok=True)
-        return project_dir
-
-    def _resolve_safe_file_path(self, project_id: str, artifact_id: str, filename: str) -> str:
-        """Resolve and enforce containment for a prospective artifact file path."""
-        project_dir = self._resolve_safe_project_dir(project_id)
-
-        # Sanitize filename: strip directory components and traversal tokens
-        clean_name = os.path.basename(filename.replace("\\", "/"))
-        if not clean_name or clean_name in (".", ".."):
-            clean_name = "unnamed_artifact"
-
-        storage_filename = f"{artifact_id}_{clean_name}"
-        candidate_path = os.path.realpath(os.path.join(project_dir, storage_filename))
-
-        # Strict directory traversal and symlink escape verification
-        if os.path.commonpath([project_dir, candidate_path]) != project_dir:
-            raise ArtifactSecurityError(
-                f"Artifact path '{candidate_path}' escapes project boundary '{project_dir}'"
-            )
-
-        return candidate_path
+        return project_id
 
     def create_artifact(
         self,
@@ -160,12 +135,13 @@ class ArtifactService:
         if resolved_kind == ArtifactStorageKind.INLINE:
             inline_content = payload_bytes.decode("utf-8", errors="replace")
         else:
-            # Write to managed filesystem path
-            abs_path = self._resolve_safe_file_path(project_id, artifact_id, name)
-            with open(abs_path, "wb") as f:
-                f.write(payload_bytes)
-            # Record relative path for portability: {project_id}/{basename}
-            file_path_relative = os.path.relpath(abs_path, self.base_artifacts_dir)
+            # Delegate physical storage to payload store abstraction
+            file_path_relative = self.payload_store.write(
+                project_id=project_id,
+                artifact_id=artifact_id,
+                filename=name,
+                data=payload_bytes,
+            )
 
         artifact = Artifact(
             id=artifact_id,
@@ -200,27 +176,30 @@ class ArtifactService:
     def get_artifact(
         self, artifact_id: str, project_id: Optional[str] = None
     ) -> Optional[Artifact]:
-        """Retrieve artifact metadata by ID with optional project isolation enforcement."""
+        """Retrieve artifact metadata by ID with project-scope integrity verification."""
         raw = self.storage.get_artifact(artifact_id)
         if not raw:
             return None
 
         artifact = Artifact.model_validate(raw)
 
-        # Enforce project isolation
+        # Enforce project-scope integrity
         if project_id and artifact.project_id != project_id:
             raise ArtifactSecurityError(
-                f"Access denied: Artifact '{artifact_id}' belongs to project '{artifact.project_id}', "
+                f"Scope boundary violation: Artifact '{artifact_id}' belongs to project '{artifact.project_id}', "
                 f"not authorized for project '{project_id}'"
             )
 
         return artifact
 
     def get_artifact_payload(self, artifact_id: str, project_id: Optional[str] = None) -> bytes:
-        """Retrieve the payload bytes for an artifact and verify cryptographic integrity."""
+        """Retrieve payload bytes for an artifact and verify cryptographic integrity."""
         artifact = self.get_artifact(artifact_id, project_id=project_id)
         if not artifact:
             raise ArtifactNotFoundError(f"Artifact '{artifact_id}' not found")
+
+        if artifact.status == ArtifactStatus.DELETED:
+            raise ArtifactNotFoundError(f"Artifact '{artifact_id}' has been deleted")
 
         if artifact.storage_kind == ArtifactStorageKind.INLINE:
             payload = (artifact.inline_content or "").encode("utf-8")
@@ -228,20 +207,12 @@ class ArtifactService:
             if not artifact.file_path:
                 raise ArtifactNotFoundError(f"Artifact '{artifact_id}' has no file_path recorded")
 
-            abs_path = os.path.realpath(os.path.join(self.base_artifacts_dir, artifact.file_path))
-            project_dir = self._resolve_safe_project_dir(artifact.project_id)
-
-            # Security check: must reside inside project directory
-            if os.path.commonpath([project_dir, abs_path]) != project_dir:
-                raise ArtifactSecurityError(
-                    f"Artifact payload path '{abs_path}' escapes authorized project root '{project_dir}'"
+            try:
+                payload = self.payload_store.read(artifact.project_id, artifact.file_path)
+            except FileNotFoundError:
+                raise ArtifactNotFoundError(
+                    f"Artifact payload file missing for '{artifact_id}' at '{artifact.file_path}'"
                 )
-
-            if not os.path.exists(abs_path):
-                raise ArtifactNotFoundError(f"Artifact payload file missing at '{abs_path}'")
-
-            with open(abs_path, "rb") as f:
-                payload = f.read()
 
         # Integrity verification
         actual_hash = hashlib.sha256(payload).hexdigest()
@@ -266,44 +237,67 @@ class ArtifactService:
             return False
 
     def list_artifacts_by_execution(
-        self, execution_id: str, project_id: Optional[str] = None
+        self,
+        execution_id: str,
+        project_id: Optional[str] = None,
+        include_deleted: bool = False,
     ) -> List[Artifact]:
-        """List all artifacts produced or referenced by an execution with project isolation."""
-        records = self.storage.list_artifacts_by_execution(execution_id)
+        """List artifacts produced or referenced by an execution with project-scope isolation.
+
+        By default, excluded deleted artifacts unless include_deleted=True.
+        """
+        records = self.storage.list_artifacts_by_execution(
+            execution_id, include_deleted=include_deleted
+        )
         artifacts = [Artifact.model_validate(r) for r in records]
 
         if project_id:
-            # Filter and verify project isolation
+            # Filter and verify project-scope boundary
             artifacts = [a for a in artifacts if a.project_id == project_id]
+
+        if not include_deleted:
+            artifacts = [a for a in artifacts if a.status != ArtifactStatus.DELETED]
 
         return artifacts
 
-    def list_artifacts_by_project(self, project_id: str) -> List[Artifact]:
-        """List all artifacts belonging to a project."""
+    def list_artifacts_by_project(
+        self, project_id: str, include_deleted: bool = False
+    ) -> List[Artifact]:
+        """List artifacts belonging to a project, excluding deleted items by default."""
         if not project_id:
             raise ValueError("project_id is required to list artifacts")
-        records = self.storage.list_artifacts_by_project(project_id)
-        return [Artifact.model_validate(r) for r in records]
+        self._resolve_safe_project_dir(project_id)
+        records = self.storage.list_artifacts_by_project(
+            project_id, include_deleted=include_deleted
+        )
+        artifacts = [Artifact.model_validate(r) for r in records]
+        if not include_deleted:
+            artifacts = [a for a in artifacts if a.status != ArtifactStatus.DELETED]
+        return artifacts
 
     def delete_artifact(self, artifact_id: str, project_id: Optional[str] = None) -> bool:
-        """Delete artifact payload and remove or mark as DELETED in storage."""
+        """Delete artifact payload from storage and record metadata tombstone in database.
+
+        Preserves execution provenance, identity, and auditability:
+        - Payload is physically removed from storage.
+        - Database record is updated with status=DELETED and deleted_at timestamp.
+        """
         artifact = self.get_artifact(artifact_id, project_id=project_id)
         if not artifact:
             return False
 
-        # If stored on filesystem, safely delete the file
-        if artifact.storage_kind == ArtifactStorageKind.FILESYSTEM and artifact.file_path:
-            abs_path = os.path.realpath(os.path.join(self.base_artifacts_dir, artifact.file_path))
-            project_dir = self._resolve_safe_project_dir(artifact.project_id)
-            if os.path.commonpath([project_dir, abs_path]) == project_dir and os.path.exists(
-                abs_path
-            ):
-                try:
-                    os.remove(abs_path)
-                except OSError as ex:
-                    logger.warning("Error deleting artifact file '%s': %s", abs_path, ex)
+        if artifact.status == ArtifactStatus.DELETED:
+            return True  # Idempotent deletion
 
-        # Delete from database
-        deleted = self.storage.delete_artifact(artifact_id)
-        logger.info("Deleted artifact %s for project %s", artifact_id, artifact.project_id)
-        return deleted
+        # Delete physical payload from storage backend
+        if artifact.storage_kind == ArtifactStorageKind.FILESYSTEM and artifact.file_path:
+            self.payload_store.delete(artifact.project_id, artifact.file_path)
+
+        # Mark metadata tombstone in database
+        updated = self.storage.delete_artifact(artifact_id)
+        logger.info(
+            "Marked artifact %s as DELETED for project %s (tombstone preserved)",
+            artifact_id,
+            artifact.project_id,
+        )
+        return updated

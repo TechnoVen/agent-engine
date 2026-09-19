@@ -17,6 +17,10 @@ from core.artifacts.service import (
     ArtifactSecurityError,
     ArtifactService,
 )
+from core.artifacts.storage import (
+    ArtifactPayloadStore,
+    LocalFilesystemPayloadStore,
+)
 
 __all__ = [
     "Artifact",
@@ -27,5 +31,7 @@ __all__ = [
     "ArtifactSecurityError",
     "ArtifactNotFoundError",
     "ArtifactIntegrityError",
+    "ArtifactPayloadStore",
+    "LocalFilesystemPayloadStore",
     "generate_artifact_id",
 ]

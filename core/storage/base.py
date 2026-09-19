@@ -618,11 +618,15 @@ class StorageBackend(ABC):
         """Retrieve artifact metadata by primary key."""
         return None
 
-    def list_artifacts_by_execution(self, execution_id: str) -> List[Dict[str, Any]]:
+    def list_artifacts_by_execution(
+        self, execution_id: str, include_deleted: bool = False
+    ) -> List[Dict[str, Any]]:
         """List all artifacts produced or referenced by an execution."""
         return []
 
-    def list_artifacts_by_project(self, project_id: str) -> List[Dict[str, Any]]:
+    def list_artifacts_by_project(
+        self, project_id: str, include_deleted: bool = False
+    ) -> List[Dict[str, Any]]:
         """List all artifacts belonging to a project."""
         return []
 
@@ -633,7 +637,7 @@ class StorageBackend(ABC):
         return None
 
     def delete_artifact(self, artifact_id: str) -> bool:
-        """Delete an artifact metadata record."""
+        """Mark an artifact as deleted and preserve tombstone."""
         return False
 
 

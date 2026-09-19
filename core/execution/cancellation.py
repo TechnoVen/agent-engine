@@ -65,8 +65,9 @@ class ExecutionCancelledError(Exception):
 class CancellationToken:
     """Execution-scoped, idempotent, thread-safe cancellation primitive."""
 
-    def __init__(self, execution_id: str):
+    def __init__(self, execution_id: str, process_kill_timeout: float = 1.5):
         self.execution_id = execution_id
+        self.process_kill_timeout = process_kill_timeout
         self._is_cancelled = False
         self._reason: Optional[str] = None
         self._actor: Optional[str] = None
@@ -125,7 +126,9 @@ class CancellationToken:
                 if proc.returncode is None:
                     proc.terminate()
                     # Schedule bounded force-termination escalation in background if still running
-                    asyncio.create_task(self._ensure_process_terminated(proc, timeout=1.5))
+                    asyncio.create_task(
+                        self._ensure_process_terminated(proc, timeout=self.process_kill_timeout)
+                    )
             except Exception as e:
                 logger.warning("Error terminating process %s: %s", getattr(proc, "pid", "?"), e)
 
@@ -141,7 +144,7 @@ class CancellationToken:
         return True
 
     async def _ensure_process_terminated(
-        self, proc: asyncio.subprocess.Process, timeout: float = 1.5
+        self, proc: asyncio.subprocess.Process, timeout: Optional[float] = None
     ) -> None:
         """Cross-platform termination contract:
 
@@ -149,8 +152,9 @@ class CancellationToken:
         2. Bounded wait for process completion.
         3. Escalate to forced termination (kill() / SIGKILL / TerminateProcess) if unyielding.
         """
+        effective_timeout = self.process_kill_timeout if timeout is None else timeout
         try:
-            await asyncio.wait_for(proc.wait(), timeout=timeout)
+            await asyncio.wait_for(proc.wait(), timeout=effective_timeout)
         except asyncio.TimeoutError:
             try:
                 if proc.returncode is None:
@@ -174,7 +178,9 @@ class CancellationToken:
             try:
                 if proc.returncode is None:
                     proc.terminate()
-                    asyncio.create_task(self._ensure_process_terminated(proc, timeout=1.5))
+                    asyncio.create_task(
+                        self._ensure_process_terminated(proc, timeout=self.process_kill_timeout)
+                    )
             except Exception:
                 pass
         else:

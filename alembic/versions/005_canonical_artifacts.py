@@ -48,6 +48,7 @@ def upgrade() -> None:
         sa.Column("lineage_json", sa.Text(), nullable=False, server_default="{}"),
         sa.Column("created_by", sa.Text(), nullable=True),
         sa.Column("created_at", sa.Text(), nullable=False),
+        sa.Column("deleted_at", sa.Text(), nullable=True),
     )
     op.create_index("idx_artifacts_project", "artifacts", ["project_id"])
     op.create_index("idx_artifacts_execution", "artifacts", ["execution_id"])

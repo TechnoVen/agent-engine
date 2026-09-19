@@ -298,13 +298,26 @@ class SQLiteBackend(StorageBackend):
                         status TEXT NOT NULL DEFAULT 'ready',
                         lineage_json TEXT NOT NULL DEFAULT '{}',
                         created_by TEXT,
-                        created_at TEXT NOT NULL
+                        created_at TEXT NOT NULL,
+                        deleted_at TEXT
                     );
                     CREATE INDEX IF NOT EXISTS idx_artifacts_project ON artifacts(project_id);
                     CREATE INDEX IF NOT EXISTS idx_artifacts_execution ON artifacts(execution_id);
                     CREATE INDEX IF NOT EXISTS idx_artifacts_type ON artifacts(type);
                     CREATE INDEX IF NOT EXISTS idx_artifacts_status ON artifacts(status);
                 """)
+                conn.commit()
+
+                # Migration check: ensure 'deleted_at' column exists in artifacts
+                cursor.execute("PRAGMA table_info(artifacts)")
+                existing_art_cols = [row[1] for row in cursor.fetchall()]
+                if "deleted_at" not in existing_art_cols and "id" in existing_art_cols:
+                    cursor.execute("ALTER TABLE artifacts ADD COLUMN deleted_at TEXT")
+                    conn.commit()
+
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_artifacts_deleted_at ON artifacts(deleted_at)"
+                )
                 conn.commit()
 
                 # Migration check: ensure 'is_default' column exists before indexing and inserting
@@ -2511,8 +2524,9 @@ class SQLiteBackend(StorageBackend):
                     INSERT INTO artifacts (
                         id, project_id, execution_id, name, type, mime_type,
                         storage_kind, file_path, inline_content, sha256_hash,
-                        size_bytes, status, lineage_json, created_by, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        size_bytes, status, lineage_json, created_by, created_at,
+                        deleted_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         artifact["id"],
@@ -2530,6 +2544,7 @@ class SQLiteBackend(StorageBackend):
                         lineage_str,
                         artifact.get("created_by"),
                         artifact.get("created_at", datetime.now(timezone.utc).isoformat()),
+                        artifact.get("deleted_at"),
                     ),
                 )
                 conn.commit()
@@ -2561,16 +2576,22 @@ class SQLiteBackend(StorageBackend):
                 if not self._is_memory:
                     conn.close()
 
-    def list_artifacts_by_execution(self, execution_id: str) -> List[Dict[str, Any]]:
+    def list_artifacts_by_execution(
+        self, execution_id: str, include_deleted: bool = False
+    ) -> List[Dict[str, Any]]:
         """List all artifacts produced or referenced by an execution."""
         with self._lock:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT * FROM artifacts WHERE execution_id = ? ORDER BY created_at ASC",
-                    (execution_id,),
-                )
+                if include_deleted:
+                    sql = "SELECT * FROM artifacts WHERE execution_id = ? ORDER BY created_at ASC"
+                else:
+                    sql = (
+                        "SELECT * FROM artifacts WHERE execution_id = ? AND status != 'deleted' "
+                        "ORDER BY created_at ASC"
+                    )
+                cursor.execute(sql, (execution_id,))
                 rows = cursor.fetchall()
                 results = []
                 for row in rows:
@@ -2588,16 +2609,22 @@ class SQLiteBackend(StorageBackend):
                 if not self._is_memory:
                     conn.close()
 
-    def list_artifacts_by_project(self, project_id: str) -> List[Dict[str, Any]]:
+    def list_artifacts_by_project(
+        self, project_id: str, include_deleted: bool = False
+    ) -> List[Dict[str, Any]]:
         """List all artifacts belonging to a project."""
         with self._lock:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT * FROM artifacts WHERE project_id = ? ORDER BY created_at DESC",
-                    (project_id,),
-                )
+                if include_deleted:
+                    sql = "SELECT * FROM artifacts WHERE project_id = ? ORDER BY created_at DESC"
+                else:
+                    sql = (
+                        "SELECT * FROM artifacts WHERE project_id = ? AND status != 'deleted' "
+                        "ORDER BY created_at DESC"
+                    )
+                cursor.execute(sql, (project_id,))
                 rows = cursor.fetchall()
                 results = []
                 for row in rows:
@@ -2642,6 +2669,7 @@ class SQLiteBackend(StorageBackend):
                         "size_bytes",
                         "status",
                         "created_by",
+                        "deleted_at",
                     ):
                         set_clauses.append(f"{key} = ?")
                         params.append(val)
@@ -2657,12 +2685,23 @@ class SQLiteBackend(StorageBackend):
                     conn.close()
 
     def delete_artifact(self, artifact_id: str) -> bool:
-        """Delete an artifact metadata record."""
+        """Mark an artifact record as DELETED and clear payload references (tombstone preservation)."""
         with self._lock:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
-                cursor.execute("DELETE FROM artifacts WHERE id = ?", (artifact_id,))
+                now_iso = datetime.now(timezone.utc).isoformat()
+                cursor.execute(
+                    """
+                    UPDATE artifacts
+                    SET status = 'deleted',
+                        deleted_at = ?,
+                        file_path = NULL,
+                        inline_content = NULL
+                    WHERE id = ? AND status != 'deleted'
+                    """,
+                    (now_iso, artifact_id),
+                )
                 conn.commit()
                 return cursor.rowcount > 0
             finally:

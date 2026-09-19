@@ -75,6 +75,7 @@ class Artifact(BaseModel):
     lineage: Dict[str, Any] = Field(default_factory=dict)
     created_by: Optional[str] = None
     created_at: str = Field(default_factory=current_timestamp_iso)
+    deleted_at: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert artifact model to dictionary format for persistence and API transport."""
@@ -100,4 +101,5 @@ class Artifact(BaseModel):
             "lineage": self.lineage,
             "created_by": self.created_by,
             "created_at": self.created_at,
+            "deleted_at": self.deleted_at,
         }

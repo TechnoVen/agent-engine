@@ -35,6 +35,7 @@ import pytest
 from core.artifacts import (
     Artifact,
     ArtifactIntegrityError,
+    ArtifactNotFoundError,
     ArtifactSecurityError,
     ArtifactService,
     ArtifactStatus,
@@ -551,7 +552,7 @@ async def test_partial_output_artifact_on_cancellation(tmp_path):
 
 
 def test_artifact_deletion(artifact_service, test_storage):
-    """Test 13: Deleting an artifact removes payload file and SQLite record."""
+    """Test 13: Deleting an artifact marks tombstone status, deletes payload, and excludes from default listings."""
     ensure_execution(test_storage, "exec_del", "proj_alpha")
     art = artifact_service.create_artifact(
         project_id="proj_alpha",
@@ -567,11 +568,32 @@ def test_artifact_deletion(artifact_service, test_storage):
     deleted = artifact_service.delete_artifact(art.id, project_id="proj_alpha")
     assert deleted is True
 
-    # Check payload file deleted
+    # 1. Check physical payload file deleted
     assert not os.path.exists(abs_path)
 
-    # Check metadata returns None
-    assert artifact_service.get_artifact(art.id) is None
+    # 2. Check metadata preserved as tombstone
+    record = artifact_service.get_artifact(art.id)
+    assert record is not None
+    assert record.status == ArtifactStatus.DELETED
+    assert record.deleted_at is not None
+
+    # 3. Payload retrieval raises ArtifactNotFoundError
+    with pytest.raises(ArtifactNotFoundError, match="has been deleted"):
+        artifact_service.get_artifact_payload(art.id)
+
+    # 4. Default listing excludes tombstone
+    exec_arts = artifact_service.list_artifacts_by_execution("exec_del")
+    assert not any(a.id == art.id for a in exec_arts)
+
+    proj_arts = artifact_service.list_artifacts_by_project("proj_alpha")
+    assert not any(a.id == art.id for a in proj_arts)
+
+    # 5. Listing with include_deleted=True includes tombstone
+    exec_arts_all = artifact_service.list_artifacts_by_execution("exec_del", include_deleted=True)
+    assert any(a.id == art.id for a in exec_arts_all)
+
+    proj_arts_all = artifact_service.list_artifacts_by_project("proj_alpha", include_deleted=True)
+    assert any(a.id == art.id for a in proj_arts_all)
 
 
 def test_alembic_migration_005_round_trip(tmp_path):
@@ -753,6 +775,21 @@ def test_rest_endpoints_artifacts_crud_and_download(tmp_path, monkeypatch):
     assert res_del.status_code == 200
     assert res_del.json() == {"success": True, "artifact_id": art.id}
 
-    # Subsequent GET returns 404
+    # Subsequent GET returns 200 with tombstone status and deleted_at
     res_after_del = client.get(f"/v1/artifacts/{art.id}")
-    assert res_after_del.status_code == 404
+    assert res_after_del.status_code == 200
+    del_data = res_after_del.json()
+    assert del_data["status"] == "deleted"
+    assert del_data["deleted_at"] is not None
+
+    # Subsequent content download returns 404
+    res_content_del = client.get(f"/v1/artifacts/{art.id}/content")
+    assert res_content_del.status_code == 404
+
+    # Excluded from default listing, included with include_deleted=true
+    res_exec_empty = client.get("/v1/executions/exec_api_1/artifacts")
+    assert len(res_exec_empty.json()) == 0
+
+    res_exec_tombstone = client.get("/v1/executions/exec_api_1/artifacts?include_deleted=true")
+    assert len(res_exec_tombstone.json()) == 1
+    assert res_exec_tombstone.json()[0]["id"] == art.id
