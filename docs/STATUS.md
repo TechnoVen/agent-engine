@@ -299,18 +299,38 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "services/python/server/api.py"
     - "tests/test_cancellation.py"
   notes: "Implemented canonical CancellationToken primitive with cancellation reason/actor/timestamp metadata, cooperative generator cancellation via aclose()/close(), process termination registry with bounded SIGTERM-to-SIGKILL escalation, REST cancellation API endpoints (POST /v1/executions/{id}/cancel, GET /v1/executions/{id}, GET /v1/executions/{id}/events), SSE cancellation events, zero chunk emission after cancellation, strict terminal state immutability, and guarantee of zero assistant turn persistence to UnifiedSessionStore on cancelled executions."
+
+- id: R1.10
+  title: "Execution artifact model"
+  task_status: done
+  capability_maturity: S1
+  migration: NEW
+  owner: "Execution Kernel"
+  depends_on: [R1.1]
+  evidence:
+    - "core/artifacts/models.py"
+    - "core/artifacts/service.py"
+    - "core/artifacts/__init__.py"
+    - "core/storage/base.py"
+    - "core/storage/sqlite.py"
+    - "alembic/versions/005_canonical_artifacts.py"
+    - "services/python/server/api.py"
+    - "tests/test_artifacts.py"
+  notes: "Implemented canonical Artifact domain model (art_<hex12> ID, project_id, execution_id, type, mime_type, storage_kind, file_path, inline_content, sha256_hash, size_bytes, status, lineage, created_by, created_at) with SQLite metadata table and managed filesystem root. Enforced automatic storage tiering (inline for text <= 8KB, filesystem for binary or > 8KB). Enforced strict cryptographic SHA-256 integrity verification, hard project isolation (cross-project access rejected with 403), path traversal protection, symlink escape detection, partial-output artifact creation on cancellation with ARTIFACT_CREATED durable events, Alembic migration 005_canonical_artifacts, and complete REST API CRUD and content streaming endpoints."
 ```
 
 ---
 
 ## 6. Active Test Suite & Deprecation Warnings Log
 
-- **Test Suite Result:** `423 passed, 3 warnings in 57.73s` (`uv run pytest`)
-- **Cancellation Suite:** `14 passed in 6.42s` (`uv run pytest tests/test_cancellation.py`)
+- **Cancellation Suite:** `17 passed in 177.98s` (`uv run pytest tests/test_cancellation.py`)
+- **Artifacts Suite:** `15 passed in 6.45s` (`uv run pytest tests/test_artifacts.py`)
+- **Execution Kernel Suite:** `37 passed in 8.33s` (`uv run pytest tests/test_execution_*.py`)
 - **Documented Upstream Warnings (Non-blocking):**
   1. `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.` (Origin: `fastapi/testclient.py:1` — Upstream FastAPI/Starlette testclient deprecation notice; non-runtime).
   2. `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.` (Origin: `starlette/testclient.py:53` — Upstream Starlette/AnyIO import alias notice; non-runtime).
   3. `DeprecationWarning: 'asyncio.iscoroutinefunction' is deprecated and slated for removal in Python 3.16; use inspect.iscoroutinefunction() instead` (Origin: `chromadb/telemetry/opentelemetry/__init__.py:128` — Upstream ChromaDB telemetry compatibility notice for Python 3.16+; non-blocking on current Python 3.10–3.14).
+
 
 
 

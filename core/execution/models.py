@@ -63,6 +63,7 @@ class ExecutionEventType(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    ARTIFACT_CREATED = "artifact_created"
     ERROR = "error"
 
     @property
@@ -165,6 +166,10 @@ class ExecutionResult(BaseModel):
     is_cost_estimated: bool = False
     artifacts_created: List[str] = Field(default_factory=list)
     verification: Optional[VerificationResult] = None
+
+    @property
+    def artifact_ids(self) -> List[str]:
+        return self.artifacts_created
 
 
 class ExecutionEvent(BaseModel):

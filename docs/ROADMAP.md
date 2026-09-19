@@ -509,20 +509,20 @@ A real desktop request travels through project/session context, routing, a real 
 - **Required Evidence:**
   - Cancellation E2E test with slow provider/tool stubs (`tests/test_cancellation.py`).
 
-### [ ] R1.10 — Execution artifact model
+### [x] R1.10 — Execution artifact model
 
 - **Migration:** `NEW`
 - **Target release:** `0.5`
-- **Initial maturity:** `S0` unless `docs/STATUS.md` verifies a higher level from legacy work.
+- **Initial maturity:** `S1`
 - **Dependencies:** R1.1
 - **User Story:** As a user, I want answers, files, patches, reports and queued jobs distinguished so the system never confuses a proposal with an applied change.
 - **Deliverables:**
   - Implement typed `Artifact` metadata and storage references.
   - Link artifacts to executions/jobs.
 - **Acceptance Criteria:**
-  - [ ] UI/API can distinguish answer, file, patch, proposed change, applied change and queued job.
+  - [x] UI/API can distinguish answer, file, patch, proposed change, applied change and queued job.
 - **Required Evidence:**
-  - Artifact round-trip tests.
+  - Artifact round-trip tests (`tests/test_artifacts.py`).
 
 ### [ ] R1.11 — Execution ledger
 

@@ -69,6 +69,7 @@ class ExecutionCoordinator:
         dispatch_override: Optional[
             Callable[[ExecutionContext, RoutingTier, str, str], Any]
         ] = None,
+        artifact_service: Optional[Any] = None,
     ):
         self.storage = storage or get_storage_backend()
         self.policy_engine = policy_engine or PolicyEngine()
@@ -82,6 +83,15 @@ class ExecutionCoordinator:
         self.session_store = session_store
         self.pending_registry = pending_registry or PendingOperationRegistry()
         self._dispatch_override = dispatch_override
+        if artifact_service is not None:
+            self.artifact_service = artifact_service
+        else:
+            try:
+                from core.artifacts.service import ArtifactService
+
+                self.artifact_service = ArtifactService(storage=self.storage)
+            except Exception:
+                self.artifact_service = None
         self._active_executions: Dict[str, Execution] = {}
         self._active_tokens: Dict[str, CancellationToken] = {}
         self._active_state_machines: Dict[str, ExecutionStateMachine] = {}
@@ -414,11 +424,53 @@ class ExecutionCoordinator:
             execution.completed_at = cancelled_at
             self.storage.update_execution(exec_id, execution.model_dump())
             duration_ms = (time.perf_counter() - start_time) * 1000.0
+
+            # If partial output was produced, persist as a canonical PARTIAL Artifact (Task R1.10)
+            created_artifacts = []
+            if partial_text and getattr(self, "artifact_service", None):
+                try:
+                    from core.artifacts.models import ArtifactStatus, ArtifactType
+
+                    art = self.artifact_service.create_artifact(
+                        project_id=request.project_id,
+                        execution_id=exec_id,
+                        name="partial_output.txt",
+                        content=partial_text,
+                        type=ArtifactType.TEXT,
+                        mime_type="text/plain",
+                        status=ArtifactStatus.PARTIAL,
+                        created_by=actor,
+                        lineage={
+                            "execution_id": exec_id,
+                            "stage": stage_name,
+                            "cancellation_reason": reason,
+                        },
+                    )
+                    created_artifacts.append(art.id)
+                    combined_event_sink(
+                        ExecutionEvent(
+                            execution_id=exec_id,
+                            sequence_num=state_machine.current_sequence_num,
+                            event_type=ExecutionEventType.ARTIFACT_CREATED,
+                            payload={
+                                "artifact_id": art.id,
+                                "name": art.name,
+                                "type": art.type.value,
+                                "size_bytes": art.size_bytes,
+                                "sha256": art.sha256_hash,
+                            },
+                        )
+                    )
+                    state_machine.current_sequence_num += 1
+                except Exception as art_ex:
+                    logger.warning("Failed to persist partial output artifact: %s", art_ex)
+
             return ExecutionResult(
                 execution_id=exec_id,
                 status=ExecutionStatus.CANCELLED,
                 outputs={"partial_output": partial_text} if partial_text else {},
                 partial_output=partial_text,
+                artifacts_created=created_artifacts,
                 error=f"Execution cancelled: {reason}",
                 error_code="CANCELLED",
                 duration_ms=duration_ms,
@@ -1045,11 +1097,19 @@ class ExecutionCoordinator:
 
             self.storage.update_execution(exec_id, execution.model_dump())
 
+            existing_artifacts = (
+                self.artifact_service.list_artifacts_by_execution(exec_id)
+                if getattr(self, "artifact_service", None)
+                else []
+            )
+            artifact_ids = [a.id for a in existing_artifacts]
+
             # Phase 10: Return ExecutionResult
             return ExecutionResult(
                 execution_id=exec_id,
                 status=final_status,
                 outputs=outputs,
+                artifacts_created=artifact_ids,
                 error=verification.error if not verification.passed else None,
                 error_code=None if verification.passed else "VERIFICATION_FAILED",
                 total_tokens=total_tokens,

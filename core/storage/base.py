@@ -608,6 +608,34 @@ class StorageBackend(ABC):
         """Delete a project by primary key."""
         return False
 
+    # --- 15. CANONICAL ARTIFACTS (R1.10) ---
+
+    def create_artifact(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist a canonical artifact metadata record."""
+        return artifact
+
+    def get_artifact(self, artifact_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve artifact metadata by primary key."""
+        return None
+
+    def list_artifacts_by_execution(self, execution_id: str) -> List[Dict[str, Any]]:
+        """List all artifacts produced or referenced by an execution."""
+        return []
+
+    def list_artifacts_by_project(self, project_id: str) -> List[Dict[str, Any]]:
+        """List all artifacts belonging to a project."""
+        return []
+
+    def update_artifact(
+        self, artifact_id: str, updates: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Update artifact metadata."""
+        return None
+
+    def delete_artifact(self, artifact_id: str) -> bool:
+        """Delete an artifact metadata record."""
+        return False
+
 
 # Backward-compatible and semantic alias
 StorageRepository = StorageBackend

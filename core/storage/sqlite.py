@@ -282,6 +282,28 @@ class SQLiteBackend(StorageBackend):
                         updated_at TEXT NOT NULL
                     );
                     CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name);
+
+                    CREATE TABLE IF NOT EXISTS artifacts (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                        execution_id TEXT NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
+                        name TEXT NOT NULL,
+                        type TEXT NOT NULL DEFAULT 'file',
+                        mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+                        storage_kind TEXT NOT NULL DEFAULT 'filesystem',
+                        file_path TEXT,
+                        inline_content TEXT,
+                        sha256_hash TEXT NOT NULL,
+                        size_bytes INTEGER NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'ready',
+                        lineage_json TEXT NOT NULL DEFAULT '{}',
+                        created_by TEXT,
+                        created_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_artifacts_project ON artifacts(project_id);
+                    CREATE INDEX IF NOT EXISTS idx_artifacts_execution ON artifacts(execution_id);
+                    CREATE INDEX IF NOT EXISTS idx_artifacts_type ON artifacts(type);
+                    CREATE INDEX IF NOT EXISTS idx_artifacts_status ON artifacts(status);
                 """)
                 conn.commit()
 
@@ -2465,6 +2487,182 @@ class SQLiteBackend(StorageBackend):
             try:
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    # --- 15. CANONICAL ARTIFACTS (R1.10) ---
+
+    def create_artifact(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist a canonical artifact metadata record."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                lineage_str = (
+                    json.dumps(artifact.get("lineage", {}))
+                    if isinstance(artifact.get("lineage"), (dict, list))
+                    else str(artifact.get("lineage", "{}"))
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO artifacts (
+                        id, project_id, execution_id, name, type, mime_type,
+                        storage_kind, file_path, inline_content, sha256_hash,
+                        size_bytes, status, lineage_json, created_by, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        artifact["id"],
+                        artifact["project_id"],
+                        artifact["execution_id"],
+                        artifact["name"],
+                        artifact.get("type", "file"),
+                        artifact.get("mime_type", "application/octet-stream"),
+                        artifact.get("storage_kind", "filesystem"),
+                        artifact.get("file_path"),
+                        artifact.get("inline_content"),
+                        artifact["sha256_hash"],
+                        artifact["size_bytes"],
+                        artifact.get("status", "ready"),
+                        lineage_str,
+                        artifact.get("created_by"),
+                        artifact.get("created_at", datetime.now(timezone.utc).isoformat()),
+                    ),
+                )
+                conn.commit()
+                return artifact
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_artifact(self, artifact_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve artifact metadata by primary key."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM artifacts WHERE id = ?", (artifact_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                data = dict(row)
+                if data.get("lineage_json"):
+                    try:
+                        data["lineage"] = json.loads(data["lineage_json"])
+                    except Exception:
+                        data["lineage"] = {}
+                else:
+                    data["lineage"] = {}
+                return data
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_artifacts_by_execution(self, execution_id: str) -> List[Dict[str, Any]]:
+        """List all artifacts produced or referenced by an execution."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM artifacts WHERE execution_id = ? ORDER BY created_at ASC",
+                    (execution_id,),
+                )
+                rows = cursor.fetchall()
+                results = []
+                for row in rows:
+                    data = dict(row)
+                    if data.get("lineage_json"):
+                        try:
+                            data["lineage"] = json.loads(data["lineage_json"])
+                        except Exception:
+                            data["lineage"] = {}
+                    else:
+                        data["lineage"] = {}
+                    results.append(data)
+                return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_artifacts_by_project(self, project_id: str) -> List[Dict[str, Any]]:
+        """List all artifacts belonging to a project."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM artifacts WHERE project_id = ? ORDER BY created_at DESC",
+                    (project_id,),
+                )
+                rows = cursor.fetchall()
+                results = []
+                for row in rows:
+                    data = dict(row)
+                    if data.get("lineage_json"):
+                        try:
+                            data["lineage"] = json.loads(data["lineage_json"])
+                        except Exception:
+                            data["lineage"] = {}
+                    else:
+                        data["lineage"] = {}
+                    results.append(data)
+                return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def update_artifact(
+        self, artifact_id: str, updates: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Update artifact metadata."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                set_clauses = []
+                params = []
+                for key, val in updates.items():
+                    if key == "lineage":
+                        set_clauses.append("lineage_json = ?")
+                        params.append(
+                            json.dumps(val) if isinstance(val, (dict, list)) else str(val)
+                        )
+                    elif key in (
+                        "name",
+                        "type",
+                        "mime_type",
+                        "storage_kind",
+                        "file_path",
+                        "inline_content",
+                        "sha256_hash",
+                        "size_bytes",
+                        "status",
+                        "created_by",
+                    ):
+                        set_clauses.append(f"{key} = ?")
+                        params.append(val)
+                if not set_clauses:
+                    return self.get_artifact(artifact_id)
+                params.append(artifact_id)
+                sql = f"UPDATE artifacts SET {', '.join(set_clauses)} WHERE id = ?"
+                cursor.execute(sql, tuple(params))
+                conn.commit()
+                return self.get_artifact(artifact_id)
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def delete_artifact(self, artifact_id: str) -> bool:
+        """Delete an artifact metadata record."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM artifacts WHERE id = ?", (artifact_id,))
                 conn.commit()
                 return cursor.rowcount > 0
             finally:

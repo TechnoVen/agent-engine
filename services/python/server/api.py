@@ -18,7 +18,7 @@ if PROJECT_ROOT not in sys.path:
 
 # Ensure numpy pre-import before dspy lazy import
 import numpy  # noqa: F401
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
@@ -66,6 +66,12 @@ from core.session import (
     MessageRole,
     ToolCall,
     get_session_store,
+)
+from core.artifacts import (
+    ArtifactIntegrityError,
+    ArtifactNotFoundError,
+    ArtifactSecurityError,
+    ArtifactService,
 )
 from core.execution import (
     CancellationToken,
@@ -201,6 +207,25 @@ def get_execution_coordinator() -> ExecutionCoordinator:
 def set_execution_coordinator(coord: ExecutionCoordinator) -> None:
     global coordinator_instance
     coordinator_instance = coord
+
+
+artifact_service_instance: Optional[ArtifactService] = None
+
+
+def get_artifact_service() -> ArtifactService:
+    global artifact_service_instance
+    if artifact_service_instance is None:
+        coord = get_execution_coordinator()
+        if getattr(coord, "artifact_service", None):
+            artifact_service_instance = coord.artifact_service
+        else:
+            artifact_service_instance = ArtifactService(storage=get_storage_backend())
+    return artifact_service_instance
+
+
+def set_artifact_service(service: ArtifactService) -> None:
+    global artifact_service_instance
+    artifact_service_instance = service
 
 
 # In-memory queues for global SSE event subscribers
@@ -1778,6 +1803,149 @@ async def get_execution_events_endpoint(
         )
     events = coordinator.get_execution_events(execution_id, after_sequence_num=after_sequence_num)
     return JSONResponse(content={"execution_id": execution_id, "events": events})
+
+
+# ---------------------------------------------------------------------------
+# CANONICAL ARTIFACT ENDPOINTS (R1.10)
+# ---------------------------------------------------------------------------
+
+
+@v1_router.get("/executions/{execution_id}/artifacts")
+async def list_execution_artifacts_endpoint(
+    execution_id: str,
+    project_id: Optional[str] = Query(None),
+    x_project_id: Optional[str] = Header(None, alias="X-Project-ID"),
+    coordinator: ExecutionCoordinator = Depends(get_execution_coordinator),
+    artifact_service: ArtifactService = Depends(get_artifact_service),
+):
+    """List artifacts associated with an execution with project boundary enforcement."""
+    effective_project_id = project_id or x_project_id
+    record = coordinator.get_execution(execution_id)
+    if not record:
+        active_exec = coordinator._active_executions.get(execution_id)
+        if active_exec:
+            record = active_exec.model_dump()
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Execution '{execution_id}' not found",
+        )
+
+    exec_project_id = (
+        record.get("project_id")
+        if isinstance(record, dict)
+        else getattr(record, "project_id", None)
+    )
+    if effective_project_id and exec_project_id and exec_project_id != effective_project_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Access denied: Execution '{execution_id}' belongs to project '{exec_project_id}'",
+        )
+
+    artifacts = artifact_service.list_artifacts_by_execution(
+        execution_id, project_id=effective_project_id
+    )
+    return JSONResponse(content=[a.to_dict() for a in artifacts])
+
+
+@v1_router.get("/projects/{project_id}/artifacts")
+async def list_project_artifacts_endpoint(
+    project_id: str,
+    artifact_service: ArtifactService = Depends(get_artifact_service),
+):
+    """List all artifacts belonging to a project."""
+    backend = get_storage_backend()
+    if hasattr(backend, "get_project") and not backend.get_project(project_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project '{project_id}' not found",
+        )
+    try:
+        artifacts = artifact_service.list_artifacts_by_project(project_id)
+        return JSONResponse(content=[a.to_dict() for a in artifacts])
+    except ArtifactSecurityError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+
+
+@v1_router.get("/artifacts/{artifact_id}")
+async def get_artifact_endpoint(
+    artifact_id: str,
+    project_id: Optional[str] = Query(None),
+    x_project_id: Optional[str] = Header(None, alias="X-Project-ID"),
+    artifact_service: ArtifactService = Depends(get_artifact_service),
+):
+    """Get artifact metadata with project isolation check."""
+    effective_project_id = project_id or x_project_id
+    try:
+        artifact = artifact_service.get_artifact(artifact_id, project_id=effective_project_id)
+        if not artifact:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Artifact '{artifact_id}' not found",
+            )
+        return JSONResponse(content=artifact.to_dict())
+    except ArtifactSecurityError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+
+
+@v1_router.get("/artifacts/{artifact_id}/content")
+async def get_artifact_content_endpoint(
+    artifact_id: str,
+    project_id: Optional[str] = Query(None),
+    x_project_id: Optional[str] = Header(None, alias="X-Project-ID"),
+    artifact_service: ArtifactService = Depends(get_artifact_service),
+):
+    """Download artifact content bytes with cryptographic SHA-256 integrity verification."""
+    effective_project_id = project_id or x_project_id
+    try:
+        artifact = artifact_service.get_artifact(artifact_id, project_id=effective_project_id)
+        if not artifact:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Artifact '{artifact_id}' not found",
+            )
+        payload = artifact_service.get_artifact_payload(
+            artifact_id, project_id=effective_project_id
+        )
+        headers = {
+            "Content-Disposition": f'attachment; filename="{artifact.name}"',
+            "ETag": f'"{artifact.sha256_hash}"',
+            "Content-Length": str(len(payload)),
+        }
+        return Response(content=payload, media_type=artifact.mime_type, headers=headers)
+    except ArtifactSecurityError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
+    except ArtifactNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except ArtifactIntegrityError as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e))
+
+
+@v1_router.delete("/artifacts/{artifact_id}")
+async def delete_artifact_endpoint(
+    artifact_id: str,
+    project_id: Optional[str] = Query(None),
+    x_project_id: Optional[str] = Header(None, alias="X-Project-ID"),
+    artifact_service: ArtifactService = Depends(get_artifact_service),
+):
+    """Delete an artifact and its payload safely."""
+    effective_project_id = project_id or x_project_id
+    try:
+        artifact = artifact_service.get_artifact(artifact_id, project_id=effective_project_id)
+        if not artifact:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Artifact '{artifact_id}' not found",
+            )
+        deleted = artifact_service.delete_artifact(artifact_id, project_id=effective_project_id)
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Artifact '{artifact_id}' not found",
+            )
+        return JSONResponse(content={"success": True, "artifact_id": artifact_id})
+    except ArtifactSecurityError as e:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
 
 @v1_router.get("/events")
