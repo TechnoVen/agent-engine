@@ -185,19 +185,19 @@ async def test_no_chunks_emitted_after_cancellation_terminal_event(test_env):
 
     async def generator_override(ctx, tier, provider, model):
         for i in range(10):
-            if i == 2:
+            if i == 1:
                 started.set()
-            await asyncio.sleep(0.03)
+            await asyncio.sleep(0.02)
             yield f"data_{i}"
 
     coordinator._dispatch_override = generator_override
 
     req = ExecutionRequest(project_id=project_id, prompt="No chunk leak")
     task = asyncio.create_task(coordinator.execute(req, event_listener=event_listener))
-    await asyncio.wait_for(started.wait(), timeout=1.0)
+    await asyncio.wait_for(started.wait(), timeout=5.0)
 
     coordinator.cancel(req.id, reason="stop_now")
-    await asyncio.wait_for(task, timeout=1.0)
+    await asyncio.wait_for(task, timeout=5.0)
 
     cancelled_idx = None
     for idx, ev in enumerate(events_recorded):

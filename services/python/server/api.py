@@ -1851,7 +1851,7 @@ async def get_execution_trace_endpoint(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Execution '{execution_id}' not found",
             )
-        return JSONResponse(content=trace.to_dict())
+        return JSONResponse(content=trace.to_public_dict())
     except LedgerSecurityError as e:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 

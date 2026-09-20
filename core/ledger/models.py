@@ -7,10 +7,39 @@ References: docs/DATA_MODEL.md, docs/EXECUTION_MODEL.md, docs/ROADMAP.md (R1.11)
 from __future__ import annotations
 
 from enum import Enum
+import re
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 from core.execution.models import ExecutionStatus, VerificationResult
+
+_SENSITIVE_KEY_PATTERN = re.compile(
+    r"(?:api[-_]?key|auth|token|secret|password|credential|private[-_]?key)",
+    re.IGNORECASE,
+)
+_SENSITIVE_VALUE_PATTERN = re.compile(
+    r"(?i)(bearer\s+[a-z0-9_\-\.]{8,}|sk-[a-z0-9_\-]{14,}|ghp_[a-z0-9]{14,}|key-[a-z0-9]{14,}|password\s*[:=]\s*[^\s,;]+)"
+)
+_ABSOLUTE_PATH_PATTERN = re.compile(r"/(?:home|Users|root)/[a-zA-Z0-9_\.\-]+(/[a-zA-Z0-9_\.\-]+)*")
+
+
+def sanitize_sensitive_data(val: Any) -> Any:
+    """Recursively redact host absolute paths and credentials."""
+    if isinstance(val, str):
+        scrubbed = _SENSITIVE_VALUE_PATTERN.sub("[REDACTED_CREDENTIAL]", val)
+        scrubbed = _ABSOLUTE_PATH_PATTERN.sub("[REDACTED_PATH]", scrubbed)
+        return scrubbed
+    elif isinstance(val, dict):
+        res = {}
+        for k, v in val.items():
+            if _SENSITIVE_KEY_PATTERN.search(str(k)):
+                res[k] = "[REDACTED]"
+            else:
+                res[k] = sanitize_sensitive_data(v)
+        return res
+    elif isinstance(val, list):
+        return [sanitize_sensitive_data(item) for item in val]
+    return val
 
 
 class CostProvenance(str, Enum):
@@ -40,6 +69,7 @@ class ContextProvenance(BaseModel):
     """Cryptographic and volumetric provenance of operational context."""
 
     project_root: Optional[str] = None
+    project_root_available: bool = False
     project_instructions_hash: Optional[str] = None
     session_turns_available: int = 0
     session_turns_retained: int = 0
@@ -134,6 +164,47 @@ class ExecutionTrace(BaseModel):
 
     def to_dict(self) -> Dict[str, Any]:
         return self.model_dump()
+
+    def to_public_dict(self) -> Dict[str, Any]:
+        """Project sanitized trace for public REST consumers.
+
+        Redacts host filesystem paths (project_root), scrubs credentials, bearer tokens,
+        and secrets from error messages and tool invocations.
+        """
+        data = self.model_dump()
+
+        # Redact host filesystem path
+        ctx = data.get("context") or {}
+        if ctx.get("project_root"):
+            ctx["project_root_available"] = True
+            ctx["project_root"] = None
+        else:
+            ctx["project_root_available"] = ctx.get("project_root_available", False)
+        data["context"] = ctx
+
+        # Redact errors
+        if data.get("error"):
+            data["error"] = sanitize_sensitive_data(data["error"])
+
+        # Redact tool records
+        if data.get("tools"):
+            for t in data["tools"]:
+                if t.get("requested_args_redacted"):
+                    t["requested_args_redacted"] = sanitize_sensitive_data(
+                        t["requested_args_redacted"]
+                    )
+                if t.get("error"):
+                    t["error"] = sanitize_sensitive_data(t["error"])
+                if t.get("output"):
+                    t["output"] = sanitize_sensitive_data(t["output"])
+
+        # Redact event payloads
+        if data.get("events"):
+            for ev in data["events"]:
+                if ev.get("payload"):
+                    ev["payload"] = sanitize_sensitive_data(ev["payload"])
+
+        return data
 
 
 class ExecutionSummary(BaseModel):

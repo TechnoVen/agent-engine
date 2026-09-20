@@ -210,6 +210,7 @@ class ExecutionLedgerService:
 
         context_trace = ContextProvenance(
             project_root=project_root,
+            project_root_available=bool(project_root),
             project_instructions_hash=instructions_hash,
             session_turns_available=context_prov_dict.get("session_turns_available", 0),
             session_turns_retained=context_prov_dict.get("session_turns_retained", 0),
@@ -293,7 +294,20 @@ class ExecutionLedgerService:
         total_cost_usd = raw_exec.get("total_cost_usd") or 0.0
         is_cost_estimated = bool(raw_exec.get("is_cost_estimated", False))
 
-        if is_cost_estimated:
+        cost_prov_raw = raw_exec.get("cost_provenance") or req.get("cost_provenance")
+        if not cost_prov_raw:
+            for ev in raw_events:
+                p = ev.get("payload") or {}
+                if p.get("cost_provenance"):
+                    cost_prov_raw = p.get("cost_provenance")
+                    break
+
+        if cost_prov_raw:
+            try:
+                cost_prov = CostProvenance(cost_prov_raw)
+            except Exception:
+                cost_prov = CostProvenance.CALCULATED
+        elif is_cost_estimated:
             cost_prov = CostProvenance.ESTIMATED
         elif total_tokens > 0 or total_cost_usd > 0:
             # If provider reported exact tokens or if calculated from pricing

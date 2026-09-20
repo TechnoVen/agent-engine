@@ -249,6 +249,7 @@ class SQLiteBackend(StorageBackend):
                         output_tokens INTEGER DEFAULT 0,
                         total_cost_usd REAL DEFAULT 0.0,
                         is_cost_estimated INTEGER NOT NULL DEFAULT 0,
+                        cost_provenance TEXT,
                         started_at TEXT,
                         completed_at TEXT,
                         error_code TEXT,
@@ -444,6 +445,13 @@ class SQLiteBackend(StorageBackend):
                     "CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id)"
                 )
                 conn.commit()
+
+                # Migration check: ensure cost_provenance exists in executions
+                cursor.execute("PRAGMA table_info(executions)")
+                existing_exec_cols = [row[1] for row in cursor.fetchall()]
+                if "cost_provenance" not in existing_exec_cols:
+                    cursor.execute("ALTER TABLE executions ADD COLUMN cost_provenance TEXT")
+                    conn.commit()
             finally:
                 if not self._is_memory:
                     conn.close()
@@ -2058,7 +2066,7 @@ class SQLiteBackend(StorageBackend):
         else:
             status_val = getattr(status, "value", str(status))
 
-        req = execution.get("request", {})
+        req = execution.get("request") or execution.get("request_json", {})
         if isinstance(req, str):
             req_json = req
         elif hasattr(req, "model_dump_json"):
@@ -2091,9 +2099,9 @@ class SQLiteBackend(StorageBackend):
                     INSERT INTO executions (
                         id, session_id, project_id, status, request_json,
                         provider, model, routing_tier, input_tokens, output_tokens,
-                        total_cost_usd, is_cost_estimated, started_at, completed_at,
+                        total_cost_usd, is_cost_estimated, cost_provenance, started_at, completed_at,
                         error_code, error_message, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         exec_id,
@@ -2108,10 +2116,11 @@ class SQLiteBackend(StorageBackend):
                         execution.get("output_tokens", 0),
                         float(execution.get("total_cost_usd", 0.0)),
                         1 if execution.get("is_cost_estimated") else 0,
+                        execution.get("cost_provenance"),
                         execution.get("started_at"),
                         execution.get("completed_at"),
                         execution.get("error_code"),
-                        execution.get("error_message"),
+                        execution.get("error_message") or execution.get("error"),
                         created_at,
                     ),
                 )
@@ -2171,11 +2180,14 @@ class SQLiteBackend(StorageBackend):
                     "completed_at",
                     "error_code",
                     "error_message",
+                    "cost_provenance",
                 }
 
                 for k, v in updates.items():
                     if k in ("id", "created_at"):
                         continue
+                    if k == "error":
+                        k = "error_message"
                     if k in ("request", "request_json"):
                         k = "request_json"
                         if not isinstance(v, str):

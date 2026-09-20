@@ -289,8 +289,8 @@ async def test_cancelled_execution_produces_cancellation_trace(tmp_path):
     assert partial_art.status == "partial"
 
 
-def test_partial_execution_reconstructs_available_events(storage, ledger_service):
-    """Test 4: In-flight / partial execution reconstructs available events without fabrication."""
+def test_active_inflight_execution_reconstructs_available_events(storage, ledger_service):
+    """Test 4a: Active in-flight (RUNNING) non-terminal execution reconstructs available events without fabrication."""
     exec_id = "exec_inflight_1"
     now_iso = datetime.now(timezone.utc).isoformat()
     storage.create_execution(
@@ -337,10 +337,154 @@ def test_partial_execution_reconstructs_available_events(storage, ledger_service
     trace = ledger_service.get_execution_trace(exec_id)
     assert trace is not None
     assert trace.status == ExecutionStatus.RUNNING
+    # Active in-flight executions have no completed_at
     assert trace.completed_at is None
     assert trace.verification is None
     assert len(trace.events) == 2
     assert [e.sequence_num for e in trace.events] == [0, 1]
+
+
+def test_canonical_partial_terminal_execution_trace(storage, ledger_service):
+    """Test 4b: Canonical terminal PARTIAL execution trace preserves terminal status and timestamps."""
+    exec_id = "exec_partial_terminal_1"
+    t0_iso = "2026-09-19T14:00:00.000Z"
+    t1_iso = "2026-09-19T14:00:01.500Z"
+    storage.create_execution(
+        {
+            "id": exec_id,
+            "project_id": "proj_alpha",
+            "session_id": "sess_002",
+            "status": "partial",
+            "request_json": json.dumps(
+                {"prompt": "Generate complete encyclopedia", "token_budget": 50}
+            ),
+            "provider": "anthropic",
+            "model": "claude-3-5-sonnet",
+            "routing_tier": "frontier",
+            "input_tokens": 20,
+            "output_tokens": 50,
+            "total_cost_usd": 0.0015,
+            "is_cost_estimated": 0,
+            "cost_provenance": "provider_reported",
+            "started_at": t0_iso,
+            "completed_at": t1_iso,
+            "created_at": t0_iso,
+        }
+    )
+
+    storage.record_execution_event(
+        {
+            "id": "evt_part_1",
+            "execution_id": exec_id,
+            "sequence_num": 0,
+            "timestamp": t0_iso,
+            "event_type": "state_change",
+            "payload_json": json.dumps({"from_status": "running", "to_status": "partial"}),
+        }
+    )
+
+    trace = ledger_service.get_execution_trace(exec_id)
+    assert trace is not None
+    # Canonical PARTIAL is a terminal state, not an in-flight state
+    assert trace.status == ExecutionStatus.PARTIAL
+    assert trace.started_at == t0_iso
+    assert trace.completed_at == t1_iso
+    assert trace.duration_ms == 1500.0
+    assert trace.usage.cost_provenance == CostProvenance.PROVIDER_REPORTED
+    assert trace.usage.total_tokens == 70
+    assert trace.usage.total_cost_usd == 0.0015
+
+
+def test_trace_public_dto_redacts_sensitive_data(storage, ledger_service):
+    """Test 4c: Public trace DTO projection redacts host filesystem paths and credentials."""
+    exec_id = "exec_sensitive_1"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    storage.create_execution(
+        {
+            "id": exec_id,
+            "project_id": "proj_alpha",
+            "status": "failed",
+            "request_json": json.dumps(
+                {
+                    "prompt": "Test sensitive scrub",
+                    "inputs": {
+                        "project_root": "/home/nadir/code/secret_repo",
+                    },
+                }
+            ),
+            "error": "Error calling API: Bearer sk-ant-api03-1234567890abcdef at /home/nadir/code/agent_engine/core/router.py",
+            "created_at": now_iso,
+        }
+    )
+
+    storage.record_execution_event(
+        {
+            "id": "evt_tool_sens",
+            "execution_id": exec_id,
+            "sequence_num": 0,
+            "timestamp": now_iso,
+            "event_type": "tool_call_started",
+            "payload_json": json.dumps(
+                {
+                    "invocation_id": "call_1",
+                    "tool_id": "secret_vault",
+                    "args": {
+                        "api_key": "secret_key_value_987",
+                        "safe_arg": "public_param",
+                    },
+                }
+            ),
+        }
+    )
+
+    # 1. Internal trace has absolute paths and credentials in raw form
+    raw_trace = ledger_service.get_execution_trace(exec_id)
+    assert raw_trace is not None
+    assert raw_trace.context.project_root == "/home/nadir/code/secret_repo"
+
+    # 2. Public DTO redacts project_root, credentials, and paths
+    pub = raw_trace.to_public_dict()
+    assert pub["context"]["project_root"] is None
+    assert pub["context"]["project_root_available"] is True
+    assert "Bearer sk-ant-api03" not in pub["error"]
+    assert "/home/nadir" not in pub["error"]
+    assert "[REDACTED_CREDENTIAL]" in pub["error"] or "[REDACTED" in pub["error"]
+
+    # Tool invocation redacted args
+    assert len(pub["tools"]) == 1
+    tool_args = pub["tools"][0]["requested_args_redacted"]
+    assert tool_args["api_key"] == "[REDACTED]"
+    assert tool_args["safe_arg"] == "public_param"
+
+
+def test_never_synthesize_missing_ledger_evidence(storage, ledger_service):
+    """Test 4d: Subsystems with absent evidence return empty lists or UNAVAILABLE, never synthetic guesses."""
+    exec_id = "exec_empty_subsystems"
+    now_iso = datetime.now(timezone.utc).isoformat()
+    storage.create_execution(
+        {
+            "id": exec_id,
+            "project_id": "proj_alpha",
+            "status": "created",
+            "request_json": json.dumps({"prompt": "Cost should be $50 with 10 tools used"}),
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_cost_usd": 0.0,
+            "created_at": now_iso,
+        }
+    )
+
+    trace = ledger_service.get_execution_trace(exec_id)
+    assert trace is not None
+    # No events, tools, approvals, or artifacts are synthesized from the prompt text
+    assert trace.events == []
+    assert trace.tools == []
+    assert trace.approvals == []
+    assert trace.artifacts == []
+    assert trace.usage.cost_provenance == CostProvenance.UNAVAILABLE
+    assert trace.usage.total_cost_usd == 0.0
+    assert trace.usage.total_tokens == 0
+    assert trace.routing.fallback_chain == []
 
 
 def test_event_ordering_strictly_monotonic(coordinator, ledger_service):
@@ -767,6 +911,9 @@ def test_trace_matches_canonical_record_and_rest_endpoints(tmp_path, monkeypatch
     assert "context" in trace_data
     assert "usage" in trace_data
     assert "events" in trace_data
+    # Verify public DTO redaction
+    assert trace_data["context"]["project_root"] is None
+    assert trace_data["context"]["project_root_available"] is True
 
     # 2. Cross-project trace rejection (HTTP 403)
     res_forbidden = client.get(
