@@ -2072,7 +2072,7 @@ class SQLiteBackend(StorageBackend):
         elif hasattr(req, "model_dump_json"):
             req_json = req.model_dump_json()
         else:
-            req_json = json.dumps(req)
+            req_json = json.dumps(req, default=str)
 
         routing_tier = execution.get("routing_tier")
         if routing_tier is not None and not isinstance(routing_tier, str):
@@ -2191,11 +2191,17 @@ class SQLiteBackend(StorageBackend):
                     if k in ("request", "request_json"):
                         k = "request_json"
                         if not isinstance(v, str):
-                            v = (
-                                v.model_dump_json()
-                                if hasattr(v, "model_dump_json")
-                                else json.dumps(v)
-                            )
+                            try:
+                                v = (
+                                    v.model_dump_json()
+                                    if hasattr(v, "model_dump_json")
+                                    else json.dumps(v, default=str)
+                                )
+                            except Exception:
+                                if hasattr(v, "model_dump"):
+                                    v = json.dumps(v.model_dump(), default=str)
+                                else:
+                                    v = json.dumps(v, default=str)
                     if k not in valid_columns:
                         continue
                     if k == "status" and hasattr(v, "value"):
@@ -2287,14 +2293,35 @@ class SQLiteBackend(StorageBackend):
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
+                if seq_num is not None:
+                    cursor.execute(
+                        "SELECT 1 FROM execution_events WHERE execution_id = ? AND sequence_num = ?",
+                        (execution_id, seq_num),
+                    )
+                    if cursor.fetchone() is not None:
+                        # Collision: advance to next available sequence number
+                        cursor.execute(
+                            "SELECT COALESCE(MAX(sequence_num), -1) + 1 FROM execution_events WHERE execution_id = ?",
+                            (execution_id,),
+                        )
+                        actual_seq = cursor.fetchone()[0]
+                    else:
+                        actual_seq = seq_num
+                else:
+                    cursor.execute(
+                        "SELECT COALESCE(MAX(sequence_num), -1) + 1 FROM execution_events WHERE execution_id = ?",
+                        (execution_id,),
+                    )
+                    actual_seq = cursor.fetchone()[0]
                 cursor.execute(
                     """
                     INSERT INTO execution_events (id, execution_id, sequence_num, timestamp, event_type, payload_json)
                     VALUES (?, ?, ?, ?, ?, ?)
                     """,
-                    (evt_id, execution_id, seq_num, timestamp, evt_type, payload_json),
+                    (evt_id, execution_id, actual_seq, timestamp, evt_type, payload_json),
                 )
                 conn.commit()
+                event["sequence_num"] = actual_seq
                 return event
             finally:
                 if not self._is_memory:

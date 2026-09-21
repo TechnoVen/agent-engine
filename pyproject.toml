@@ -44,3 +44,8 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "W"]
 ignore = ["E501", "E402", "E741", "W291", "W293"]
+
+[tool.ruff.lint.per-file-ignores]
+"services/python/server/routers/*" = ["F403", "F405"]
+"services/python/server/api.py" = ["F403", "F405"]
+

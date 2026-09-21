@@ -224,6 +224,13 @@ class ExecutionLedgerService:
             pipeline_version=context_prov_dict.get("pipeline_version"),
             pipeline_category=context_prov_dict.get("pipeline_category"),
             pipeline_author=context_prov_dict.get("pipeline_author"),
+            skill_id=context_prov_dict.get("skill_id"),
+            skill_version=context_prov_dict.get("skill_version"),
+            skill_source=context_prov_dict.get("skill_source"),
+            skill_implementation_hash=context_prov_dict.get("skill_implementation_hash"),
+            adapter_id=context_prov_dict.get("adapter_id"),
+            adapter_version=context_prov_dict.get("adapter_version"),
+            adapter_protocol=context_prov_dict.get("adapter_protocol"),
         )
 
         # 8. Reconstruct Tools & Approvals
@@ -237,27 +244,50 @@ class ExecutionLedgerService:
                 inv_id = payload.get("invocation_id") or ev.get("id")
                 tools_map[inv_id] = ToolInvocationRecord(
                     invocation_id=inv_id,
+                    execution_id=execution_id,
                     tool_id=payload.get("tool_id") or payload.get("tool_name", "unknown"),
+                    version=payload.get("version"),
+                    arguments_digest=payload.get("arguments_digest"),
+                    started_at=payload.get("started_at") or ev.get("timestamp"),
                     status="started",
                     approval_id=payload.get("approval_id"),
-                    requested_args_redacted=payload.get("args"),
+                    requested_args_redacted=payload.get("args")
+                    or payload.get("requested_args_redacted"),
                 )
             elif ev_type == ExecutionEventType.TOOL_CALL_COMPLETED.value:
                 inv_id = payload.get("invocation_id") or ev.get("id")
                 if inv_id in tools_map:
                     tools_map[inv_id].status = (
-                        "completed" if payload.get("success", True) else "failed"
+                        "completed"
+                        if payload.get("success", True) and not payload.get("error")
+                        else "failed"
+                    )
+                    tools_map[inv_id].completed_at = payload.get("completed_at") or ev.get(
+                        "timestamp"
                     )
                     tools_map[inv_id].duration_ms = payload.get("duration_ms")
                     tools_map[inv_id].output = payload.get("output")
+                    tools_map[inv_id].result_summary = payload.get("result_summary")
+                    tools_map[inv_id].artifacts = payload.get("artifacts") or []
                     tools_map[inv_id].error = payload.get("error")
                 else:
                     tools_map[inv_id] = ToolInvocationRecord(
                         invocation_id=inv_id,
+                        execution_id=execution_id,
                         tool_id=payload.get("tool_id", "unknown"),
-                        status="completed" if payload.get("success", True) else "failed",
+                        version=payload.get("version"),
+                        arguments_digest=payload.get("arguments_digest"),
+                        started_at=ev.get("timestamp"),
+                        completed_at=payload.get("completed_at") or ev.get("timestamp"),
+                        status=(
+                            "completed"
+                            if payload.get("success", True) and not payload.get("error")
+                            else "failed"
+                        ),
                         duration_ms=payload.get("duration_ms"),
                         output=payload.get("output"),
+                        result_summary=payload.get("result_summary"),
+                        artifacts=payload.get("artifacts") or [],
                         error=payload.get("error"),
                     )
             elif ev_type == ExecutionEventType.APPROVAL_REQUIRED.value:

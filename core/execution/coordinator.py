@@ -9,9 +9,13 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import hashlib
+import inspect
+import json
 import logging
+import os
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
+import uuid
 
 import numpy  # noqa: F401
 
@@ -35,12 +39,15 @@ from core.execution.models import (
     generate_execution_id,
 )
 from core.execution.state import TERMINAL_STATES, ExecutionStateMachine
-from typing import TYPE_CHECKING, Union
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from core.router.model_router import ResolvedModel
 from core.safety.pending import PendingOperationRegistry
 from core.safety.policy import PolicyDecision, PolicyEngine
+from core.skills.boundary import CapabilityBoundary
+from core.skills.models import Skill, SkillMetadata, SkillPermission, SkillSource
+from core.ledger.models import sanitize_sensitive_data, _SENSITIVE_KEY_PATTERN
 from core.storage import get_storage_backend
 from core.storage.base import StorageBackend
 from core.telemetry.cost import CostTracker
@@ -74,6 +81,8 @@ class ExecutionCoordinator:
         ] = None,
         artifact_service: Optional[Any] = None,
         pipeline_registry: Optional[Any] = None,
+        skill_discovery: Optional[Any] = None,
+        adapter_registry: Optional[Any] = None,
     ):
         self.storage = storage or get_storage_backend()
         self.policy_engine = policy_engine or PolicyEngine()
@@ -105,6 +114,24 @@ class ExecutionCoordinator:
                 self.artifact_service = ArtifactService(storage=self.storage)
             except Exception:
                 self.artifact_service = None
+        if skill_discovery is not None:
+            self.skill_discovery = skill_discovery
+        else:
+            try:
+                from core.skills.discovery import MultiToolSkillDiscovery
+
+                self.skill_discovery = MultiToolSkillDiscovery()
+            except Exception:
+                self.skill_discovery = None
+        if adapter_registry is not None:
+            self.adapter_registry = adapter_registry
+        else:
+            try:
+                from core.adapters import get_adapter_registry
+
+                self.adapter_registry = get_adapter_registry()
+            except Exception:
+                self.adapter_registry = None
         self._active_executions: Dict[str, Execution] = {}
         self._active_tokens: Dict[str, CancellationToken] = {}
         self._active_state_machines: Dict[str, ExecutionStateMachine] = {}
@@ -112,6 +139,242 @@ class ExecutionCoordinator:
     def get_cancellation_token(self, execution_id: str) -> Optional[CancellationToken]:
         """Lookup in-flight cancellation token for an execution."""
         return self._active_tokens.get(execution_id)
+
+    def _resolve_skill(
+        self, skill_id: str, project_root: Optional[str] = None
+    ) -> Tuple[Optional[Any], Optional[SkillMetadata], Optional[Callable]]:
+        """Resolve skill instance, metadata, and optional callable from available discovery services."""
+        # 1. Check OpenClaw SkillTemplate
+        try:
+            from core.templates import TemplateManager
+
+            template = TemplateManager.get_template(skill_id)
+            if template:
+                meta = SkillMetadata(
+                    id=template.id,
+                    name=template.name,
+                    description=template.description or "",
+                    version=getattr(template, "version", "1.0.0"),
+                    category=getattr(template, "category", "General"),
+                    tags=getattr(template, "tags", []),
+                    inputs=(
+                        list(template.inputs.keys())
+                        if isinstance(template.inputs, dict)
+                        else (template.inputs or [])
+                    ),
+                    outputs=(
+                        list(template.outputs.keys())
+                        if isinstance(template.outputs, dict)
+                        else (template.outputs or [])
+                    ),
+                    permissions=[SkillPermission.READ, SkillPermission.EXECUTE],
+                    source_tool=SkillSource.AGENT_ENGINE,
+                    implementation_hash=hashlib.sha256(
+                        json.dumps(template.model_dump(), sort_keys=True).encode("utf-8")
+                    ).hexdigest(),
+                )
+                return template, meta, None
+        except Exception as ex:
+            logger.debug("Skill template lookup failed for '%s': %s", skill_id, ex)
+
+        # 2. Check MultiToolSkillDiscovery
+        if getattr(self, "skill_discovery", None):
+            try:
+                from pathlib import Path
+
+                ws_path = Path(project_root) if project_root else None
+                skill = self.skill_discovery.get_skill(skill_id, workspace_dir=ws_path)
+                if skill:
+                    return skill, skill.metadata, None
+            except Exception as ex:
+                logger.debug("Skill discovery lookup failed for '%s': %s", skill_id, ex)
+
+        # 3. Check SkillRegistryClient catalog
+        try:
+            from core.skills.registry import SkillRegistryClient
+
+            client = SkillRegistryClient()
+            pkg = client.get_package(skill_id)
+            if pkg:
+                meta = SkillMetadata(
+                    id=pkg.id,
+                    name=pkg.name,
+                    description=pkg.description or "",
+                    version=pkg.version,
+                    category=pkg.category,
+                    tags=pkg.tags,
+                    author=pkg.author,
+                    permissions=[SkillPermission.READ],
+                    source_tool=pkg.source,
+                    implementation_hash=(
+                        pkg.sha256
+                        or hashlib.sha256(pkg.content.strip().encode("utf-8")).hexdigest()
+                    ),
+                )
+                return pkg, meta, None
+        except Exception as ex:
+            logger.debug("Skill registry client lookup failed for '%s': %s", skill_id, ex)
+
+        return None, None, None
+
+    async def invoke_skill(
+        self,
+        execution_id: str,
+        skill_id: str,
+        inputs: Optional[Dict[str, Any]] = None,
+        declared_permissions: Optional[Iterable[Union[SkillPermission, str]]] = None,
+        skill_callable: Optional[Callable] = None,
+    ) -> Dict[str, Any]:
+        """Invoke a skill capability within an existing execution context.
+
+        Emits distinct TOOL_CALL_STARTED and TOOL_CALL_COMPLETED events with unique invocation_id.
+        Enforces capability boundary and truthful error recording.
+        """
+        import uuid
+
+        execution = self._active_executions.get(execution_id)
+        if not execution:
+            persisted = self.storage.get_execution(execution_id)
+            if persisted:
+                execution = Execution.model_validate(persisted)
+        if not execution:
+            raise ValueError(f"Execution '{execution_id}' not found")
+
+        state_machine = self._active_state_machines.get(execution_id)
+        token = self._active_tokens.get(execution_id) or CancellationToken(execution_id)
+
+        inv_inputs = inputs or {}
+        inv_id = f"inv_{uuid.uuid4().hex[:12]}"
+        args_to_digest = {
+            k: v for k, v in inv_inputs.items() if not _SENSITIVE_KEY_PATTERN.search(str(k))
+        }
+        args_digest = hashlib.sha256(
+            json.dumps(args_to_digest, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+        redacted_args = sanitize_sensitive_data(inv_inputs)
+        inv_start_time = time.perf_counter()
+
+        project_root = getattr(execution.request, "project_root", None) or os.getcwd()
+
+        # Resolve skill
+        resolved_item, resolved_meta, default_callable = self._resolve_skill(skill_id, project_root)
+        skill_version = getattr(resolved_meta, "version", "1.0.0") if resolved_meta else "1.0.0"
+
+        # Emit TOOL_CALL_STARTED
+        seq = getattr(state_machine, "current_sequence_num", 1) if state_machine else 1
+        ev_started = ExecutionEvent(
+            execution_id=execution_id,
+            sequence_num=seq,
+            event_type=ExecutionEventType.TOOL_CALL_STARTED,
+            payload={
+                "invocation_id": inv_id,
+                "tool_id": f"skill:{skill_id}",
+                "tool_name": f"skill:{skill_id}",
+                "version": skill_version,
+                "arguments_digest": args_digest,
+                "started_at": current_timestamp_iso(),
+                "args": redacted_args,
+                "requested_args_redacted": redacted_args,
+            },
+        )
+        self.storage.record_execution_event(ev_started.model_dump())
+        if state_machine:
+            state_machine.current_sequence_num += 1
+
+        try:
+            if token.is_cancelled:
+                raise ExecutionCancelledError("Execution cancelled before skill invocation")
+
+            perms = declared_permissions or (
+                getattr(resolved_meta, "permissions", []) if resolved_meta else []
+            )
+            boundary = CapabilityBoundary(
+                project_root=project_root,
+                declared_permissions=perms,
+                cancellation_token=token,
+            )
+
+            fn = skill_callable or default_callable
+            if fn:
+                if inspect.iscoroutinefunction(fn):
+                    res = await fn(boundary, **inv_inputs)
+                else:
+                    res = fn(boundary, **inv_inputs)
+                outputs = res if isinstance(res, dict) else {"result": res}
+            elif resolved_item and hasattr(resolved_item, "create_agent"):
+                agent = resolved_item.create_agent()
+                res = agent(**inv_inputs)
+                outputs = res if isinstance(res, dict) else {"result": res}
+            elif isinstance(resolved_item, Skill):
+                prompt_content = f"{resolved_item.content}\n\nInputs: {json.dumps(inv_inputs)}"
+                if getattr(self, "_dispatch_override", None):
+                    dispatch_res = self._dispatch_override(
+                        exec_context=None,
+                        tier=RoutingTier.LOCAL,
+                        provider="ollama",
+                        model_name="local",
+                    )
+                    full_text = (
+                        dispatch_res.get("response")
+                        if isinstance(dispatch_res, dict)
+                        else str(dispatch_res)
+                    )
+                else:
+                    lm, _ = self.model_router.create_lm("ollama")
+                    raw_res = lm(prompt_content)
+                    full_text = raw_res[0] if isinstance(raw_res, list) else str(raw_res)
+                outputs = {"response": full_text, "results": {"output": full_text}}
+            else:
+                raise ValueError(
+                    f"Skill '{skill_id}' has no executable implementation, callable, or resolved template."
+                )
+
+            inv_duration = (time.perf_counter() - inv_start_time) * 1000.0
+            seq = getattr(state_machine, "current_sequence_num", 1) if state_machine else 2
+            ev_completed = ExecutionEvent(
+                execution_id=execution_id,
+                sequence_num=seq,
+                event_type=ExecutionEventType.TOOL_CALL_COMPLETED,
+                payload={
+                    "invocation_id": inv_id,
+                    "tool_id": f"skill:{skill_id}",
+                    "version": skill_version,
+                    "arguments_digest": args_digest,
+                    "duration_ms": inv_duration,
+                    "completed_at": current_timestamp_iso(),
+                    "success": True,
+                    "output": sanitize_sensitive_data(outputs),
+                    "result_summary": str(outputs)[:200],
+                    "artifacts": outputs.get("artifact_ids") or [],
+                },
+            )
+            self.storage.record_execution_event(ev_completed.model_dump())
+            if state_machine:
+                state_machine.current_sequence_num += 1
+            return outputs
+
+        except Exception as inv_err:
+            inv_duration = (time.perf_counter() - inv_start_time) * 1000.0
+            seq = getattr(state_machine, "current_sequence_num", 1) if state_machine else 2
+            ev_failed = ExecutionEvent(
+                execution_id=execution_id,
+                sequence_num=seq,
+                event_type=ExecutionEventType.TOOL_CALL_COMPLETED,
+                payload={
+                    "invocation_id": inv_id,
+                    "tool_id": f"skill:{skill_id}",
+                    "version": skill_version,
+                    "arguments_digest": args_digest,
+                    "duration_ms": inv_duration,
+                    "completed_at": current_timestamp_iso(),
+                    "success": False,
+                    "error": str(inv_err),
+                },
+            )
+            self.storage.record_execution_event(ev_failed.model_dump())
+            if state_machine:
+                state_machine.current_sequence_num += 1
+            raise inv_err
 
     def cancel(
         self,
@@ -418,6 +681,42 @@ class ExecutionCoordinator:
             except Exception:
                 pipeline_meta = None
 
+        # Skill execution resolution (Task R1.13)
+        is_skill = (
+            request.task_type == "skill"
+            or "skill_id" in request.inputs
+            or "skill" in request.inputs
+        )
+        skill_id = (
+            request.inputs.get("skill_id")
+            or request.inputs.get("skill")
+            or (
+                request.prompt.strip()
+                if request.task_type == "skill"
+                and " " not in request.prompt.strip()
+                and request.prompt.strip()
+                else None
+            )
+        )
+
+        # Adapter execution resolution (Task R1.13)
+        is_adapter = (
+            request.task_type == "adapter"
+            or "adapter_id" in request.inputs
+            or "adapter" in request.inputs
+        )
+        adapter_id = (
+            request.inputs.get("adapter_id")
+            or request.inputs.get("adapter")
+            or (
+                request.prompt.strip()
+                if request.task_type == "adapter"
+                and " " not in request.prompt.strip()
+                and request.prompt.strip()
+                else None
+            )
+        )
+
         def handle_cancellation(
             stage_name: str, partial_text: Optional[str] = None
         ) -> ExecutionResult:
@@ -681,6 +980,91 @@ class ExecutionCoordinator:
                     }
                 )
 
+            resolved_skill_item = None
+            resolved_skill_meta = None
+            skill_custom_callable = None
+            if is_skill and skill_id:
+                if request.inputs.get("skill_callable") or request.inputs.get("skill_func"):
+                    skill_custom_callable = request.inputs.get(
+                        "skill_callable"
+                    ) or request.inputs.get("skill_func")
+                    resolved_skill_meta = request.inputs.get("skill_metadata") or SkillMetadata(
+                        id=skill_id,
+                        name=skill_id,
+                        version=request.inputs.get("skill_version", "1.0.0"),
+                        permissions=request.inputs.get("declared_permissions", []),
+                        implementation_hash=request.inputs.get("implementation_hash")
+                        or hashlib.sha256(skill_id.encode("utf-8")).hexdigest(),
+                    )
+                else:
+                    resolved_skill_item, resolved_skill_meta, _ = self._resolve_skill(
+                        skill_id, project_root
+                    )
+                    if not resolved_skill_meta and request.inputs.get("declared_permissions"):
+                        resolved_skill_meta = SkillMetadata(
+                            id=skill_id,
+                            name=skill_id,
+                            version="1.0.0",
+                            permissions=request.inputs.get("declared_permissions", []),
+                            implementation_hash=hashlib.sha256(
+                                skill_id.encode("utf-8")
+                            ).hexdigest(),
+                        )
+
+                if resolved_skill_meta:
+                    context_provenance.update(
+                        {
+                            "skill_id": resolved_skill_meta.id,
+                            "skill_version": resolved_skill_meta.version,
+                            "skill_source": (
+                                resolved_skill_meta.source_tool.value
+                                if hasattr(resolved_skill_meta.source_tool, "value")
+                                else str(resolved_skill_meta.source_tool)
+                            ),
+                            "skill_implementation_hash": resolved_skill_meta.implementation_hash,
+                        }
+                    )
+                else:
+                    context_provenance.update(
+                        {
+                            "skill_id": skill_id,
+                            "skill_version": "1.0.0",
+                            "skill_source": "agent-engine",
+                            "skill_implementation_hash": hashlib.sha256(
+                                skill_id.encode("utf-8")
+                            ).hexdigest(),
+                        }
+                    )
+
+            resolved_adapter = None
+            if is_adapter and adapter_id:
+                reg = getattr(self, "adapter_registry", None)
+                if reg is None:
+                    try:
+                        from core.adapters import get_adapter_registry
+
+                        reg = get_adapter_registry()
+                    except Exception:
+                        reg = None
+                if reg:
+                    resolved_adapter = reg.get(adapter_id)
+                if resolved_adapter:
+                    context_provenance.update(
+                        {
+                            "adapter_id": resolved_adapter.adapter_id,
+                            "adapter_version": getattr(resolved_adapter, "version", "1.0.0"),
+                            "adapter_protocol": getattr(resolved_adapter, "protocol", "cli"),
+                        }
+                    )
+                else:
+                    context_provenance.update(
+                        {
+                            "adapter_id": adapter_id,
+                            "adapter_version": "1.0.0",
+                            "adapter_protocol": "unknown",
+                        }
+                    )
+
             exec_context = ExecutionContext(
                 execution_id=exec_id,
                 project_id=request.project_id,
@@ -771,6 +1155,59 @@ class ExecutionCoordinator:
                 tool_args = (
                     request.inputs.get("tool_args") or pipeline_inputs or {"prompt": request.prompt}
                 )
+            elif is_skill:
+                tool_name = f"skill:{skill_id}" if skill_id else "skill"
+                tool_args = (
+                    request.inputs.get("tool_args")
+                    or request.inputs.get("payload")
+                    or {
+                        k: v
+                        for k, v in request.inputs.items()
+                        if k
+                        not in (
+                            "skill_id",
+                            "skill",
+                            "skill_callable",
+                            "skill_func",
+                            "skill_instance",
+                            "skill_metadata",
+                            "declared_permissions",
+                            "tool_name",
+                            "tool_args",
+                            "project_root",
+                            "project_instructions",
+                            "skills",
+                            "stream",
+                        )
+                    }
+                    or {"prompt": request.prompt}
+                )
+            elif is_adapter:
+                tool_name = f"adapter:{adapter_id}" if adapter_id else "adapter"
+                tool_args = request.inputs.get("tool_args") or {
+                    "prompt": request.prompt,
+                    **{
+                        k: v
+                        for k, v in request.inputs.items()
+                        if k
+                        not in (
+                            "adapter_id",
+                            "adapter",
+                            "timeout_seconds",
+                            "tools",
+                            "model",
+                            "temperature",
+                            "metadata",
+                            "context",
+                            "tool_name",
+                            "tool_args",
+                            "project_root",
+                            "project_instructions",
+                            "skills",
+                            "stream",
+                        )
+                    },
+                }
             else:
                 tool_name = request.inputs.get("tool_name", request.task_type)
                 tool_args = request.inputs.get("tool_args", {"prompt": request.prompt})
@@ -800,6 +1237,26 @@ class ExecutionCoordinator:
                     if g_dec.decision in ("block", "deny"):
                         policy_decision = g_dec
                         break
+
+            # Check consequential permissions requiring human approval
+            if is_skill and resolved_skill_meta:
+                consequential_perms = {
+                    SkillPermission.DESTRUCTIVE,
+                    SkillPermission.FINANCIAL,
+                    SkillPermission.ADMIN,
+                }
+                active_perms = set(resolved_skill_meta.permissions or [])
+                if (
+                    any(p in consequential_perms for p in active_perms)
+                    and policy_decision.decision == "allow"
+                ):
+                    violating = [
+                        p.value if hasattr(p, "value") else str(p)
+                        for p in active_perms
+                        if p in consequential_perms
+                    ]
+                    policy_decision.decision = "stage"
+                    policy_decision.reason = f"Skill '{skill_id}' requires human approval for consequential permissions: {violating}"
 
             if policy_decision.decision == "block":
                 state_machine.transition(
@@ -842,7 +1299,10 @@ class ExecutionCoordinator:
                     provider_used=provider,
                 )
 
-            # Phase 6: Ready & Consequential Gate
+            # Phase 6: Ready & Consequential Gate (R1 Consequential-Operation Staging)
+            # Note: Staging high-risk operations in PendingOperationRegistry with WAITING_FOR_APPROVAL
+            # is a pre-flight holding mechanism in R1. Full exact-operation cryptographic authorization
+            # bound to actor, capability, argument digest, expiry, and single-use tokens belongs to R2.
             state_machine.transition(ExecutionStatus.READY)
 
             if policy_decision.decision == "stage":
@@ -851,10 +1311,24 @@ class ExecutionCoordinator:
                     if policy_decision.violating_rules
                     else None
                 )
+                pending_op = None
+                if getattr(self, "pending_registry", None):
+                    pending_op = self.pending_registry.register_operation(
+                        tool_name=tool_name,
+                        tool_args=tool_args,
+                        risk_level="high",
+                        risk_score=0.9,
+                        session_id=request.session_id or exec_id,
+                        reason=policy_decision.reason,
+                        suggestion=policy_decision.suggestion,
+                    )
                 state_machine.transition(
                     ExecutionStatus.WAITING_FOR_APPROVAL,
                     reason=policy_decision.reason,
-                    payload={"policy_id": policy_id},
+                    payload={
+                        "policy_id": policy_id,
+                        "operation_id": pending_op.operation_id if pending_op else None,
+                    },
                 )
                 combined_event_sink(
                     ExecutionEvent(
@@ -864,6 +1338,7 @@ class ExecutionCoordinator:
                         payload={
                             "reason": policy_decision.reason,
                             "policy_id": policy_id,
+                            "operation_id": pending_op.operation_id if pending_op else None,
                             "suggestion": policy_decision.suggestion,
                         },
                     )
@@ -873,7 +1348,11 @@ class ExecutionCoordinator:
                 return ExecutionResult(
                     execution_id=exec_id,
                     status=ExecutionStatus.WAITING_FOR_APPROVAL,
-                    outputs={"approval_required": True, "reason": policy_decision.reason},
+                    outputs={
+                        "approval_required": True,
+                        "reason": policy_decision.reason,
+                        "operation_id": pending_op.operation_id if pending_op else None,
+                    },
                     routing_tier=tier,
                     model_used=model_name,
                     provider_used=provider,
@@ -1005,6 +1484,326 @@ class ExecutionCoordinator:
                     completion_tokens = max(1, estimate_tokens(str(outputs)))
 
                 emit_chunk(str(outputs))
+            elif is_skill and skill_id:
+                inv_id = f"inv_{uuid.uuid4().hex[:12]}"
+                args_to_digest = {
+                    k: v for k, v in tool_args.items() if not _SENSITIVE_KEY_PATTERN.search(str(k))
+                }
+                args_digest = hashlib.sha256(
+                    json.dumps(args_to_digest, sort_keys=True, default=str).encode("utf-8")
+                ).hexdigest()
+                redacted_args = sanitize_sensitive_data(tool_args)
+                inv_start_time = time.perf_counter()
+
+                skill_version = (
+                    getattr(resolved_skill_meta, "version", "1.0.0")
+                    if resolved_skill_meta
+                    else "1.0.0"
+                )
+
+                combined_event_sink(
+                    ExecutionEvent(
+                        execution_id=exec_id,
+                        sequence_num=state_machine.current_sequence_num,
+                        event_type=ExecutionEventType.TOOL_CALL_STARTED,
+                        payload={
+                            "invocation_id": inv_id,
+                            "tool_id": f"skill:{skill_id}",
+                            "tool_name": f"skill:{skill_id}",
+                            "version": skill_version,
+                            "arguments_digest": args_digest,
+                            "started_at": current_timestamp_iso(),
+                            "args": redacted_args,
+                            "requested_args_redacted": redacted_args,
+                        },
+                    )
+                )
+                state_machine.current_sequence_num += 1
+
+                try:
+                    if token.is_cancelled:
+                        return handle_cancellation("skill_execution")
+
+                    if not resolved_skill_item and not skill_custom_callable:
+                        raise FileNotFoundError(f"Skill '{skill_id}' was not found.")
+
+                    declared_perms = (
+                        getattr(resolved_skill_meta, "permissions", [])
+                        if resolved_skill_meta
+                        else []
+                    )
+                    if request.inputs.get("declared_permissions"):
+                        declared_perms = request.inputs.get("declared_permissions")
+
+                    boundary = CapabilityBoundary(
+                        project_root=project_root,
+                        declared_permissions=declared_perms,
+                        cancellation_token=token,
+                    )
+
+                    if skill_custom_callable:
+                        if inspect.iscoroutinefunction(skill_custom_callable):
+                            res = await skill_custom_callable(exec_context, boundary, **tool_args)
+                        else:
+                            res = skill_custom_callable(exec_context, boundary, **tool_args)
+                        if isinstance(res, dict):
+                            outputs = res
+                        else:
+                            outputs = {"response": str(res), "results": {"output": res}}
+                    elif resolved_skill_item and hasattr(resolved_skill_item, "create_agent"):
+                        # OpenClaw SkillTemplate
+                        if getattr(self, "_dispatch_override", None):
+                            dispatch_res = self._dispatch_override(
+                                exec_context, tier, provider, model_name
+                            )
+                            if asyncio.iscoroutine(dispatch_res):
+                                dispatch_res = await dispatch_res
+                            pred_dict = (
+                                dispatch_res.get("results") or dispatch_res
+                                if isinstance(dispatch_res, dict)
+                                else {"result": str(dispatch_res)}
+                            )
+                        else:
+                            agent = resolved_skill_item.create_agent()
+                            pred = agent(**tool_args)
+                            pred_dict = pred.toDict() if hasattr(pred, "toDict") else dict(pred)
+                        outputs = {
+                            "results": pred_dict,
+                            "response": json.dumps(pred_dict, indent=2),
+                        }
+                    elif isinstance(resolved_skill_item, Skill):
+                        # Markdown / rules skill
+                        prompt_content = (
+                            f"{resolved_skill_item.content}\n\nInputs: {json.dumps(tool_args)}"
+                        )
+                        if getattr(self, "_dispatch_override", None):
+                            dispatch_res = self._dispatch_override(
+                                exec_context, tier, provider, model_name
+                            )
+                            if asyncio.iscoroutine(dispatch_res):
+                                dispatch_res = await dispatch_res
+                            full_text = (
+                                dispatch_res.get("response")
+                                if isinstance(dispatch_res, dict)
+                                else str(dispatch_res)
+                            )
+                        else:
+                            lm, _ = self.model_router.create_lm(provider, model_name=model_name)
+                            raw_res = lm(prompt_content)
+                            full_text = raw_res[0] if isinstance(raw_res, list) else str(raw_res)
+                        outputs = {"response": full_text, "results": {"output": full_text}}
+                    else:
+                        raise ValueError(
+                            f"Skill '{skill_id}' has no executable implementation, callable, or resolved template."
+                        )
+
+                    inv_duration = (time.perf_counter() - inv_start_time) * 1000.0
+                    resp_str = str(outputs.get("response") or outputs.get("results") or "")
+                    emit_chunk(resp_str)
+                    prompt_tokens = estimate_tokens(str(tool_args))
+                    completion_tokens = max(1, estimate_tokens(resp_str))
+
+                    combined_event_sink(
+                        ExecutionEvent(
+                            execution_id=exec_id,
+                            sequence_num=state_machine.current_sequence_num,
+                            event_type=ExecutionEventType.TOOL_CALL_COMPLETED,
+                            payload={
+                                "invocation_id": inv_id,
+                                "tool_id": f"skill:{skill_id}",
+                                "version": skill_version,
+                                "arguments_digest": args_digest,
+                                "duration_ms": inv_duration,
+                                "completed_at": current_timestamp_iso(),
+                                "success": True,
+                                "output": sanitize_sensitive_data(
+                                    outputs.get("results") or outputs
+                                ),
+                                "result_summary": resp_str[:200],
+                                "artifacts": outputs.get("artifact_ids") or [],
+                            },
+                        )
+                    )
+                    state_machine.current_sequence_num += 1
+
+                except Exception as skill_err:
+                    inv_duration = (time.perf_counter() - inv_start_time) * 1000.0
+                    combined_event_sink(
+                        ExecutionEvent(
+                            execution_id=exec_id,
+                            sequence_num=state_machine.current_sequence_num,
+                            event_type=ExecutionEventType.TOOL_CALL_COMPLETED,
+                            payload={
+                                "invocation_id": inv_id,
+                                "tool_id": f"skill:{skill_id}",
+                                "version": skill_version,
+                                "arguments_digest": args_digest,
+                                "duration_ms": inv_duration,
+                                "completed_at": current_timestamp_iso(),
+                                "success": False,
+                                "error": str(skill_err),
+                            },
+                        )
+                    )
+                    state_machine.current_sequence_num += 1
+                    raise skill_err
+
+            elif is_adapter and adapter_id:
+                inv_id = f"inv_{uuid.uuid4().hex[:12]}"
+                args_to_digest = {
+                    k: v for k, v in tool_args.items() if not _SENSITIVE_KEY_PATTERN.search(str(k))
+                }
+                args_digest = hashlib.sha256(
+                    json.dumps(args_to_digest, sort_keys=True, default=str).encode("utf-8")
+                ).hexdigest()
+                redacted_args = sanitize_sensitive_data(tool_args)
+                inv_start_time = time.perf_counter()
+
+                adapter_version = (
+                    getattr(resolved_adapter, "version", "1.0.0") if resolved_adapter else "1.0.0"
+                )
+
+                combined_event_sink(
+                    ExecutionEvent(
+                        execution_id=exec_id,
+                        sequence_num=state_machine.current_sequence_num,
+                        event_type=ExecutionEventType.TOOL_CALL_STARTED,
+                        payload={
+                            "invocation_id": inv_id,
+                            "tool_id": f"adapter:{adapter_id}",
+                            "tool_name": f"adapter:{adapter_id}",
+                            "version": adapter_version,
+                            "arguments_digest": args_digest,
+                            "started_at": current_timestamp_iso(),
+                            "args": redacted_args,
+                            "requested_args_redacted": redacted_args,
+                        },
+                    )
+                )
+                state_machine.current_sequence_num += 1
+
+                try:
+                    if token.is_cancelled:
+                        return handle_cancellation("adapter_execution")
+
+                    if not resolved_adapter:
+                        from core.adapters import AdapterNotFoundError
+
+                        raise AdapterNotFoundError(f"Adapter '{adapter_id}' not found in registry")
+
+                    adapter_reg = getattr(self, "adapter_registry", None)
+                    if adapter_reg and not adapter_reg.is_enabled(adapter_id):
+                        from core.adapters import AdapterDisabledError
+
+                        raise AdapterDisabledError(
+                            f"Adapter '{adapter_id}' is disabled in Settings"
+                        )
+
+                    if not resolved_adapter._initialized:
+                        resolved_adapter.initialize()
+
+                    from core.adapters.base import AdapterExecutionRequest
+
+                    timeout_sec = float(request.inputs.get("timeout_seconds", 60.0))
+                    adapter_req = AdapterExecutionRequest(
+                        prompt=request.prompt,
+                        context={
+                            "project_root": project_root,
+                            "cwd": project_root,
+                            **request.inputs.get("context", {}),
+                        },
+                        tools=request.inputs.get("tools", []),
+                        model=request.inputs.get("model") or execution.model,
+                        temperature=float(request.inputs.get("temperature", 0.7)),
+                        timeout_seconds=timeout_sec,
+                        metadata=request.inputs.get("metadata", {}),
+                    )
+
+                    if request.inputs.get("stream"):
+                        chunks = []
+                        async for chunk in resolved_adapter.stream(adapter_req):
+                            if token.is_cancelled:
+                                resolved_adapter.stop()
+                                break
+                            delta = chunk.delta or ""
+                            if delta:
+                                chunks.append(delta)
+                                emit_chunk(delta)
+                        if token.is_cancelled:
+                            return handle_cancellation("adapter_stream")
+                        resp_content = "".join(chunks)
+                        outputs = {
+                            "adapter_id": adapter_id,
+                            "content": resp_content,
+                            "response": resp_content,
+                            "finish_reason": "stop",
+                            "usage": {"total_tokens": len(chunks)},
+                        }
+                    else:
+                        exec_task = asyncio.create_task(resolved_adapter.execute(adapter_req))
+                        token.add_callback(lambda: (resolved_adapter.stop(), exec_task.cancel()))
+                        try:
+                            adapter_resp = await asyncio.wait_for(exec_task, timeout=timeout_sec)
+                        except asyncio.TimeoutError:
+                            resolved_adapter.stop()
+                            raise TimeoutError(
+                                f"Adapter '{adapter_id}' timed out after {timeout_sec}s"
+                            )
+                        except (asyncio.CancelledError, ExecutionCancelledError):
+                            resolved_adapter.stop()
+                            return handle_cancellation("adapter_execution")
+
+                        outputs = adapter_resp.to_dict()
+                        outputs["response"] = adapter_resp.content
+                        emit_chunk(adapter_resp.content)
+
+                    inv_duration = (time.perf_counter() - inv_start_time) * 1000.0
+                    resp_str = str(outputs.get("response") or outputs.get("content") or "")
+                    prompt_tokens = estimate_tokens(request.prompt)
+                    completion_tokens = max(1, estimate_tokens(resp_str))
+
+                    combined_event_sink(
+                        ExecutionEvent(
+                            execution_id=exec_id,
+                            sequence_num=state_machine.current_sequence_num,
+                            event_type=ExecutionEventType.TOOL_CALL_COMPLETED,
+                            payload={
+                                "invocation_id": inv_id,
+                                "tool_id": f"adapter:{adapter_id}",
+                                "version": adapter_version,
+                                "arguments_digest": args_digest,
+                                "duration_ms": inv_duration,
+                                "completed_at": current_timestamp_iso(),
+                                "success": True,
+                                "output": sanitize_sensitive_data(outputs),
+                                "result_summary": resp_str[:200],
+                                "artifacts": outputs.get("artifact_ids") or [],
+                            },
+                        )
+                    )
+                    state_machine.current_sequence_num += 1
+
+                except Exception as adapter_err:
+                    inv_duration = (time.perf_counter() - inv_start_time) * 1000.0
+                    combined_event_sink(
+                        ExecutionEvent(
+                            execution_id=exec_id,
+                            sequence_num=state_machine.current_sequence_num,
+                            event_type=ExecutionEventType.TOOL_CALL_COMPLETED,
+                            payload={
+                                "invocation_id": inv_id,
+                                "tool_id": f"adapter:{adapter_id}",
+                                "version": adapter_version,
+                                "arguments_digest": args_digest,
+                                "duration_ms": inv_duration,
+                                "completed_at": current_timestamp_iso(),
+                                "success": False,
+                                "error": str(adapter_err),
+                            },
+                        )
+                    )
+                    state_machine.current_sequence_num += 1
+                    raise adapter_err
             elif self._dispatch_override:
                 res = self._dispatch_override(exec_context, tier, provider, model_name)
                 if hasattr(res, "__aiter__"):
@@ -1253,20 +2052,43 @@ class ExecutionCoordinator:
 
             # Phase 9: Generic Artifact Registration (ADR-016)
             if getattr(self, "artifact_service", None) and outputs:
-                from core.artifacts.models import ArtifactCandidate
+                from core.artifacts.models import ArtifactCandidate, ArtifactStatus, ArtifactType
 
                 candidates: List[ArtifactCandidate] = []
                 active_pipeline_reg = pipeline_reg or getattr(self, "pipeline_registry", None)
-                if isinstance(outputs, dict) and "_artifact_candidates" in outputs:
-                    candidates.extend(outputs.pop("_artifact_candidates"))
-                elif (
-                    is_pipeline
-                    and active_pipeline_reg
-                    and hasattr(active_pipeline_reg, "extract_artifact_candidates")
-                ):
-                    candidates.extend(
-                        active_pipeline_reg.extract_artifact_candidates(pipeline_name, outputs)
+                if isinstance(outputs, dict):
+                    raw_cands = outputs.pop("artifact_candidates", None) or outputs.pop(
+                        "_artifact_candidates", None
                     )
+                    if raw_cands and isinstance(raw_cands, list):
+                        for c in raw_cands:
+                            if isinstance(c, ArtifactCandidate):
+                                candidates.append(c)
+                            elif isinstance(c, dict):
+                                c_type = c.get("type", ArtifactType.OTHER)
+                                if isinstance(c_type, str):
+                                    try:
+                                        c_type = ArtifactType(c_type)
+                                    except Exception:
+                                        c_type = ArtifactType.OTHER
+                                candidates.append(
+                                    ArtifactCandidate(
+                                        name=c.get("name", "artifact"),
+                                        content=c.get("content", ""),
+                                        type=c_type,
+                                        mime_type=c.get("mime_type"),
+                                        status=c.get("status", ArtifactStatus.READY),
+                                        lineage=c.get("lineage", {}),
+                                    )
+                                )
+                    elif (
+                        is_pipeline
+                        and active_pipeline_reg
+                        and hasattr(active_pipeline_reg, "extract_artifact_candidates")
+                    ):
+                        candidates.extend(
+                            active_pipeline_reg.extract_artifact_candidates(pipeline_name, outputs)
+                        )
 
                 for cand in candidates:
                     try:

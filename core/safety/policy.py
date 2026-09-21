@@ -46,9 +46,13 @@ class PolicyRule:
 
     def matches(self, tool_name: str, tool_args: Dict[str, Any]) -> bool:
         """Evaluate whether this rule matches the given tool call arguments."""
-        # Extract target text candidates from tool args
-        args_values = [str(v) for v in tool_args.values()]
-        full_text = " ".join(args_values)
+        # Direct exact or pattern match on tool_name itself
+        if self.pattern.strip().lower() == tool_name.strip().lower():
+            return True
+
+        # Extract target text candidates from tool args and tool name
+        args_values = [tool_name] + [str(v) for v in tool_args.values()]
+        full_text = f"{tool_name} " + " ".join(str(v) for v in tool_args.values())
 
         # File paths specifically (for glob matching)
         path_keys = {

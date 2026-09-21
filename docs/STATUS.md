@@ -298,7 +298,7 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/execution/coordinator.py"
     - "services/python/server/api.py"
     - "tests/test_cancellation.py"
-  notes: "Implemented canonical CancellationToken primitive with cancellation reason/actor/timestamp metadata, cooperative generator cancellation via aclose()/close(), process termination registry with bounded SIGTERM-to-SIGKILL escalation, REST cancellation API endpoints (POST /v1/executions/{id}/cancel, GET /v1/executions/{id}, GET /v1/executions/{id}/events), SSE cancellation events, zero chunk emission after cancellation, strict terminal state immutability, and guarantee of zero assistant turn persistence to UnifiedSessionStore on cancelled executions."
+  notes: "Implemented canonical CancellationToken primitive with cancellation reason/actor/timestamp metadata, cooperative generator cancellation via aclose()/close(), process termination registry with cross-platform termination contract (graceful termination -> bounded wait -> force termination using platform-appropriate process semantics), REST cancellation API endpoints (POST /v1/executions/{id}/cancel, GET /v1/executions/{id}, GET /v1/executions/{id}/events), SSE cancellation events, zero chunk emission after cancellation, strict terminal state immutability, and guarantee of zero assistant turn persistence to UnifiedSessionStore on cancelled executions."
 
 - id: R1.10
   title: "Execution artifact model"
@@ -350,26 +350,91 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "tests/test_pipeline_kernel_integration.py"
     - "tests/test_pipeline_registry.py"
   notes: "Eliminated all direct bypass routes for DSPy pipelines in accordance with ADR-016. Implemented KernelLMAdapter (dspy.LM) to authoritatively intercept all internal DSPy LM calls into ModelRouter, enforcing cancellation checks, token and cost accounting, and model call provenance. Rewired PipelineRegistry.run to route exclusively through ExecutionCoordinator.execute with execution_id generation and synchronous/asynchronous safety bridges. Rewired POST /v1/pipelines/{name}/run to return canonical execution_id and record durable execution records. Enforced Single Root Execution Invariant (zero shadow executions for multi-hop DSPy programs), policy pre-flight and guardrails, budget limits, cancellation with partial artifact preservation, completed artifact registration (PATCH, DATA, CODE), and ExecutionLedgerService trace projection with pipeline identity provenance. 16/16 new integration tests passing, 475/475 full regression suite passing."
+- id: R1.13
+  title: "Rewire skills and adapters"
+  task_status: done
+  capability_maturity: S1
+  migration: INTEGRATE
+  owner: "Execution Kernel"
+  depends_on: [R1.3]
+  evidence:
+    - "core/skills/models.py"
+    - "core/skills/boundary.py"
+    - "core/skills/discovery.py"
+    - "core/execution/coordinator.py"
+    - "services/python/server/api.py"
+    - "server/mcp_server.py"
+    - "core/ledger/models.py"
+    - "core/ledger/service.py"
+    - "core/safety/policy.py"
+    - "core/artifacts/models.py"
+    - "tests/test_skills_kernel_integration.py"
+    - "tests/test_skills.py"
+    - "tests/test_adapters.py"
+    - "tests/test_templates.py"
+  notes: "Eliminated all direct bypass execution routes for skills and external agent adapters in accordance with ADR-016. Integrated MultiToolSkillDiscovery and AdapterRegistry authoritatively into ExecutionCoordinator. Implemented canonical capability boundaries (CapabilityBoundary) with strict filesystem project containment and constrained subprocess boundary execution. Governed skill/adapter executions under kernel budget limits, policy pre-flight, consequential operation staging gates, prompt cancellation, and independent ToolInvocationRecord tracking. Preserved skill output artifacts (PATCH for diffs, CODE for scripts/fixes) in ArtifactService. Rewired REST endpoints (POST /v1/skills, POST /v1/adapters/{id}/execute, POST /v1/adapters/{id}/stream) and MCP tool execute_skill_template through the coordinator with truthful failure propagation and zero fake success. 18/18 new integration tests passing, 497/497 full regression suite passing."
+- id: R1.14
+  title: "Split monolithic API by domain"
+  task_status: done
+  capability_maturity: S1
+  migration: REFACTOR
+  owner: "Execution Kernel"
+  depends_on: [R1.3]
+  evidence:
+    - "services/python/server/routers/__init__.py"
+    - "services/python/server/routers/adapters.py"
+    - "services/python/server/routers/artifacts.py"
+    - "services/python/server/routers/chat.py"
+    - "services/python/server/routers/collaboration.py"
+    - "services/python/server/routers/credentials.py"
+    - "services/python/server/routers/executions.py"
+    - "services/python/server/routers/ledger.py"
+    - "services/python/server/routers/memory.py"
+    - "services/python/server/routers/models.py"
+    - "services/python/server/routers/patches.py"
+    - "services/python/server/routers/pipelines.py"
+    - "services/python/server/routers/policies.py"
+    - "services/python/server/routers/projects.py"
+    - "services/python/server/routers/skills.py"
+    - "services/python/server/routers/swarm.py"
+    - "services/python/server/routers/system.py"
+    - "services/python/server/routers/tasks.py"
+    - "services/python/server/routers/telemetry.py"
+    - "services/python/server/routers/workflows.py"
+    - "services/python/server/app.py"
+    - "services/python/server/container.py"
+    - "services/python/server/schemas.py"
+    - "services/python/server/errors.py"
+    - "services/python/server/transport.py"
+    - "services/python/server/dependencies.py"
+    - "services/python/server/api.py"
+    - "tests/test_api_domain_decomposition.py"
+  notes: "Decomposed the monolithic services/python/server/api.py (5,683 lines, 161 route handlers) into 19 coherent domain routers under services/python/server/routers/. Established AppServices centralized dependency container in container.py with lazy accessors and test injection hooks, canonical domain error translation in errors.py, SSE streaming transport helpers in transport.py, IPC security verifiers in dependencies.py, and all 139 Pydantic schemas in schemas.py. Constructed create_app() application factory in app.py mounting all 19 domain routers under /v1 and root liveness probe at /healthz. Refactored api.py into a lightweight 345-line backward-compatible facade with zero route decorators and zero business logic. 25/25 dedicated domain decomposition tests passing, 522/522 full regression suite passing."
 ```
 
 ---
 
 ## 6. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `475 passed in 61.50s` (`uv run pytest`)
+- **Full Regression Suite:** `522 passed in 67.45s` (`uv run pytest`)
+- **API Domain Decomposition Suite:** `25 passed in 10.44s` (`uv run pytest tests/test_api_domain_decomposition.py`)
+- **Router Hardening & Outage Fallback Suite:** `7 passed in 3.99s` (`uv run pytest tests/test_router_hardening.py`)
+- **Skills & Adapters Kernel Integration Suite:** `18 passed in 5.77s` (`uv run pytest tests/test_skills_kernel_integration.py`)
+- **Legacy Skills, Adapters & Pipelines Compatibility Suite:** `65 passed in 13.33s` (`uv run pytest tests/test_skills.py tests/test_adapters.py tests/test_templates.py tests/test_pipeline_kernel_integration.py`)
 - **Pipeline & Execution Kernel Core Suite:** `72 passed in 15.44s` (`uv run pytest tests/test_pipeline_kernel_integration.py tests/test_pipeline_registry.py tests/test_cancellation.py tests/test_artifacts.py tests/test_ledger.py`)
   - **Pipeline Kernel Integration Suite:** `16 passed in 8.55s` (`uv run pytest tests/test_pipeline_kernel_integration.py`)
   - **Pipeline Registry Suite:** `6 passed in 4.45s` (`uv run pytest tests/test_pipeline_registry.py`)
   - **Cancellation Suite:** `17 passed in 7.35s` (`uv run pytest tests/test_cancellation.py`)
   - **Artifacts Suite:** `15 passed in 6.95s` (`uv run pytest tests/test_artifacts.py`)
-  - **Ledger Suite:** `15 passed in 6.00s` (`uv run pytest tests/test_ledger.py`)
+  - **Ledger Suite:** `18 passed in 6.00s` (`uv run pytest tests/test_ledger.py`)
 - **Desktop Tauri & Frontend Workspace:**
-  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.73s`)
-  - `pnpm -r build`: passed (`11.3s`)
+  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.75s`)
+  - `pnpm -r build`: passed (`11.9s`)
 - **Documented Upstream Warnings (Non-blocking):**
   1. `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.` (Origin: `fastapi/testclient.py:1` — Upstream FastAPI/Starlette testclient deprecation notice; non-runtime).
   2. `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.` (Origin: `starlette/testclient.py:53` — Upstream Starlette/AnyIO import alias notice; non-runtime).
   3. `DeprecationWarning: 'asyncio.iscoroutinefunction' is deprecated and slated for removal in Python 3.16; use inspect.iscoroutinefunction() instead` (Origin: `chromadb/telemetry/opentelemetry/__init__.py:128` — Upstream ChromaDB telemetry compatibility notice for Python 3.16+; non-blocking on current Python 3.10–3.14).
+
 
 
 

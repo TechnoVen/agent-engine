@@ -58,8 +58,7 @@ class HealthProber:
         t0 = time.perf_counter()
         to = timeout or self.default_timeout
         base_url = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
-        hosts = [base_url, "http://127.0.0.1:11434", "http://localhost:11434"]
-        # Deduplicate preserving order
+        hosts = [base_url]
         seen = set()
         unique_hosts = [h for h in hosts if not (h in seen or seen.add(h))]
 
@@ -94,7 +93,7 @@ class HealthProber:
         host_env = os.getenv("LLAMACPP_HOST", "http://127.0.0.1:8080/v1")
         if not host_env.endswith("/v1"):
             host_env = host_env.rstrip("/") + "/v1"
-        hosts = [host_env, "http://127.0.0.1:8080/v1", "http://localhost:8080/v1"]
+        hosts = [host_env]
         seen = set()
         unique_hosts = [h for h in hosts if not (h in seen or seen.add(h))]
 

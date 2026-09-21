@@ -128,8 +128,48 @@ def execute_dynamic_blueprint(
         return f"Error parsing payload_json: {e}"
 
     agent = LowCodeAgent(config)
-    prediction = agent(**payload)
-    pred_dict = prediction.toDict() if hasattr(prediction, "toDict") else dict(prediction)
+
+    import asyncio
+    import concurrent.futures
+    from core.execution import ExecutionCoordinator, ExecutionRequest, ExecutionStatus
+
+    coordinator = ExecutionCoordinator(model_router=router)
+
+    async def _run_agent(ctx, boundary, **kwargs):
+        pred = agent(**kwargs)
+        return pred.toDict() if hasattr(pred, "toDict") else dict(pred)
+
+    exec_req = ExecutionRequest(
+        task_type="skill",
+        prompt=str(
+            payload.get("goal") or payload.get("prompt") or f"Execute dynamic blueprint {name}"
+        ),
+        inputs={
+            "skill_id": name,
+            "skill_callable": _run_agent,
+            "payload": payload,
+            **payload,
+        },
+        project_id="default",
+    )
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            result = pool.submit(asyncio.run, coordinator.execute(exec_req)).result()
+    else:
+        result = asyncio.run(coordinator.execute(exec_req))
+
+    if result.status == ExecutionStatus.FAILED:
+        return f"Error executing dynamic blueprint '{name}': {result.error}"
+
+    pred_dict = result.outputs.get("results")
+    if pred_dict is None:
+        pred_dict = result.outputs
 
     return json.dumps({"agent": name, "inputs": payload, "results": pred_dict}, indent=2)
 
@@ -213,7 +253,7 @@ def list_skill_templates() -> str:
 @mcp.tool()
 def execute_skill_template(template_id: str, payload_json: str = "{}") -> str:
     """
-    Execute a pre-built OpenClaw skill template by its template_id.
+    Execute a pre-built OpenClaw skill template by its template_id via the canonical ExecutionCoordinator.
     Pass input parameters as a JSON object string in payload_json.
     """
     template = TemplateManager.get_template(template_id)
@@ -229,10 +269,39 @@ def execute_skill_template(template_id: str, payload_json: str = "{}") -> str:
     if not payload and template.sample_inputs:
         payload = template.sample_inputs
 
-    router.initialize_and_configure()
-    agent = template.create_agent()
-    prediction = agent(**payload)
-    pred_dict = prediction.toDict() if hasattr(prediction, "toDict") else dict(prediction)
+    import asyncio
+    import concurrent.futures
+    from core.execution import ExecutionCoordinator, ExecutionRequest, ExecutionStatus
+
+    coordinator = ExecutionCoordinator(model_router=router)
+    exec_req = ExecutionRequest(
+        task_type="skill",
+        prompt=str(payload.get("prompt") or f"Execute skill template {template_id}"),
+        inputs={
+            "skill_id": template_id,
+            "payload": payload,
+            **payload,
+        },
+        project_id="default",
+    )
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            result = pool.submit(asyncio.run, coordinator.execute(exec_req)).result()
+    else:
+        result = asyncio.run(coordinator.execute(exec_req))
+
+    if result.status == ExecutionStatus.FAILED:
+        return f"Error executing skill template '{template_id}': {result.error}"
+
+    pred_dict = result.outputs.get("results")
+    if pred_dict is None:
+        pred_dict = result.outputs
 
     return json.dumps(
         {

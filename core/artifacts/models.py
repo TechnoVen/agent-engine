@@ -35,6 +35,7 @@ class ArtifactType(str, Enum):
     IMAGE = "image"
     LOG = "log"
     PATCH = "patch"
+    DIFF = "patch"
     OTHER = "other"
 
 

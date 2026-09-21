@@ -165,7 +165,7 @@ class ExecutionResult(BaseModel):
 1. **In-Flight Cancellation:**
    * Every execution holds an `asyncio.Event` cancellation token.
    * Model HTTP streams are aborted using client timeouts and socket drops.
-   * Subprocess executions (e.g., skill scripts, compilers) are launched in dedicated process groups and terminated with `SIGTERM` followed by `SIGKILL` if unyielding after 1.5 seconds.
+   * Subprocess executions (e.g., skill scripts, compilers) are launched in dedicated process groups and terminated using canonical cross-platform semantics: graceful termination -> bounded wait (1.5s) -> force termination using platform-appropriate process semantics.
 2. **Worktree Isolation for Coding:**
    * High-risk code alterations run in isolated Git worktrees (`git worktree add`).
    * Working branches are never merged into the user's canonical branch without explicit test validation and operator approval.

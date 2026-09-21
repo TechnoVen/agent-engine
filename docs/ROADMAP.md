@@ -554,7 +554,7 @@ A real desktop request travels through project/session context, routing, a real 
 - **Required Evidence:**
   - Integration test for standard pipeline.
 
-### [ ] R1.13 — Rewire skills and adapters
+### [x] R1.13 — Rewire skills and adapters
 
 - **Migration:** `INTEGRATE`
 - **Target release:** `0.5`
@@ -564,22 +564,22 @@ A real desktop request travels through project/session context, routing, a real 
 - **Deliverables:**
   - Introduce compatibility adapters that translate legacy calls to canonical executions.
 - **Acceptance Criteria:**
-  - [ ] Legacy adapter invocation produces normal execution events and policy/cost records.
+  - [x] Legacy adapter invocation produces normal execution events and policy/cost records.
 - **Required Evidence:**
   - Adapter contract test.
 
-### [ ] R1.14 — Split monolithic API by domain
+### [x] R1.14 — Split monolithic API by domain
 
 - **Migration:** `REFACTOR`
 - **Target release:** `0.5`
-- **Initial maturity:** `S0` unless `docs/STATUS.md` verifies a higher level from legacy work.
+- **Initial maturity:** `S1`
 - **Dependencies:** R1.3
 - **User Story:** As a maintainer, I want API modules aligned with domains so contract drift and merge risk decrease without changing behavior.
 - **Deliverables:**
   - Extract routers/services for execution, projects, sessions, models, skills, policies, telemetry, workflows.
 - **Acceptance Criteria:**
-  - [ ] OpenAPI remains backward compatible where intended.
-  - [ ] Contract tests cover desktop client methods.
+  - [x] OpenAPI remains backward compatible where intended.
+  - [x] Contract tests cover desktop client methods.
 - **Required Evidence:**
   - Schema diff + contract tests.
 

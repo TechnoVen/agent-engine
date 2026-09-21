@@ -3,6 +3,11 @@
 Unified Multi-Tool Skill Management for Agent Engine (Phase 6 - Milestone M4).
 """
 
+from core.skills.boundary import (
+    CapabilityBoundary,
+    check_permission,
+    validate_project_path,
+)
 from core.skills.collections import SkillCollectionManager
 from core.skills.discovery import MultiToolSkillDiscovery
 from core.skills.editor import SkillEditor, SkillValidationResult
@@ -11,6 +16,7 @@ from core.skills.models import (
     SkillCollection,
     SkillFormat,
     SkillMetadata,
+    SkillPermission,
     SkillSource,
 )
 from core.skills.registry import (
@@ -20,13 +26,20 @@ from core.skills.registry import (
 )
 from core.skills.remote import RemoteSkillDiscoveryClient
 
+SkillDiscovery = MultiToolSkillDiscovery
+
 __all__ = [
     "Skill",
     "SkillMetadata",
+    "SkillPermission",
     "SkillSource",
     "SkillFormat",
     "SkillCollection",
+    "CapabilityBoundary",
+    "check_permission",
+    "validate_project_path",
     "MultiToolSkillDiscovery",
+    "SkillDiscovery",
     "SkillEditor",
     "SkillValidationResult",
     "SkillCollectionManager",

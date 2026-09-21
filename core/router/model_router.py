@@ -2,6 +2,7 @@
 import logging
 import os
 import sys
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional
 
@@ -11,7 +12,7 @@ from dotenv import load_dotenv
 from core.execution.models import RoutingTier
 from core.router.circuit_breaker import CircuitBreaker
 from core.router.config import RouterConfigFile, load_router_config
-from core.router.health import HealthProber
+from core.router.health import HealthProber, ProbeResult
 
 # Ensure core.models and repo root are importable
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -87,9 +88,19 @@ class ModelRouter:
             "groq",
             "kimi",
         ]
+        providers_to_probe = [p for p in providers if self.circuit_breaker.can_attempt(p)]
         probe_results = self.health_prober.probe_all(
-            providers=providers, force_refresh=force_refresh
+            providers=providers_to_probe, force_refresh=force_refresh
         )
+        for p in providers:
+            if not self.circuit_breaker.can_attempt(p):
+                probe_results[p] = ProbeResult(
+                    provider=p,
+                    online=False,
+                    latency_ms=0.0,
+                    error=f"Circuit OPEN: {self.circuit_breaker._last_error.get(p, 'Tripped')}",
+                    checked_at=time.time(),
+                )
         status: dict[str, Any] = {}
 
         for p in providers:

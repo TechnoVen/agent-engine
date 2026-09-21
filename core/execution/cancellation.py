@@ -146,7 +146,8 @@ class CancellationToken:
     async def _ensure_process_terminated(
         self, proc: asyncio.subprocess.Process, timeout: Optional[float] = None
     ) -> None:
-        """Cross-platform termination contract:
+        """Canonical process termination contract:
+        graceful termination -> bounded wait -> force termination using platform-appropriate process semantics.
 
         1. Request graceful termination (terminate() / SIGTERM / TerminateProcess).
         2. Bounded wait for process completion.

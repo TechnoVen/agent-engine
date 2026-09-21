@@ -32,6 +32,19 @@ class SkillFormat(str, Enum):
     YAML = "yaml"
 
 
+class SkillPermission(str, Enum):
+    """Canonical capability permissions for skills and tool executions."""
+
+    READ = "read"
+    WRITE_LOCAL = "write_local"
+    EXECUTE = "execute"
+    NETWORK = "network"
+    COMMUNICATE = "communicate"
+    ADMIN = "admin"
+    FINANCIAL = "financial"
+    DESTRUCTIVE = "destructive"
+
+
 class SkillMetadata(BaseModel):
     """Standardized metadata across all discovered and authored skills."""
 
@@ -45,6 +58,12 @@ class SkillMetadata(BaseModel):
     inputs: List[str] = Field(default_factory=list, description="Declared input variable names")
     outputs: List[str] = Field(default_factory=list, description="Declared output variable names")
     tools: List[str] = Field(default_factory=list, description="Required MCP or native tool names")
+    permissions: List[SkillPermission] = Field(
+        default_factory=list, description="Canonical declared permissions"
+    )
+    implementation_hash: Optional[str] = Field(
+        default=None, description="SHA-256 hash of the implementation"
+    )
     source_tool: SkillSource = Field(
         default=SkillSource.AGENT_ENGINE, description="Originating tool environment"
     )
@@ -73,6 +92,15 @@ class Skill(BaseModel):
     format: SkillFormat = Field(
         default=SkillFormat.MARKDOWN, description="Underlying serialization format"
     )
+
+    def model_post_init(self, __context: Any) -> None:
+        """Ensure implementation_hash is populated from content if missing."""
+        if not self.metadata.implementation_hash and self.content:
+            import hashlib
+
+            self.metadata.implementation_hash = hashlib.sha256(
+                self.content.strip().encode("utf-8")
+            ).hexdigest()
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert Skill to dictionary representation."""

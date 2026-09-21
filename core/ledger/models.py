@@ -82,6 +82,13 @@ class ContextProvenance(BaseModel):
     pipeline_version: Optional[str] = None
     pipeline_category: Optional[str] = None
     pipeline_author: Optional[str] = None
+    skill_id: Optional[str] = None
+    skill_version: Optional[str] = None
+    skill_source: Optional[str] = None
+    skill_implementation_hash: Optional[str] = None
+    adapter_id: Optional[str] = None
+    adapter_version: Optional[str] = None
+    adapter_protocol: Optional[str] = None
 
 
 class ModelCallRecord(BaseModel):
@@ -107,16 +114,27 @@ class ModelCallRecord(BaseModel):
 
 
 class ToolInvocationRecord(BaseModel):
-    """Auditable record of a tool invocation within the execution."""
+    """Auditable record of a tool/skill/adapter invocation within the execution."""
 
     invocation_id: str
+    execution_id: Optional[str] = None
     tool_id: str
-    status: str = "completed"  # "started", "completed", "failed"
+    version: Optional[str] = None
+    arguments_digest: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
     duration_ms: Optional[float] = None
+    status: str = "completed"  # "started", "completed", "failed"
     approval_id: Optional[str] = None
     requested_args_redacted: Optional[Dict[str, Any]] = None
     output: Optional[Any] = None
+    result_summary: Optional[str] = None
+    artifacts: List[str] = Field(default_factory=list)
     error: Optional[str] = None
+
+    def to_public_dict(self) -> Dict[str, Any]:
+        """Return public dictionary representation with sensitive fields redacted."""
+        return self.model_dump()
 
 
 class ApprovalRecord(BaseModel):
@@ -229,6 +247,8 @@ class ExecutionTrace(BaseModel):
                     t["error"] = sanitize_sensitive_data(t["error"])
                 if t.get("output"):
                     t["output"] = sanitize_sensitive_data(t["output"])
+                if t.get("result_summary"):
+                    t["result_summary"] = sanitize_sensitive_data(t["result_summary"])
 
         # Redact event payloads
         if data.get("events"):

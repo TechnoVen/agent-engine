@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
-from core.skills.models import Skill, SkillFormat, SkillMetadata, SkillSource
+from core.skills.models import Skill, SkillFormat, SkillMetadata, SkillPermission, SkillSource
 
 logger = logging.getLogger("agent_engine.skills.discovery")
 
@@ -169,6 +169,15 @@ class MultiToolSkillDiscovery:
                     else data.get("outputs", [])
                 )
                 tools = data.get("tools", [])
+                raw_perms = data.get("permissions", [])
+                if isinstance(raw_perms, str):
+                    raw_perms = [p.strip() for p in raw_perms.split(",") if p.strip()]
+                parsed_perms: List[SkillPermission] = []
+                for p in raw_perms:
+                    try:
+                        parsed_perms.append(SkillPermission(str(p).lower()))
+                    except Exception:
+                        pass
 
                 metadata = SkillMetadata(
                     id=skill_id,
@@ -179,6 +188,7 @@ class MultiToolSkillDiscovery:
                     inputs=inputs,
                     outputs=outputs,
                     tools=tools,
+                    permissions=parsed_perms,
                     source_tool=source_tool,
                 )
                 is_ro = "configs/templates" in str(file_path) or "configs/codex" in str(file_path)
@@ -207,6 +217,16 @@ class MultiToolSkillDiscovery:
         if isinstance(tools, str):
             tools = [tools]
 
+        raw_perms = fm.get("permissions") or []
+        if isinstance(raw_perms, str):
+            raw_perms = [p.strip() for p in raw_perms.split(",") if p.strip()]
+        parsed_perms: List[SkillPermission] = []
+        for p in raw_perms:
+            try:
+                parsed_perms.append(SkillPermission(str(p).lower()))
+            except Exception:
+                pass
+
         metadata = SkillMetadata(
             id=slug_id,
             name=name,
@@ -214,6 +234,7 @@ class MultiToolSkillDiscovery:
             category=category,
             tags=tags,
             tools=tools,
+            permissions=parsed_perms,
             source_tool=source_tool,
             version=str(fm.get("version", "1.0.0")),
             author=str(fm.get("author", "local")),
