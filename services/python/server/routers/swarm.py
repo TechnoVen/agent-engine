@@ -7,15 +7,15 @@ Part of Task R1.14 (Split Monolithic API by Domain).
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+from typing import List
 
-from fastapi import APIRouter
+from fastapi import APIRouter, status
+from fastapi.responses import JSONResponse
 
 # Core domain imports
 from core.workflows import (
     SwarmAgentSpec,
     SwarmCase,
-    SwarmRunResult,
 )
 
 # Services container, schemas, errors, transport, dependencies
@@ -54,18 +54,16 @@ async def estimate_swarm_cost_endpoint(req: SwarmEstimateRequest):
     return {"estimated_cost_usd": est, "agent_count": len(agents), "model_tier": req.model_tier}
 
 
-@router.post("/swarm/run", response_model=SwarmRunResult)
+@router.post("/swarm/run")
 async def run_swarm_endpoint(req: SwarmRunApiRequest):
     """Dispatch prompt to a parallel swarm of specialized agents and return aggregated results."""
-    coordinator = get_swarm_coordinator()
-    agents: Optional[List[SwarmAgentSpec]] = None
-    if req.agents:
-        agents = [SwarmAgentSpec.model_validate(a) for a in req.agents]
-
-    result = await coordinator.run_swarm(
-        prompt=req.prompt,
-        agents=agents,
-        case_id=req.case_id,
-        model_tier=req.model_tier,
+    return JSONResponse(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        content={
+            "error_code": "RUNTIME_NOT_AVAILABLE",
+            "status": "deferred",
+            "target_milestone": "R4",
+            "message": "Swarm multi-agent execution runtime is deferred to Milestone R4 (Multi-Agent & Long-Horizon Workflows). Swarm team templates and cost estimation are supported in R1.",
+            "detail": "Swarm multi-agent execution runtime is deferred to Milestone R4 (Multi-Agent & Long-Horizon Workflows). Swarm team templates and cost estimation are supported in R1.",
+        },
     )
-    return result

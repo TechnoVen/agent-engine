@@ -416,7 +416,8 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
 
 ## 6. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `522 passed in 67.45s` (`uv run pytest`)
+- **Full Regression Suite:** `530 passed in 72.60s` (`uv run pytest`)
+- **Hard-Exit Truth Verification Suite:** `8 passed in 4.00s` (`uv run pytest tests/test_r1_hard_exit_truth.py`)
 - **API Domain Decomposition Suite:** `25 passed in 10.44s` (`uv run pytest tests/test_api_domain_decomposition.py`)
 - **Router Hardening & Outage Fallback Suite:** `7 passed in 3.99s` (`uv run pytest tests/test_router_hardening.py`)
 - **Skills & Adapters Kernel Integration Suite:** `18 passed in 5.77s` (`uv run pytest tests/test_skills_kernel_integration.py`)

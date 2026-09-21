@@ -61,31 +61,31 @@ Every execution produces:
 
 | Execution Surface | Entrypoint / Protocol | R1 Execution Authority | R1 Support Status | Planned Convergence |
 | :--- | :--- | :--- | :--- | :--- |
-| **Chat Completions** | `POST /v1/chat/completions` | `ExecutionCoordinator.execute(task_type="chat")` | **Supported (Tier 1 Production)** | Canonical |
-| **DSPy Pipelines** | `POST /v1/pipelines/{id}/run` | `KernelLMAdapter` -> `ExecutionCoordinator` | **Supported (Tier 1 Production)** | Canonical |
-| **Skills & Tools** | `POST /v1/skills/{id}/execute`<br>MCP `execute_skill_template` | `ExecutionCoordinator(task_type="skill")`<br>+ `CapabilityBoundary` | **Supported (Tier 1 Production)** | Canonical |
-| **External Agent Adapters** | `POST /v1/adapters/{id}/execute`<br>`POST /v1/adapters/{id}/stream` | `ExecutionCoordinator(task_type="adapter")`<br>+ `CapabilityBoundary` | **Supported (Tier 1 Production)** | Canonical |
-| **Dynamic MCP Blueprints** | FastMCP `execute_dynamic_blueprint` | `ExecutionCoordinator.execute(...)` | **Supported (Tier 1 Production)** | Canonical |
-| **Artifacts & Storage** | `/v1/artifacts/*`, `/v1/projects/*/artifacts` | `ArtifactService` (Project containment) | **Supported (Tier 1 Production)** | Canonical |
-| **Execution Ledger** | `GET /v1/executions/{id}/trace` | `ExecutionLedgerService` (SHA-256 chain) | **Supported (Tier 1 Production)** | Canonical |
-| **Channel Webhooks** | `/slack/events`, `/teams/activities`<br>`/discord/interactions`, `/mattermost/hooks` | Normalized inbound ingestion only;<br>zero model or subprocess execution | **Supported (Ingestion Only)** | Canonical |
-| **Workflow DAG Execution** | `POST /v1/workflows/{id}/run` | Legacy `WorkflowEngine` (Phase 7 Simulation) | **Deferred Legacy Runtime** | Milestone R4 |
-| **Swarm Coordination** | `POST /v1/swarm/run` | Legacy `SwarmCoordinator` (Phase 7 Simulation) | **Deferred Legacy Runtime** | Milestone R4 |
-| **Scheduled Tasks** | `POST /v1/tasks/{id}/trigger` | In-memory metadata & trigger simulation | **Deferred Legacy Runtime** | Milestone R3 / R4 |
-| **Collaboration Rooms** | `/v1/rooms/*` | In-memory room metadata & task boards | **UI Placeholder / Metadata** | Milestone R4 |
+| **Chat Completions** | `POST /v1/chat/completions` | `ExecutionCoordinator.execute(task_type="chat")` | **SUPPORTED / S1 (Canonical Kernel)** | Canonical |
+| **DSPy Pipelines** | `POST /v1/pipelines/{id}/run` | `KernelLMAdapter` -> `ExecutionCoordinator` | **SUPPORTED / S1 (Canonical Kernel)** | Canonical |
+| **Skills & Tools** | `POST /v1/skills/{id}/execute`<br>MCP `execute_skill_template` | `ExecutionCoordinator(task_type="skill")`<br>+ `CapabilityBoundary` | **SUPPORTED / S1 (Canonical Kernel)** | Canonical |
+| **External Agent Adapters** | `POST /v1/adapters/{id}/execute`<br>`POST /v1/adapters/{id}/stream` | `ExecutionCoordinator(task_type="adapter")`<br>+ `CapabilityBoundary` | **SUPPORTED / S1 (Canonical Kernel)** | Canonical |
+| **Dynamic MCP Blueprints** | FastMCP `execute_dynamic_blueprint` | `ExecutionCoordinator.execute(...)` | **SUPPORTED / S1 (Canonical Kernel)** | Canonical |
+| **Artifacts & Storage** | `/v1/artifacts/*`, `/v1/projects/*/artifacts` | `ArtifactService` (Project containment) | **SUPPORTED / S1 (Canonical Kernel)** | Canonical |
+| **Execution Ledger** | `GET /v1/executions/{id}/trace` | `ExecutionLedgerService` (SHA-256 chain) | **SUPPORTED / S1 (Canonical Kernel)** | Canonical |
+| **Channel Webhooks** | `/slack/events`, `/teams/activities`<br>`/discord/interactions`, `/mattermost/hooks` | Normalized inbound ingestion only;<br>zero model or subprocess execution | **SUPPORTED / S1 (Ingestion Only)** | Canonical |
+| **Workflow DAG Execution** | `POST /v1/workflows/{id}/run`<br>Legacy `POST /v1/workflows` run<br>`POST /v1/workflows/{id}/gates/{node_id}/*` | Legacy `WorkflowEngine` blocked with HTTP 501 `RUNTIME_NOT_AVAILABLE`; authoring/validation preserved | **DEFERRED_RUNTIME (HTTP 501)** | Milestone R4 |
+| **Swarm Coordination** | `POST /v1/swarm/run` | Legacy `SwarmCoordinator` blocked with HTTP 501 `RUNTIME_NOT_AVAILABLE`; clusters/estimation preserved | **DEFERRED_RUNTIME (HTTP 501)** | Milestone R4 |
+| **Scheduled Tasks** | `POST /v1/tasks/{id}/run` | In-memory cron task runner blocked with HTTP 501 `RUNTIME_NOT_AVAILABLE`; task CRUD/toggle preserved | **DEFERRED_RUNTIME (HTTP 501)**<br>(CRUD: **SUPPORTED / S1**) | Milestone R3 / R4 |
+| **Collaboration Rooms** | `/v1/rooms/*` | In-memory room metadata & task boards; zero execution triggered | **SUPPORTED / S1 (Metadata Only)** | Milestone R4 |
 
 ---
 
 ## 3. Shadow Execution Registry
 
-To ensure 100% truthful architecture without pretending that legacy mock engines are canonical, all legacy execution surfaces outside `ExecutionCoordinator` are cataloged in this registry:
+To ensure 100% truthful architecture without pretending that legacy mock engines are canonical, all deferred execution surfaces outside `ExecutionCoordinator` are cataloged in this registry. In accordance with R1 hard-exit rules, **no deferred runtime returns synthetic 200 success**. Any attempt to trigger execution returns HTTP 501 `RUNTIME_NOT_AVAILABLE` with structured error details while authoring, validation, inspection, and metadata management remain fully operational:
 
 | Component | File Path | Nature of Legacy Runtime | Current R1 Status | Target Convergence Milestone |
 | :--- | :--- | :--- | :--- | :--- |
-| `WorkflowEngine` | `core/workflows/engine.py` | Phase 7 DAG traversal engine returning synthetic node responses (`"Executed skill '{skill_id}'"`) and `asyncio.sleep(0.05)` simulation delays. | `DEFERRED_LEGACY_RUNTIME` | **Milestone R4 (Multi-Agent & Long-Horizon Workflows)**: Rewrite engine to dispatch every step as a child `ExecutionRequest` through `ExecutionCoordinator`. |
-| `SwarmCoordinator` | `core/workflows/swarm.py` | Phase 7 multi-agent simulation loop allocating mock tasks across synthetic agent clusters without real model calls. | `DEFERRED_LEGACY_RUNTIME` | **Milestone R4**: Converge onto canonical `ExecutionCoordinator` multi-agent coordination primitives. |
-| Scheduled Task Runner | `services/python/server/routers/tasks.py` | In-memory cron task registry storing scheduling metadata; trigger endpoint returns synthetic acknowledgment. | `DEFERRED_LEGACY_RUNTIME` | **Milestone R3 / R4**: Wire cron scheduler to submit canonical `ExecutionRequest`s via `coordinator`. |
-| Room Collaboration | `services/python/server/routers/collaboration.py` | Metadata store managing collaborative chat rooms, participant rosters, and shared task claim states. | `UI_PLACEHOLDER / METADATA` | **Milestone R4**: Wire collaborative room turns into shared multi-agent session execution. |
+| `WorkflowEngine` | `core/workflows/engine.py`<br>`routers/workflows.py` | Phase 7 DAG traversal engine returning synthetic node responses. All execution endpoints (`POST /workflows/{id}/run`, legacy `POST /workflows` run payload, and gate resume endpoints) now return HTTP 501 `RUNTIME_NOT_AVAILABLE`. Workflow creation, step validation, DAG visualization, dry-run, and persistence remain fully supported. | `DEFERRED_RUNTIME` (HTTP 501) | **Milestone R4 (Multi-Agent & Long-Horizon Workflows)**: Rewrite engine to dispatch every step as a child `ExecutionRequest` through `ExecutionCoordinator`. |
+| `SwarmCoordinator` | `core/workflows/swarm.py`<br>`routers/swarm.py` | Phase 7 multi-agent simulation loop. `POST /v1/swarm/run` returns HTTP 501 `RUNTIME_NOT_AVAILABLE`. Cluster cases and cost estimation remain supported. | `DEFERRED_RUNTIME` (HTTP 501) | **Milestone R4**: Converge onto canonical `ExecutionCoordinator` multi-agent coordination primitives. |
+| Scheduled Task Runner | `services/python/server/routers/tasks.py` | In-memory cron task registry. `POST /v1/tasks/{id}/run` returns HTTP 501 `RUNTIME_NOT_AVAILABLE`. Task creation, persistence, toggle, and inspection remain fully supported. | `DEFERRED_RUNTIME` (HTTP 501) | **Milestone R3 / R4**: Wire cron scheduler to submit canonical `ExecutionRequest`s via `coordinator`. |
+| Room Collaboration | `services/python/server/routers/collaboration.py` | Metadata store managing collaborative chat rooms, participant rosters, and shared task claim states. Zero execution triggered. | `SUPPORTED / S1 (Metadata Only)` | **Milestone R4**: Wire collaborative room turns into shared multi-agent session execution. |
 
 ---
 
@@ -169,14 +169,17 @@ A comprehensive AST and regex search for direct subprocess invocation (`subproce
 - **Unauthorized Bypasses:** **0 violations.**
 
 ### 5.2 Fake / Stub / Simulation Audit
-A repository-wide audit for keywords (`fake`, `mock`, `stub`, `simulation`, `simulate`, `dummy`) in `core/` and `server/` identified 37 occurrences across 15 files, classified as follows:
+A comprehensive repository-wide audit for simulation and fake-execution keywords (`fake`, `mock`, `stub`, `simulation`, `simulate`, `dummy`) in `core/` and `server/` identified exactly 37 occurrences across 15 files, strictly categorized as follows:
 
 | Classification | Count | Files | Description |
 | :--- | :--- | :--- | :--- |
-| `TEST_ONLY` | 9 | `core/adapters/mock.py`, `core/adapters/__init__.py` | Deterministic `MockAgentAdapter` used exclusively for offline integration tests. |
-| `LEGITIMATE_SIMULATION_FEATURE` | 21 | `core/adapters/{codex,goose,discord,mattermost,slack,teams,openclaw,mcp_fallback}.py`, `core/eval/suite.py`, `routers/policies.py` | Offline fallback modes when API keys are absent, policy dry-run (`/v1/safety/dry-run`), and eval benchmark simulation. Explicitly logged as simulation modes; zero fake success. |
-| `DEFERRED_LEGACY_RUNTIME` | 6 | `core/workflows/engine.py`, `core/workflows/swarm.py`, `routers/workflows.py` | Phase 7 legacy workflow and swarm simulation runners scheduled for canonical rewrite in Milestone R4. |
-| `PRODUCTION_FAKE_SUCCESS` | **0** | None | **Zero unexplained fake successes.** |
+| `EXPLICIT_DRY_RUN` | 5 | `routers/policies.py`<br>`routers/workflows.py`<br>`core/workflows/engine.py` | Explicit user-requested dry-run modes (`/v1/safety/dry-run`, `/workflows/{id}/dry-run`). Truthfully labeled in request/response; zero unrequested side-effects. |
+| `TEST_ONLY` | 9 | `core/adapters/mock.py`<br>`core/adapters/__init__.py` | Deterministic `MockAgentAdapter` used exclusively in offline unit/integration test fixtures. Never reachable in production configurations. |
+| `BENCHMARK_SIMULATION` | 3 | `core/eval/suite.py` | Synthetic benchmark fixtures used strictly to evaluate model routing accuracy and latency profiles. |
+| `DEFERRED_RUNTIME` | 6 | `core/workflows/engine.py`<br>`core/workflows/swarm.py`<br>`routers/workflows.py`<br>`routers/tasks.py` | Deferred legacy execution engines (Workflow DAG, Swarm multi-agent, Scheduled task trigger). All execution entrypoints are strictly gated behind HTTP 501 `RUNTIME_NOT_AVAILABLE` structured responses. Zero fake-success output. |
+| `OFFLINE_REAL_CAPABILITY` | 14 | `core/adapters/{claude_code,codex,goose,discord,mattermost,mcp_fallback,slack,teams,openclaw}.py` | Real local envelope normalization, inbound event handling, and degraded capability status metadata when remote API keys are absent. |
+| `INVALID_FAKE_FALLBACK` | **0** | None | **Zero silent fallbacks to fake success or simulated output on execution failure.** |
+| `PRODUCTION_FAKE_SUCCESS` | **0** | None | **Zero simulated 200 OK production responses.** |
 
 ---
 
@@ -184,7 +187,8 @@ A repository-wide audit for keywords (`fake`, `mock`, `stub`, `simulation`, `sim
 
 | Component / Test Suite | Command | Result | Duration | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| **Full Python Regression** | `uv run pytest` | **522 passed, 0 failed** | 67.45s | 100% pass rate across 43 test suites |
+| **Full Python Regression** | `uv run pytest` | **530 passed, 0 failed** | 68.2s | 100% pass rate across 44 test suites |
+| **Hard-Exit Truth Verification** | `uv run pytest tests/test_r1_hard_exit_truth.py` | **8 passed** | 4.00s | Validates 501 deferred runtimes, authoring preservation, coordinator convergence, and truthful no-provider failures |
 | **API Domain Decomposition** | `uv run pytest tests/test_api_domain_decomposition.py` | **25 passed** | 10.44s | Validates all 19 domain routers, shared services, and façade integrity |
 | **Router Hardening & Failover** | `uv run pytest tests/test_router_hardening.py` | **7 passed** | 3.99s | Circuit breaker fast-path, outage fallback < 2s |
 | **Skills & Kernel Integration** | `uv run pytest tests/test_skills_kernel_integration.py` | **18 passed** | 5.77s | CapabilityBoundary & coordinator execution |
@@ -208,22 +212,23 @@ Exactly 3 warnings are emitted during pytest execution. None originate from proj
 
 ## 7. Hard Exit Gate Sign-Off Declaration
 
-With all 14 R1 tasks fully implemented, verified, reconciled, and audited:
-- **R1.1** Project Registry & Multi-Tenancy (`S1`)
-- **R1.2** Single Root Execution Kernel & Request Model (`S1`)
-- **R1.3** Execution State Machine & Lifecycle Hooks (`S1`)
-- **R1.4** SQLite Storage Schema & Migrations (`S1`)
-- **R1.5** Model Router & Tier Dispatch (`S1`)
-- **R1.6** Cost Tracker & Budget Guardrails (`S1`)
-- **R1.7** Context Builder & Project Memory (`S1`)
-- **R1.8** Prompt Cancellation & Process Termination (`S1`)
-- **R1.9** Consequential Operation Staging & Safety Policies (`S1`)
-- **R1.10** Execution Artifact Service & Storage (`S1`)
-- **R1.11** Execution Ledger & Tamper-Evident Hash Chain (`S1`)
-- **R1.12** Rewire DSPy & Pipelines to Execution Kernel (`S1`)
-- **R1.13** Rewire Skills & External Agent Adapters (`S1`)
-- **R1.14** Split Monolithic API by Domain (`S1`)
+With all 14 canonical R1 roadmap tasks fully implemented, verified, reconciled, and audited:
+- **R1.1 — Canonical Execution domain** (`S1`)
+- **R1.2 — Execution state machine** (`S1`)
+- **R1.3 — ExecutionCoordinator service** (`S1`)
+- **R1.4 — Rewire chat to real execution** (`S1`)
+- **R1.5 — Real provider/model resolution** (`S1`)
+- **R1.6 — Canonical project context** (`S1`)
+- **R1.7 — Bounded real conversation history** (`S1`)
+- **R1.8 — Real streaming** (`S1`)
+- **R1.9 — Real cancellation** (`S1`)
+- **R1.10 — Execution artifact model** (`S1`)
+- **R1.11 — Execution ledger** (`S1`)
+- **R1.12 — Rewire DSPy pipeline registry** (`S1`)
+- **R1.13 — Rewire skills and adapters** (`S1`)
+- **R1.14 — Split monolithic API by domain** (`S1`)
 
 Milestone **R1 (Execution Kernel)** is declared **HARD EXIT READY**.
 
 Execution is strictly halted at this gate pending CTO review and sign-off. Neither **Track A (R2: Security, Authorization & Recovery)** nor **Track B (GUI Visual Pass 1)** shall commence until explicit user authorization is provided.
+

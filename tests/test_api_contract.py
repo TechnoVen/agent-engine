@@ -93,10 +93,10 @@ def test_api_workflows():
         "/v1/workflows",
         json={"workflow_id": wfs[0]["id"], "inputs": {"target": "snippet.py"}},
     )
-    assert post_res.status_code == 200
+    assert post_res.status_code == 501
     exec_data = post_res.json()
-    assert "execution_id" in exec_data
-    assert exec_data["status"] == "queued"
+    assert exec_data["error_code"] == "RUNTIME_NOT_AVAILABLE"
+    assert exec_data["status"] == "deferred"
 
 
 def test_api_patches_listing():

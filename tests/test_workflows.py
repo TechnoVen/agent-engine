@@ -26,6 +26,7 @@ from core.workflows import (
     WorkflowStorage,
 )
 from services.python.server.api import app
+from services.python.server.container import get_workflow_storage
 
 
 def _build_sample_workflow() -> WorkflowDefinition:
@@ -384,34 +385,52 @@ def test_workflow_api_dry_run():
 
 
 def test_workflow_api_run_history():
-    """Verify POST /v1/workflows/{id}/run and GET /v1/workflows/{id}/runs history."""
+    """Verify POST /v1/workflows/{id}/run returns 501 deferred and GET /v1/workflows/{id}/runs queries history."""
     client = TestClient(app)
     wf = _build_sample_workflow()
     wf.id = "api_run_history_test_wf"
     client.post("/v1/workflows", json=wf.to_dict())
 
-    # Execute live run
+    # Execute live run -> 501 deferred to R4
     run_res = client.post(
         f"/v1/workflows/{wf.id}/run",
         json={"inputs": {"query": "Live run audit test"}, "dry_run": False},
     )
-    assert run_res.status_code == 200
-    run_data = run_res.json()
-    run_id = run_data["run_id"]
-    assert run_data["status"] == "completed"
+    assert run_res.status_code == 501
+    assert run_res.json()["error_code"] == "RUNTIME_NOT_AVAILABLE"
+    assert run_res.json()["target_milestone"] == "R4"
+
+    # Persist a run record directly via storage to verify run history query APIs
+    storage = get_workflow_storage()
+    run_record = WorkflowRun(
+        run_id="run_audit_history_1",
+        workflow_id=wf.id,
+        status=WorkflowRunStatus.COMPLETED,
+        inputs={"query": "Historic run"},
+        step_results={
+            "extract_step": StepResult(
+                node_id="extract_step",
+                node_type=WorkflowNodeType.AGENT,
+                status="completed",
+                outputs={"response": "extracted"},
+            )
+        },
+        total_cost_usd=0.005,
+    )
+    storage.save_run(run_record)
 
     # List runs for workflow
     list_res = client.get(f"/v1/workflows/{wf.id}/runs")
     assert list_res.status_code == 200
     runs = list_res.json()
     assert len(runs) >= 1
-    assert any(r["run_id"] == run_id for r in runs)
+    assert any(r["run_id"] == "run_audit_history_1" for r in runs)
 
     # Get specific run details
-    get_run_res = client.get(f"/v1/workflows/{wf.id}/runs/{run_id}")
+    get_run_res = client.get(f"/v1/workflows/{wf.id}/runs/run_audit_history_1")
     assert get_run_res.status_code == 200
     detail = get_run_res.json()
-    assert detail["run_id"] == run_id
+    assert detail["run_id"] == "run_audit_history_1"
     assert "extract_step" in detail["step_results"]
     assert detail["total_cost_usd"] > 0.0
 
@@ -584,38 +603,43 @@ def test_workflow_gate_api_redirect_and_endpoints():
     wf.id = "api_gated_test_wf"
     client.post("/v1/workflows", json=wf.to_dict())
 
-    # 1. Trigger execution -> pauses at gate
+    # 1. Trigger execution -> 501 deferred
     run_res = client.post(
         f"/v1/workflows/{wf.id}/run",
         json={"inputs": {"target": "critical-zone"}, "dry_run": False},
     )
-    assert run_res.status_code == 200
-    run_data = run_res.json()
-    run_id = run_data["run_id"]
-    assert run_data["status"] == "waiting_approval"
+    assert run_res.status_code == 501
+    assert run_res.json()["error_code"] == "RUNTIME_NOT_AVAILABLE"
+
+    # Save a run with WAITING_APPROVAL state to verify pending gates listing
+    storage = get_workflow_storage()
+    paused_run = WorkflowRun(
+        run_id="run_gated_pause_1",
+        workflow_id=wf.id,
+        status=WorkflowRunStatus.WAITING_APPROVAL,
+        current_node_id="human_gate",
+        pending_gate={"node_id": "human_gate", "inputs": {"plan": "Deploy"}},
+        inputs={"target": "critical-zone"},
+    )
+    storage.save_run(paused_run)
 
     # 2. Query pending gates
     pending_res = client.get("/v1/workflows/gates/pending")
     assert pending_res.status_code == 200
     pending_gates = pending_res.json()
-    assert any(g["run_id"] == run_id for g in pending_gates)
+    assert any(g["run_id"] == "run_gated_pause_1" for g in pending_gates)
 
-    # 3. Redirect to alternate node (sandbox_step)
+    # 3. Redirect to alternate node -> 501 deferred
     redir_res = client.post(
-        f"/v1/workflows/{wf.id}/runs/{run_id}/redirect",
+        f"/v1/workflows/{wf.id}/runs/run_gated_pause_1/redirect",
         json={
             "target_node_id": "sandbox_step",
             "reviewer": "qa_lead",
             "input_overrides": {"isolation_level": "strict"},
         },
     )
-    assert redir_res.status_code == 200
-    resumed = redir_res.json()
-    assert resumed["status"] == "completed"
-    assert "human_gate" in resumed["step_results"]
-    assert resumed["step_results"]["human_gate"]["status"] == "redirected"
-    assert resumed["step_results"]["human_gate"]["outputs"]["redirected_to"] == "sandbox_step"
-    assert "sandbox_step" in resumed["step_results"]
+    assert redir_res.status_code == 501
+    assert redir_res.json()["error_code"] == "RUNTIME_NOT_AVAILABLE"
 
     # Cleanup
     client.delete(f"/v1/workflows/{wf.id}")
@@ -759,7 +783,7 @@ def test_swarm_api_endpoints():
     assert est_data["agent_count"] >= 3
     assert est_data["model_tier"] == "instant"
 
-    # 3. POST /v1/swarm/run
+    # 3. POST /v1/swarm/run -> 501 deferred to R4
     run_res = client.post(
         "/v1/swarm/run",
         json={
@@ -768,12 +792,9 @@ def test_swarm_api_endpoints():
             "model_tier": "instant",
         },
     )
-    assert run_res.status_code == 200
-    run_data = run_res.json()
-    assert run_data["status"] == "completed"
-    assert len(run_data["agent_results"]) >= 3
-    assert "Swarm Execution Synthesis" in run_data["aggregated_output"]
-    assert run_data["total_cost_usd"] > 0.0
+    assert run_res.status_code == 501
+    assert run_res.json()["error_code"] == "RUNTIME_NOT_AVAILABLE"
+    assert run_res.json()["target_milestone"] == "R4"
 
 
 def test_workflow_builder_canvas_payload_roundtrip():
@@ -1017,22 +1038,29 @@ def test_workflow_builder_end_to_end_api_lifecycle():
     assert "prep" in dry_data["step_results"]
     assert "process" in dry_data["step_results"]
 
-    # 4. Live Execution
+    # 4. Live Execution -> 501 deferred to R4
     run_res = client.post(
         f"/v1/workflows/{builder_wf['id']}/run",
         json={"inputs": {"query": "Live production query"}, "dry_run": False},
     )
-    assert run_res.status_code == 200
-    run_data = run_res.json()
-    run_id = run_data["run_id"]
-    assert run_data["status"] == "completed"
-    assert run_data["total_cost_usd"] > 0.0
+    assert run_res.status_code == 501
+    assert run_res.json()["error_code"] == "RUNTIME_NOT_AVAILABLE"
+
+    # Persist run via storage to test runs listing
+    storage = get_workflow_storage()
+    builder_run = WorkflowRun(
+        run_id="run_builder_sample_1",
+        workflow_id=builder_wf["id"],
+        status=WorkflowRunStatus.COMPLETED,
+        inputs={"query": "Test"},
+    )
+    storage.save_run(builder_run)
 
     # 5. List and Get Runs
     runs_res = client.get(f"/v1/workflows/{builder_wf['id']}/runs")
     assert runs_res.status_code == 200
     runs = runs_res.json()
-    assert any(r["run_id"] == run_id for r in runs)
+    assert any(r["run_id"] == "run_builder_sample_1" for r in runs)
 
     # 6. Cleanup
     del_res = client.delete(f"/v1/workflows/{builder_wf['id']}")
@@ -1083,31 +1111,39 @@ def test_workflow_builder_gate_interactive_flow():
     # Save
     client.post("/v1/workflows", json=gated_wf)
 
-    # Run -> pauses at gate
+    # Run -> 501 deferred to R4
     run_res = client.post(
         f"/v1/workflows/{gated_wf['id']}/run",
         json={"inputs": {"prompt": "New article draft"}, "dry_run": False},
     )
-    assert run_res.status_code == 200
-    run_data = run_res.json()
-    assert run_data["status"] == "waiting_approval"
-    assert run_data["current_node_id"] == "gate_review"
+    assert run_res.status_code == 501
+    assert run_res.json()["error_code"] == "RUNTIME_NOT_AVAILABLE"
+
+    # Save a run with WAITING_APPROVAL state via storage to verify pending gates listing
+    storage = get_workflow_storage()
+    paused_builder_run = WorkflowRun(
+        run_id="run_builder_gate_1",
+        workflow_id=gated_wf["id"],
+        status=WorkflowRunStatus.WAITING_APPROVAL,
+        current_node_id="gate_review",
+        pending_gate={"node_id": "gate_review", "inputs": {"draft": "Article"}},
+        inputs={"prompt": "New article draft"},
+    )
+    storage.save_run(paused_builder_run)
 
     # Pending gates listing
     gates_res = client.get("/v1/workflows/gates/pending")
     assert gates_res.status_code == 200
     gates = gates_res.json()
-    assert any(g["run_id"] == run_data["run_id"] for g in gates)
+    assert any(g["run_id"] == "run_builder_gate_1" for g in gates)
 
-    # Approve
+    # Approve -> 501 deferred to R4
     approve_res = client.post(
-        f"/v1/workflows/{gated_wf['id']}/runs/{run_data['run_id']}/approve",
+        f"/v1/workflows/{gated_wf['id']}/runs/run_builder_gate_1/approve",
         json={"reviewer": "chief_editor"},
     )
-    assert approve_res.status_code == 200
-    resumed = approve_res.json()
-    assert resumed["status"] == "completed"
-    assert "publish" in resumed["step_results"]
+    assert approve_res.status_code == 501
+    assert approve_res.json()["error_code"] == "RUNTIME_NOT_AVAILABLE"
 
     # Cleanup
     client.delete(f"/v1/workflows/{gated_wf['id']}")

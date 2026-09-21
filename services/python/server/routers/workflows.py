@@ -7,10 +7,10 @@ Part of Task R1.14 (Split Monolithic API by Domain).
 from __future__ import annotations
 
 import logging
-import uuid
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 
 # Core domain imports
 from core.workflows import (
@@ -18,7 +18,6 @@ from core.workflows import (
     WorkflowEngine,
     WorkflowGateManager,
     WorkflowParser,
-    WorkflowRunStatus,
     WorkflowStatus,
 )
 
@@ -67,16 +66,16 @@ async def list_workflows_endpoint(
 async def create_or_run_workflow(req: Dict[str, Any]):
     """Create a new workflow definition, or run a workflow if legacy workflow_id payload passed."""
     if "workflow_id" in req and "nodes" not in req:
-        wf_id = req["workflow_id"]
-        inputs = req.get("inputs", {})
-        storage = get_workflow_storage()
-        wf = storage.get_workflow(wf_id)
-        if wf:
-            engine = WorkflowEngine(storage=storage)
-            run = engine.run(wf, inputs=inputs, dry_run=True)
-            return {"execution_id": run.run_id, "status": "queued"}
-        execution_id = f"wf_exec_{uuid.uuid4().hex[:8]}"
-        return {"execution_id": execution_id, "status": "queued"}
+        return JSONResponse(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            content={
+                "error_code": "RUNTIME_NOT_AVAILABLE",
+                "status": "deferred",
+                "target_milestone": "R4",
+                "message": "Workflow runtime execution is deferred to Milestone R4 (Multi-Agent & Long-Horizon Workflows). Workflow authoring, validation, and storage are supported in R1.",
+                "detail": "Workflow runtime execution is deferred to Milestone R4 (Multi-Agent & Long-Horizon Workflows). Workflow authoring, validation, and storage are supported in R1.",
+            },
+        )
 
     try:
         wf = WorkflowDefinition.model_validate(req)
@@ -218,11 +217,16 @@ async def run_workflow_endpoint(
             detail=f"Workflow '{workflow_id}' not found",
         )
 
-    engine = WorkflowEngine(storage=storage)
-    inputs = req.inputs if req else {}
-    dry_run = req.dry_run if req else False
-    run = engine.run(wf, inputs=inputs, dry_run=dry_run)
-    return run.to_dict()
+    return JSONResponse(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        content={
+            "error_code": "RUNTIME_NOT_AVAILABLE",
+            "status": "deferred",
+            "target_milestone": "R4",
+            "message": f"Workflow runtime execution for '{workflow_id}' is deferred to Milestone R4 (Multi-Agent & Long-Horizon Workflows). Workflow authoring, validation, and storage are supported in R1.",
+            "detail": f"Workflow runtime execution for '{workflow_id}' is deferred to Milestone R4 (Multi-Agent & Long-Horizon Workflows). Workflow authoring, validation, and storage are supported in R1.",
+        },
+    )
 
 
 @router.get("/workflows/{workflow_id}/runs")
@@ -263,31 +267,16 @@ async def approve_workflow_gate_endpoint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Workflow '{workflow_id}' not found",
         )
-    run = storage.get_run(run_id)
-    if not run or run.workflow_id != workflow_id:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Run '{run_id}' not found for workflow '{workflow_id}'",
-        )
-    if run.status != WorkflowRunStatus.WAITING_APPROVAL:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Run '{run_id}' is not waiting for approval (current status: {run.status.value})",
-        )
-
-    gate_mgr = WorkflowGateManager(storage=storage)
-    reviewer = req.reviewer if req else "operator"
-    input_overrides = req.input_overrides if req else None
-    try:
-        resumed = gate_mgr.approve_gate(
-            workflow_id=workflow_id,
-            run_id=run_id,
-            reviewer=reviewer,
-            input_overrides=input_overrides,
-        )
-        return resumed.to_dict()
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return JSONResponse(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        content={
+            "error_code": "RUNTIME_NOT_AVAILABLE",
+            "status": "deferred",
+            "target_milestone": "R4",
+            "message": "Workflow gate execution resumption is deferred to Milestone R4 (Multi-Agent & Long-Horizon Workflows). Gate review metadata and pending gate listing are supported in R1.",
+            "detail": "Workflow gate execution resumption is deferred to Milestone R4 (Multi-Agent & Long-Horizon Workflows). Gate review metadata and pending gate listing are supported in R1.",
+        },
+    )
 
 
 @router.post("/workflows/{workflow_id}/runs/{run_id}/reject")
@@ -298,19 +287,22 @@ async def reject_workflow_gate_endpoint(
 ):
     """Reject a paused human review gate and route to rejection path or cancel."""
     storage = get_workflow_storage()
-    gate_mgr = WorkflowGateManager(storage=storage)
-    reviewer = req.reviewer if req else "operator"
-    reason = req.reason if req else None
-    try:
-        resumed = gate_mgr.reject_gate(
-            workflow_id=workflow_id,
-            run_id=run_id,
-            reviewer=reviewer,
-            reason=reason,
+    wf = storage.get_workflow(workflow_id)
+    if not wf:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow '{workflow_id}' not found",
         )
-        return resumed.to_dict()
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return JSONResponse(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        content={
+            "error_code": "RUNTIME_NOT_AVAILABLE",
+            "status": "deferred",
+            "target_milestone": "R4",
+            "message": "Workflow gate execution resumption is deferred to Milestone R4 (Multi-Agent & Long-Horizon Workflows). Gate review metadata and pending gate listing are supported in R1.",
+            "detail": "Workflow gate execution resumption is deferred to Milestone R4 (Multi-Agent & Long-Horizon Workflows). Gate review metadata and pending gate listing are supported in R1.",
+        },
+    )
 
 
 @router.post("/workflows/{workflow_id}/runs/{run_id}/redirect")
@@ -321,15 +313,19 @@ async def redirect_workflow_gate_endpoint(
 ):
     """Redirect execution of a paused human review gate to an alternate target node."""
     storage = get_workflow_storage()
-    gate_mgr = WorkflowGateManager(storage=storage)
-    try:
-        resumed = gate_mgr.redirect_gate(
-            workflow_id=workflow_id,
-            run_id=run_id,
-            target_node_id=req.target_node_id,
-            reviewer=req.reviewer,
-            input_overrides=req.input_overrides,
+    wf = storage.get_workflow(workflow_id)
+    if not wf:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow '{workflow_id}' not found",
         )
-        return resumed.to_dict()
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    return JSONResponse(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        content={
+            "error_code": "RUNTIME_NOT_AVAILABLE",
+            "status": "deferred",
+            "target_milestone": "R4",
+            "message": "Workflow gate execution resumption is deferred to Milestone R4 (Multi-Agent & Long-Horizon Workflows). Gate review metadata and pending gate listing are supported in R1.",
+            "detail": "Workflow gate execution resumption is deferred to Milestone R4 (Multi-Agent & Long-Horizon Workflows). Gate review metadata and pending gate listing are supported in R1.",
+        },
+    )

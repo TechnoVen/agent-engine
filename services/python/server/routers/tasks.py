@@ -6,10 +6,10 @@ Part of Task R1.14 (Split Monolithic API by Domain).
 
 from __future__ import annotations
 
-import datetime
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 
 
 # Services container, schemas, errors, transport, dependencies
@@ -62,9 +62,16 @@ async def trigger_scheduled_task_endpoint(task_id: str, request: Request):
     task = backend.get_scheduled_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
-    now_str = datetime.datetime.now().strftime("%b %d, %I:%M %p")
-    backend.update_scheduled_task_status(task_id, task.get("status", "active"))
-    return {"status": "triggered", "task_id": task_id, "last_run": now_str}
+    return JSONResponse(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        content={
+            "error_code": "RUNTIME_NOT_AVAILABLE",
+            "status": "deferred",
+            "target_milestone": "R4",
+            "message": f"Scheduled task execution runtime for '{task_id}' is deferred to Milestone R4 (Multi-Agent & Long-Horizon Workflows). Task persistence and scheduling configuration are supported in R1.",
+            "detail": f"Scheduled task execution runtime for '{task_id}' is deferred to Milestone R4 (Multi-Agent & Long-Horizon Workflows). Task persistence and scheduling configuration are supported in R1.",
+        },
+    )
 
 
 @router.delete("/tasks/{task_id}")

@@ -108,11 +108,11 @@ def test_scheduled_tasks_crud_lifecycle(client, monkeypatch):
     assert toggle_res.status_code == 200
     assert toggle_res.json()["status"] == "paused"
 
-    # 4. Trigger task execution
+    # 4. Trigger task execution (deferred runtime returns 501)
     run_res = client.post(f"/v1/tasks/{task_id}/run")
-    assert run_res.status_code == 200
-    assert run_res.json()["status"] == "triggered"
-    assert run_res.json()["task_id"] == task_id
+    assert run_res.status_code == 501
+    assert run_res.json()["error_code"] == "RUNTIME_NOT_AVAILABLE"
+    assert run_res.json()["target_milestone"] == "R4"
 
     # 5. Delete task
     del_res = client.delete(f"/v1/tasks/{task_id}")
