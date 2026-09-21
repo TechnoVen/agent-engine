@@ -1322,7 +1322,7 @@ def test_task_4_5_cost_dashboard_and_distillation_engine(monkeypatch):
     from fastapi.testclient import TestClient
     from services.python.server.api import app
 
-    client = TestClient(app)
+    client = TestClient(app, headers={"X-IPC-Token": "ipc_secret_test_token"})
 
     # 1. Telemetry Cost Metrics (Initial State & 90/9/1 Defaults)
     resp_cost = client.get("/v1/telemetry/cost?project=cost_test_proj")
@@ -1437,7 +1437,7 @@ def test_task_4_5_cost_dashboard_and_distillation_engine(monkeypatch):
 
     # 5. Distillation Trigger & Pipeline Initialization
     # Unauthenticated call fails with 401
-    resp_distill_unauth = client.post(
+    resp_distill_unauth = TestClient(app).post(
         "/v1/telemetry/distill",
         json={"candidate_id": "dist-001", "target_student_model": "qwen2.5-coder-7b"},
     )
@@ -1511,7 +1511,7 @@ def test_task_4_6_policy_editor_and_immutable_audit_log(monkeypatch):
     from services.python.server.api import app
     from core.safety import get_policy_engine
 
-    client = TestClient(app)
+    client = TestClient(app, headers={"X-IPC-Token": "ipc_secret_test_token"})
     engine = get_policy_engine()
     original_yaml = engine.get_yaml_content()
 

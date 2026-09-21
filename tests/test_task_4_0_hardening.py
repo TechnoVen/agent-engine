@@ -181,8 +181,11 @@ def test_credential_reveal_protection(client, monkeypatch):
     )
     assert store_res.status_code == 201
 
-    # Unauthenticated masked read should succeed
-    masked_res = client.get("/v1/credentials/openai/api_key")
+    # Masked read with valid token should succeed
+    masked_res = client.get(
+        "/v1/credentials/openai/api_key",
+        headers={"Authorization": f"Bearer {secret_token}"},
+    )
     assert masked_res.status_code == 200
     data = masked_res.json()
     assert data["value"] is None

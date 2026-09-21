@@ -410,13 +410,37 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "services/python/server/api.py"
     - "tests/test_api_domain_decomposition.py"
   notes: "Decomposed the monolithic services/python/server/api.py (5,683 lines, 161 route handlers) into 19 coherent domain routers under services/python/server/routers/. Established AppServices centralized dependency container in container.py with lazy accessors and test injection hooks, canonical domain error translation in errors.py, SSE streaming transport helpers in transport.py, IPC security verifiers in dependencies.py, and all 139 Pydantic schemas in schemas.py. Constructed create_app() application factory in app.py mounting all 19 domain routers under /v1 and root liveness probe at /healthz. Refactored api.py into a lightweight 345-line backward-compatible facade with zero route decorators and zero business logic. 25/25 dedicated domain decomposition tests passing, 522/522 full regression suite passing."
+- id: R2.1
+  title: "Mandatory local IPC authentication"
+  task_status: done
+  capability_maturity: S1
+  migration: REFACTOR
+  owner: "Security & Authorization"
+  depends_on: [R1.3]
+  evidence:
+    - "services/python/server/dependencies.py"
+    - "services/python/server/app.py"
+    - "tests/test_r2_ipc_authentication.py"
+  notes: "Implemented IPCTokenManager enforcing fail-closed local IPC authentication. Auto-generates cryptographically secure 256-bit per-launch tokens with POSIX 0600 file permissions (~/.agent_engine/ipc.token and data/ipc.token) when unconfigured in environment. Enforces constant-time HMAC comparison (hmac.compare_digest) across Authorization: Bearer, X-IPC-Token headers, and token query parameters. Wired verify_ipc_token as mandatory FastAPI dependency across all domain routers under /v1, ensuring unauthenticated or wrong-token callers receive HTTP 401 Unauthorized with WWW-Authenticate header. Preserved minimal unauthenticated liveness endpoint at /healthz. 9/9 dedicated security tests passing, 539/539 full regression suite passing."
+- id: R2.2
+  title: "Origin/CORS hardening"
+  task_status: done
+  capability_maturity: S1
+  migration: REFACTOR
+  owner: "Security & Authorization"
+  depends_on: [R2.1]
+  evidence:
+    - "services/python/server/app.py"
+    - "tests/test_r2_ipc_authentication.py"
+  notes: "Hardened CORSMiddleware configuration in create_app() composition root. Replaced legacy wildcard access with explicit whitelist of trusted Tauri and desktop shell origins (tauri://localhost, http://tauri.localhost, https://tauri.localhost, http://localhost:1420, http://127.0.0.1:1420, http://localhost:5173, http://127.0.0.1:5173, http://localhost:3000, http://127.0.0.1:3000) and strict loopback regex (^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$). Verified arbitrary external web origins (e.g. malicious-website.com) are rejected without access-control-allow-origin headers."
 ```
 
 ---
 
 ## 6. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `530 passed in 72.60s` (`uv run pytest`)
+- **Full Regression Suite:** `539 passed in 78.14s` (`uv run pytest`)
+- **R2 IPC Authentication & CORS Suite:** `9 passed in 4.24s` (`uv run pytest tests/test_r2_ipc_authentication.py`)
 - **Hard-Exit Truth Verification Suite:** `8 passed in 4.00s` (`uv run pytest tests/test_r1_hard_exit_truth.py`)
 - **API Domain Decomposition Suite:** `25 passed in 10.44s` (`uv run pytest tests/test_api_domain_decomposition.py`)
 - **Router Hardening & Outage Fallback Suite:** `7 passed in 3.99s` (`uv run pytest tests/test_router_hardening.py`)
@@ -429,8 +453,8 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
   - **Artifacts Suite:** `15 passed in 6.95s` (`uv run pytest tests/test_artifacts.py`)
   - **Ledger Suite:** `18 passed in 6.00s` (`uv run pytest tests/test_ledger.py`)
 - **Desktop Tauri & Frontend Workspace:**
-  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.75s`)
-  - `pnpm -r build`: passed (`11.9s`)
+  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.58s`)
+  - `pnpm -r build`: passed (`11.2s`)
 - **Documented Upstream Warnings (Non-blocking):**
   1. `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.` (Origin: `fastapi/testclient.py:1` — Upstream FastAPI/Starlette testclient deprecation notice; non-runtime).
   2. `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.` (Origin: `starlette/testclient.py:53` — Upstream Starlette/AnyIO import alias notice; non-runtime).

@@ -11,10 +11,11 @@ import os
 import time
 from typing import List
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from services.python.server.container import START_TIME
+from services.python.server.dependencies import verify_ipc_token
 from services.python.server.routers import (
     adapters,
     artifacts,
@@ -68,6 +69,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=ALLOWED_ORIGINS,
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -86,8 +88,8 @@ def create_app() -> FastAPI:
             "uptime_seconds": round(uptime, 2),
         }
 
-    # Mount domain routers under /v1
-    v1_router = APIRouter(prefix="/v1")
+    # Mount domain routers under /v1 with mandatory IPC authentication
+    v1_router = APIRouter(prefix="/v1", dependencies=[Depends(verify_ipc_token)])
     v1_router.include_router(chat.router)
     v1_router.include_router(executions.router)
     v1_router.include_router(ledger.router)

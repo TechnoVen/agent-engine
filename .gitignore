@@ -27,6 +27,10 @@ data/*.db*
 data/chroma/
 data/*.json
 data/*.vault
+data/*.token
+data/artifacts/
+data/skills/
+*.token
 workspace/
 models/*.gguf
 *.enc
