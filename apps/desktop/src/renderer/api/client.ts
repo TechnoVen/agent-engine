@@ -54,9 +54,14 @@ const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
 
 class SidecarClient {
   private base: string;
+  private inMemoryToken: string | null = null;
 
   constructor(base: string = API_BASE) {
     this.base = base;
+  }
+
+  setIpcToken(token: string | null): void {
+    this.inMemoryToken = token;
   }
 
   async checkHealth(): Promise<SidecarHealth> {
@@ -290,16 +295,12 @@ class SidecarClient {
       'Content-Type': 'application/json',
       ...extra,
     };
-    try {
-      const token =
-        (window as unknown as { __AGENT_ENGINE_IPC_TOKEN__?: string }).__AGENT_ENGINE_IPC_TOKEN__ ||
-        localStorage.getItem('agent_engine_ipc_token');
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-        headers['X-IPC-Token'] = token;
-      }
-    } catch {
-      // localStorage may be restricted
+    const token =
+      this.inMemoryToken ||
+      (window as unknown as { __AGENT_ENGINE_IPC_TOKEN__?: string }).__AGENT_ENGINE_IPC_TOKEN__;
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+      headers['X-IPC-Token'] = token;
     }
     return headers;
   }

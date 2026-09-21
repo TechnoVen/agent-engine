@@ -61,9 +61,15 @@ def redact_sensitive_data(obj: Any) -> Any:
     elif isinstance(obj, list):
         return [redact_sensitive_data(item) for item in obj]
     elif isinstance(obj, str):
-        # Mask common auth headers if found in string lines
+        # Mask common auth headers and token parameters if found in string lines
         cleaned = re.sub(r"(Bearer\s+)[A-Za-z0-9_\-\.]{8,}", r"\1***REDACTED***", obj)
         cleaned = re.sub(r"(sk-[A-Za-z0-9_\-]{8,})", r"***REDACTED***", cleaned)
+        cleaned = re.sub(
+            r"((?:X-IPC-Token|token)[:=]\s*)[A-Fa-f0-9_\-]{16,}",
+            r"\1***REDACTED***",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
         return cleaned
     return obj
 

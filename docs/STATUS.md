@@ -420,8 +420,10 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
   evidence:
     - "services/python/server/dependencies.py"
     - "services/python/server/app.py"
+    - "apps/desktop/src/renderer/api/client.ts"
+    - "core/diagnostics.py"
     - "tests/test_r2_ipc_authentication.py"
-  notes: "Implemented IPCTokenManager enforcing fail-closed local IPC authentication. Auto-generates cryptographically secure 256-bit per-launch tokens with POSIX 0600 file permissions (~/.agent_engine/ipc.token and data/ipc.token) when unconfigured in environment. Enforces constant-time HMAC comparison (hmac.compare_digest) across Authorization: Bearer, X-IPC-Token headers, and token query parameters. Wired verify_ipc_token as mandatory FastAPI dependency across all domain routers under /v1, ensuring unauthenticated or wrong-token callers receive HTTP 401 Unauthorized with WWW-Authenticate header. Preserved minimal unauthenticated liveness endpoint at /healthz. 9/9 dedicated security tests passing, 539/539 full regression suite passing."
+  notes: "Implemented IPCTokenManager enforcing fail-closed local IPC authentication. Auto-generates cryptographically secure 256-bit per-launch tokens with POSIX 0600 and Windows user-only ACL permissions at authoritative path ~/.agent_engine/ipc.token, registered with cleanup_handshake_file() and atexit. Enforces constant-time HMAC comparison (hmac.compare_digest) strictly via Authorization: Bearer and X-IPC-Token headers, explicitly rejecting query parameter tokens to prevent URL leakage. Frontend client.ts holds token in-memory only (zero localStorage). Redacts sensitive headers in logs and diagnostics. 14/14 dedicated security tests passing."
 - id: R2.2
   title: "Origin/CORS hardening"
   task_status: done
@@ -432,29 +434,50 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
   evidence:
     - "services/python/server/app.py"
     - "tests/test_r2_ipc_authentication.py"
-  notes: "Hardened CORSMiddleware configuration in create_app() composition root. Replaced legacy wildcard access with explicit whitelist of trusted Tauri and desktop shell origins (tauri://localhost, http://tauri.localhost, https://tauri.localhost, http://localhost:1420, http://127.0.0.1:1420, http://localhost:5173, http://127.0.0.1:5173, http://localhost:3000, http://127.0.0.1:3000) and strict loopback regex (^https?://(localhost|127\\.0\\.0\\.1)(:\\d+)?$). Verified arbitrary external web origins (e.g. malicious-website.com) are rejected without access-control-allow-origin headers."
+  notes: "Hardened CORSMiddleware in create_app(). Split into strict production policy (tauri://localhost, http://tauri.localhost, https://tauri.localhost) and development policy (Vite/Tauri ports 1420, 5173, 3000 and loopback regex). External origins (e.g. evil.com) fail closed. Hardened /healthz to minimal non-sensitive liveness info."
+- id: R2.3
+  title: "Mandatory backend policy boundary"
+  task_status: done
+  capability_maturity: S1
+  migration: REFACTOR
+  owner: "Security & Authorization"
+  depends_on: [R1.3]
+  evidence:
+    - "core/safety/policy.py"
+    - "core/execution/coordinator.py"
+    - "core/execution/state.py"
+    - "tests/test_r2_policy_and_approvals.py"
+  notes: "Wired PolicyEngine authoritatively into Phase 4 and Phase 6 of ExecutionCoordinator.execute(). Enforces declarative guardrails, dynamic risk scoring, automatic permission inference for consequential capabilities (DESTRUCTIVE, FINANCIAL, ADMIN), and C6 high-risk staging. All execution surfaces (chat, DSPy, skills, adapters, pipelines) evaluate policy before execution. Policy DENY/BLOCK halts pre-flight with ExecutionStatus.BLOCKED and error_code='POLICY_BLOCKED'. Staged actions transition to WAITING_FOR_APPROVAL and emit APPROVAL_REQUIRED. Policy evaluation errors fail closed (1.0 risk score, critical level, blocked). Frontend-supplied claims (approved=true, allow_high_risk=true) are ignored by the backend."
+- id: R2.4
+  title: "Exact-operation approval tokens"
+  task_status: done
+  capability_maturity: S1
+  migration: REFACTOR
+  owner: "Security & Authorization"
+  depends_on: [R2.3]
+  evidence:
+    - "core/safety/pending.py"
+    - "core/execution/coordinator.py"
+    - "core/ledger/models.py"
+    - "core/ledger/service.py"
+    - "tests/test_r2_policy_and_approvals.py"
+  notes: "Implemented cryptographic, single-use exact-operation authorization in PendingOperationRegistry. Enforces 60-second TTL expiration window, deterministic canonical argument digest (compute_operation_digest via recursive sorted normalization and SHA-256), exact tool/capability binding, actor attribution ('local_operator'), and optional execution ID binding. Tokens are consumed atomically under registry mutex lock; double consumption, replay, argument tampering, altered target paths, or tool name mismatch fail closed with SecurityBoundaryViolation and coordinator BLOCKED status with error_code='APPROVAL_VIOLATION'. Reconstructed ApprovalRecord in ledger service records request, decision, actor, digest, and consumed status. Redacts sensitive argument keys (password, token, secret, api_key, auth) from public representation and evidence."
 ```
 
 ---
 
 ## 6. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `539 passed in 78.14s` (`uv run pytest`)
-- **R2 IPC Authentication & CORS Suite:** `9 passed in 4.24s` (`uv run pytest tests/test_r2_ipc_authentication.py`)
-- **Hard-Exit Truth Verification Suite:** `8 passed in 4.00s` (`uv run pytest tests/test_r1_hard_exit_truth.py`)
-- **API Domain Decomposition Suite:** `25 passed in 10.44s` (`uv run pytest tests/test_api_domain_decomposition.py`)
-- **Router Hardening & Outage Fallback Suite:** `7 passed in 3.99s` (`uv run pytest tests/test_router_hardening.py`)
-- **Skills & Adapters Kernel Integration Suite:** `18 passed in 5.77s` (`uv run pytest tests/test_skills_kernel_integration.py`)
-- **Legacy Skills, Adapters & Pipelines Compatibility Suite:** `65 passed in 13.33s` (`uv run pytest tests/test_skills.py tests/test_adapters.py tests/test_templates.py tests/test_pipeline_kernel_integration.py`)
-- **Pipeline & Execution Kernel Core Suite:** `72 passed in 15.44s` (`uv run pytest tests/test_pipeline_kernel_integration.py tests/test_pipeline_registry.py tests/test_cancellation.py tests/test_artifacts.py tests/test_ledger.py`)
-  - **Pipeline Kernel Integration Suite:** `16 passed in 8.55s` (`uv run pytest tests/test_pipeline_kernel_integration.py`)
-  - **Pipeline Registry Suite:** `6 passed in 4.45s` (`uv run pytest tests/test_pipeline_registry.py`)
-  - **Cancellation Suite:** `17 passed in 7.35s` (`uv run pytest tests/test_cancellation.py`)
-  - **Artifacts Suite:** `15 passed in 6.95s` (`uv run pytest tests/test_artifacts.py`)
-  - **Ledger Suite:** `18 passed in 6.00s` (`uv run pytest tests/test_ledger.py`)
+- **Full Regression Suite:** `562 passed, 3 warnings in 77.78s` (`uv run pytest`)
+- **R2 IPC Authentication Suite:** `14 passed in 7.83s` (`uv run pytest tests/test_r2_ipc_authentication.py`)
+- **R2 Policy & Exact-Operation Approvals Suite:** `18 passed in 4.31s` (`uv run pytest tests/test_r2_policy_and_approvals.py`)
+- **Combined R2 Security Verification:** `32 passed in 8.92s` (`uv run pytest tests/test_r2_ipc_authentication.py tests/test_r2_policy_and_approvals.py`)
+- **Static Code Analysis & Formatting:**
+  - `uv run ruff check`: passed (`All checks passed!`)
+  - `uv run ruff format --check`: passed (`224 files already formatted`)
 - **Desktop Tauri & Frontend Workspace:**
-  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.58s`)
-  - `pnpm -r build`: passed (`11.2s`)
+  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.38s`)
+  - `pnpm -r build`: passed (`11.1s`)
 - **Documented Upstream Warnings (Non-blocking):**
   1. `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.` (Origin: `fastapi/testclient.py:1` — Upstream FastAPI/Starlette testclient deprecation notice; non-runtime).
   2. `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.` (Origin: `starlette/testclient.py:53` — Upstream Starlette/AnyIO import alias notice; non-runtime).

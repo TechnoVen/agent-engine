@@ -607,7 +607,7 @@ class ExecutionCoordinator:
         start_time = time.perf_counter()
 
         # Phase 1: Request validation & Execution creation
-        exec_id = generate_execution_id()
+        exec_id = request.inputs.get("execution_id") or generate_execution_id()
         execution = Execution(
             id=exec_id,
             project_id=request.project_id,
@@ -631,7 +631,10 @@ class ExecutionCoordinator:
                     logger.error("Event listener error: %s", ex)
 
         state_machine = ExecutionStateMachine(execution, event_sink=combined_event_sink)
-        self.storage.create_execution(execution.model_dump())
+        if self.storage.get_execution(exec_id):
+            self.storage.update_execution(exec_id, execution.model_dump())
+        else:
+            self.storage.create_execution(execution.model_dump())
         self._active_executions[exec_id] = execution
         self._active_executions[request.id] = execution
 
@@ -1156,7 +1159,9 @@ class ExecutionCoordinator:
                     request.inputs.get("tool_args") or pipeline_inputs or {"prompt": request.prompt}
                 )
             elif is_skill:
-                tool_name = f"skill:{skill_id}" if skill_id else "skill"
+                tool_name = request.inputs.get("tool_name") or (
+                    f"skill:{skill_id}" if skill_id else "skill"
+                )
                 tool_args = (
                     request.inputs.get("tool_args")
                     or request.inputs.get("payload")
@@ -1215,7 +1220,15 @@ class ExecutionCoordinator:
             policy_decision: PolicyDecision = self.policy_engine.evaluate(
                 tool_name=tool_name,
                 tool_args=tool_args,
-                context={"session_id": request.session_id, "project_id": request.project_id},
+                context={
+                    "session_id": request.session_id,
+                    "project_id": request.project_id,
+                    "declared_permissions": (
+                        resolved_skill_meta.permissions
+                        if (is_skill and resolved_skill_meta)
+                        else request.inputs.get("declared_permissions")
+                    ),
+                },
             )
 
             # Check declared guardrails from pipeline metadata
@@ -1258,7 +1271,7 @@ class ExecutionCoordinator:
                     policy_decision.decision = "stage"
                     policy_decision.reason = f"Skill '{skill_id}' requires human approval for consequential permissions: {violating}"
 
-            if policy_decision.decision == "block":
+            if policy_decision.decision in ("block", "deny") or policy_decision.is_denied:
                 state_machine.transition(
                     ExecutionStatus.BLOCKED,
                     reason=policy_decision.reason,
@@ -1299,64 +1312,144 @@ class ExecutionCoordinator:
                     provider_used=provider,
                 )
 
-            # Phase 6: Ready & Consequential Gate (R1 Consequential-Operation Staging)
-            # Note: Staging high-risk operations in PendingOperationRegistry with WAITING_FOR_APPROVAL
-            # is a pre-flight holding mechanism in R1. Full exact-operation cryptographic authorization
-            # bound to actor, capability, argument digest, expiry, and single-use tokens belongs to R2.
+            # Phase 6: Ready & Consequential Gate (R2.3 Backend Policy Boundary & R2.4 Exact-Operation Approvals)
             state_machine.transition(ExecutionStatus.READY)
 
-            if policy_decision.decision == "stage":
+            if (
+                policy_decision.decision in ("stage", "require_approval")
+                or policy_decision.requires_approval
+            ):
                 policy_id = (
                     policy_decision.violating_rules[0].id
                     if policy_decision.violating_rules
+                    else policy_decision.matched_rule
+                )
+
+                # Exact-operation authorization: check for cryptographic approval token
+                # Note: Client boolean flags (e.g. approved=True, allow_high_risk=True) are strictly ignored.
+                approval_token = request.inputs.get("approval_token") or (
+                    request.metadata.get("approval_token")
+                    if hasattr(request, "metadata") and isinstance(request.metadata, dict)
                     else None
                 )
-                pending_op = None
-                if getattr(self, "pending_registry", None):
-                    pending_op = self.pending_registry.register_operation(
-                        tool_name=tool_name,
-                        tool_args=tool_args,
-                        risk_level="high",
-                        risk_score=0.9,
-                        session_id=request.session_id or exec_id,
+
+                if approval_token:
+                    # Validate and atomically consume the approval token
+                    try:
+                        consumed_op = self.pending_registry.consume_token(
+                            approval_token=approval_token,
+                            tool_name=tool_name,
+                            tool_args=tool_args,
+                            execution_id=exec_id,
+                        )
+                        combined_event_sink(
+                            ExecutionEvent(
+                                execution_id=exec_id,
+                                sequence_num=state_machine.current_sequence_num,
+                                event_type=ExecutionEventType.APPROVAL_RESOLVED,
+                                payload={
+                                    "approval_id": consumed_op.operation_id,
+                                    "operation_id": consumed_op.operation_id,
+                                    "decision": "consumed",
+                                    "actor": consumed_op.actor or "operator",
+                                    "consumed": True,
+                                    "tool_name": tool_name,
+                                    "digest": getattr(consumed_op, "digest", None)
+                                    or consumed_op.args_hash,
+                                },
+                            )
+                        )
+                        state_machine.current_sequence_num += 1
+                        logger.info(
+                            "Exact-operation approval token consumed for execution %s (op=%s, tool=%s)",
+                            exec_id,
+                            consumed_op.operation_id,
+                            tool_name,
+                        )
+                    except Exception as err:
+                        reason = f"Exact-operation approval violation: {err}"
+                        logger.warning(
+                            "Approval verification failed for execution %s: %s", exec_id, err
+                        )
+                        state_machine.transition(
+                            ExecutionStatus.BLOCKED,
+                            reason=reason,
+                            error_code="APPROVAL_VIOLATION",
+                            error_message=reason,
+                        )
+                        self.storage.update_execution(exec_id, execution.model_dump())
+                        return ExecutionResult(
+                            execution_id=exec_id,
+                            status=ExecutionStatus.BLOCKED,
+                            error=reason,
+                            error_code="APPROVAL_VIOLATION",
+                            routing_tier=tier,
+                            model_used=model_name,
+                            provider_used=provider,
+                        )
+                else:
+                    # No approval token presented: stage operation and halt pre-flight
+                    pending_op = None
+                    if getattr(self, "pending_registry", None):
+                        pending_op = self.pending_registry.register_operation(
+                            tool_name=tool_name,
+                            tool_args=tool_args,
+                            risk_level=policy_decision.risk_level,
+                            risk_score=policy_decision.risk_score,
+                            session_id=request.session_id or exec_id,
+                            execution_id=exec_id,
+                            reason=policy_decision.reason,
+                            suggestion=policy_decision.suggestion,
+                        )
+                    state_machine.transition(
+                        ExecutionStatus.WAITING_FOR_APPROVAL,
                         reason=policy_decision.reason,
-                        suggestion=policy_decision.suggestion,
-                    )
-                state_machine.transition(
-                    ExecutionStatus.WAITING_FOR_APPROVAL,
-                    reason=policy_decision.reason,
-                    payload={
-                        "policy_id": policy_id,
-                        "operation_id": pending_op.operation_id if pending_op else None,
-                    },
-                )
-                combined_event_sink(
-                    ExecutionEvent(
-                        execution_id=exec_id,
-                        sequence_num=state_machine.current_sequence_num,
-                        event_type=ExecutionEventType.APPROVAL_REQUIRED,
                         payload={
-                            "reason": policy_decision.reason,
                             "policy_id": policy_id,
                             "operation_id": pending_op.operation_id if pending_op else None,
-                            "suggestion": policy_decision.suggestion,
                         },
                     )
-                )
-                state_machine.current_sequence_num += 1
-                self.storage.update_execution(exec_id, execution.model_dump())
-                return ExecutionResult(
-                    execution_id=exec_id,
-                    status=ExecutionStatus.WAITING_FOR_APPROVAL,
-                    outputs={
-                        "approval_required": True,
-                        "reason": policy_decision.reason,
-                        "operation_id": pending_op.operation_id if pending_op else None,
-                    },
-                    routing_tier=tier,
-                    model_used=model_name,
-                    provider_used=provider,
-                )
+                    combined_event_sink(
+                        ExecutionEvent(
+                            execution_id=exec_id,
+                            sequence_num=state_machine.current_sequence_num,
+                            event_type=ExecutionEventType.APPROVAL_REQUIRED,
+                            payload={
+                                "approval_id": pending_op.operation_id if pending_op else None,
+                                "reason": policy_decision.reason,
+                                "policy_id": policy_id,
+                                "operation_id": pending_op.operation_id if pending_op else None,
+                                "tool_name": tool_name,
+                                "digest": getattr(pending_op, "digest", None)
+                                or (pending_op.args_hash if pending_op else None),
+                                "args_hash": pending_op.args_hash if pending_op else None,
+                                "expires_at": (
+                                    datetime.fromtimestamp(
+                                        pending_op.expires_at, tz=timezone.utc
+                                    ).isoformat()
+                                    if pending_op
+                                    else None
+                                ),
+                                "suggestion": policy_decision.suggestion,
+                            },
+                        )
+                    )
+                    state_machine.current_sequence_num += 1
+                    self.storage.update_execution(exec_id, execution.model_dump())
+                    return ExecutionResult(
+                        execution_id=exec_id,
+                        status=ExecutionStatus.WAITING_FOR_APPROVAL,
+                        outputs={
+                            "approval_required": True,
+                            "reason": policy_decision.reason,
+                            "operation_id": pending_op.operation_id if pending_op else None,
+                            "digest": getattr(pending_op, "digest", None)
+                            or (pending_op.args_hash if pending_op else None),
+                        },
+                        routing_tier=tier,
+                        model_used=model_name,
+                        provider_used=provider,
+                    )
 
             # Cancellation check before running
             if token.is_cancelled:

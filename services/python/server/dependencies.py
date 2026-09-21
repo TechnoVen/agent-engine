@@ -74,33 +74,85 @@ class IPCTokenManager:
         else:
             os.environ.pop("AGENT_ENGINE_IPC_TOKEN", None)
 
+    def rotate_token(self) -> str:
+        """Rotate the active IPC token, generating a fresh 256-bit secret and overwriting the handshake file.
+
+        The previous token is immediately invalidated.
+        """
+        token = secrets.token_hex(32)
+        self._token = token
+        os.environ["AGENT_ENGINE_IPC_TOKEN"] = token
+        self._persist_handshake_token(token)
+        return self._token
+
+    @staticmethod
+    def get_handshake_path() -> Path:
+        """Return the single authoritative local handshake file path."""
+        override = os.environ.get("AGENT_ENGINE_TOKEN_FILE")
+        if override:
+            return Path(override)
+        return Path.home() / ".agent_engine" / "ipc.token"
+
     def _persist_handshake_token(self, token: str) -> None:
-        """Persist token to restricted local handshake file (POSIX 0600) for shell discovery."""
-        candidates = [
-            Path.home() / ".agent_engine" / "ipc.token",
-            Path("data/ipc.token"),
-        ]
-        for path in candidates:
+        """Persist token to single authoritative local handshake file with strict user-only permissions.
+
+        POSIX: 0600 (read/write only by owner).
+        Windows: restricted user ACLs via icacls.
+        """
+        path = self.get_handshake_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            mode = 0o600
+            fd = os.open(path, flags, mode)
+            with os.fdopen(fd, "w") as f:
+                f.write(token)
             try:
-                path.parent.mkdir(parents=True, exist_ok=True)
-                flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-                fd = os.open(path, flags, 0o600)
-                with os.fdopen(fd, "w") as f:
-                    f.write(token)
+                os.chmod(path, 0o600)
+            except Exception:
+                pass
+
+            # Windows-specific ACL restriction: restrict to current user
+            if os.name == "nt":
                 try:
-                    os.chmod(path, 0o600)
-                except Exception:
-                    pass
-            except Exception as ex:
-                logger.debug("Unable to write IPC handshake token to %s: %s", path, ex)
+                    import subprocess
+
+                    username = os.environ.get("USERNAME") or os.environ.get("USER")
+                    if username:
+                        subprocess.run(
+                            [
+                                "icacls",
+                                str(path),
+                                "/inheritance:r",
+                                "/grant:r",
+                                f"{username}:(R,W)",
+                            ],
+                            check=False,
+                            capture_output=True,
+                        )
+                except Exception as win_err:
+                    logger.debug("Windows ACL hardening via icacls for %s: %s", path, win_err)
+        except Exception as ex:
+            logger.debug("Unable to write IPC handshake token to %s: %s", path, ex)
+
+    def cleanup_handshake_file(self) -> None:
+        """Clean up the local handshake file on shutdown."""
+        path = self.get_handshake_path()
+        try:
+            if path.exists():
+                path.unlink(missing_ok=True)
+        except Exception as ex:
+            logger.debug("Failed to clean up handshake file %s: %s", path, ex)
 
     def verify_request(self, request: Request) -> bool:
         """Verify request credentials against the active IPC token.
 
-        Checks:
-        1. Authorization: Bearer <token> header
-        2. X-IPC-Token: <token> header
-        3. token=<token> query parameter (for SSE event streams)
+        Enforces HEADER-ONLY authentication:
+        1. Authorization: Bearer <token>
+        2. X-IPC-Token: <token>
+
+        Query parameters (e.g. ?token=...) are strictly rejected to prevent
+        credential exposure in access logs, URLs, browser history, or referrer headers.
         """
         if not self.is_enforced():
             return True
@@ -115,10 +167,8 @@ class IPCTokenManager:
         # 2. X-IPC-Token custom header
         elif "X-IPC-Token" in request.headers:
             token = request.headers.get("X-IPC-Token")
-        # 3. Query parameter for SSE / event streams
-        elif "token" in request.query_params:
-            token = request.query_params.get("token")
 
+        # Explicitly fail closed: query parameter master tokens are never accepted
         if not token or not hmac.compare_digest(token, expected_token):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -152,3 +202,26 @@ def verify_ipc_token(request: Request) -> bool:
     Fails closed with HTTP 401 Unauthorized if missing, invalid, or mismatched.
     """
     return get_token_manager().verify_request(request)
+
+
+def redact_sensitive_headers(headers: dict[str, str]) -> dict[str, str]:
+    """Return a copy of headers with sensitive IPC tokens and credentials redacted."""
+    sensitive_keys = {"authorization", "x-ipc-token", "x-api-key", "cookie"}
+    redacted = {}
+    for k, v in headers.items():
+        if k.lower() in sensitive_keys:
+            redacted[k] = "[REDACTED]"
+        else:
+            redacted[k] = v
+    return redacted
+
+
+import atexit
+
+
+def _cleanup_on_exit() -> None:
+    if _token_manager_instance is not None:
+        _token_manager_instance.cleanup_handshake_file()
+
+
+atexit.register(_cleanup_on_exit)

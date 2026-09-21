@@ -142,11 +142,19 @@ class ApprovalRecord(BaseModel):
 
     approval_id: str
     policy_id: Optional[str] = None
+    tool_name: Optional[str] = None
+    digest: Optional[str] = None
     reason: Optional[str] = None
     suggestion: Optional[str] = None
-    status: str = "required"  # "required", "approved", "rejected"
+    status: str = "required"  # "required", "approved", "rejected", "consumed"
     decided_by: Optional[str] = None
+    expires_at: Optional[str] = None
+    consumed: bool = False
     timestamp: str
+
+    def to_public_dict(self) -> Dict[str, Any]:
+        """Return public dictionary representation with sensitive fields redacted."""
+        return sanitize_sensitive_data(self.model_dump())
 
 
 class ArtifactSummaryRecord(BaseModel):

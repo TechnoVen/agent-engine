@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,10 +39,13 @@ from services.python.server.routers import (
 )
 
 
-ALLOWED_ORIGINS: List[str] = [
+PRODUCTION_ORIGINS: List[str] = [
     "tauri://localhost",
     "http://tauri.localhost",
     "https://tauri.localhost",
+]
+
+DEVELOPMENT_ORIGINS: List[str] = [
     "http://localhost:1420",
     "http://127.0.0.1:1420",
     "http://localhost:5173",
@@ -50,9 +53,33 @@ ALLOWED_ORIGINS: List[str] = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
-custom_origins = os.environ.get("AGENT_ENGINE_ALLOWED_ORIGINS")
-if custom_origins:
-    ALLOWED_ORIGINS.extend([o.strip() for o in custom_origins.split(",") if o.strip()])
+
+ALLOWED_ORIGINS: List[str] = PRODUCTION_ORIGINS
+
+
+def get_allowed_origins() -> tuple[List[str], Optional[str]]:
+    """Determine allowed CORS origins based on AGENT_ENGINE_ENV.
+
+    Production mode: allows ONLY explicit Tauri desktop application origins.
+    Arbitrary localhost ports and external web origins are strictly rejected.
+
+    Development mode: permits known Vite/Tauri development server ports.
+    """
+    env = os.environ.get("AGENT_ENGINE_ENV", "production").lower()
+    custom_origins = os.environ.get("AGENT_ENGINE_ALLOWED_ORIGINS")
+
+    if env in ("development", "dev"):
+        origins = list(PRODUCTION_ORIGINS) + list(DEVELOPMENT_ORIGINS)
+        regex: Optional[str] = r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
+    else:
+        # Strict production: permit only official Tauri desktop origins
+        origins = list(PRODUCTION_ORIGINS)
+        regex = None
+
+    if custom_origins:
+        origins.extend([o.strip() for o in custom_origins.split(",") if o.strip()])
+
+    return origins, regex
 
 
 def create_app() -> FastAPI:
@@ -66,10 +93,12 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
     )
 
+    origins, origin_regex = get_allowed_origins()
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=ALLOWED_ORIGINS,
-        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+        allow_origins=origins,
+        allow_origin_regex=origin_regex,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -78,7 +107,12 @@ def create_app() -> FastAPI:
     # Root liveness probe
     @app.get("/healthz")
     async def healthz():
-        """Liveness probe for Tauri shell and process supervisor."""
+        """Minimal liveness probe for Tauri shell and process supervisor.
+
+        Exposes only minimal operational status and uptime.
+        Never reveals provider names, models, local paths, user identities,
+        projects, API credentials, or runtime secrets.
+        """
         uptime = time.time() - START_TIME
         return {
             "status": "ok",

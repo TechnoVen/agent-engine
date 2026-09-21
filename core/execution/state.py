@@ -103,6 +103,7 @@ ALLOWED_TRANSITIONS: Dict[ExecutionStatus, Set[ExecutionStatus]] = {
         ExecutionStatus.QUEUED,
         ExecutionStatus.RUNNING,
         ExecutionStatus.WAITING_FOR_APPROVAL,
+        ExecutionStatus.BLOCKED,
         ExecutionStatus.CANCELLED,
         ExecutionStatus.FAILED,
     },

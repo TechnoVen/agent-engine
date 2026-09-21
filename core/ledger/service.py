@@ -293,20 +293,30 @@ class ExecutionLedgerService:
             elif ev_type == ExecutionEventType.APPROVAL_REQUIRED.value:
                 approvals_list.append(
                     ApprovalRecord(
-                        approval_id=payload.get("approval_id") or ev.get("id"),
+                        approval_id=payload.get("approval_id")
+                        or payload.get("operation_id")
+                        or ev.get("id"),
                         policy_id=payload.get("policy_id"),
+                        tool_name=payload.get("tool_name"),
+                        digest=payload.get("digest") or payload.get("args_hash"),
                         reason=payload.get("reason"),
                         suggestion=payload.get("suggestion"),
                         status="required",
+                        expires_at=payload.get("expires_at"),
+                        consumed=False,
                         timestamp=ev.get("timestamp", ""),
                     )
                 )
             elif ev_type == ExecutionEventType.APPROVAL_RESOLVED.value:
-                appr_id = payload.get("approval_id")
+                appr_id = payload.get("approval_id") or payload.get("operation_id")
                 for appr in approvals_list:
                     if appr.approval_id == appr_id:
-                        appr.status = payload.get("decision", "approved")
+                        dec = payload.get("decision", "approved")
+                        appr.status = dec
                         appr.decided_by = payload.get("actor")
+                        if payload.get("consumed") or dec == "consumed":
+                            appr.consumed = True
+                            appr.status = "consumed"
 
         # 8a. Reconstruct Model Calls
         model_calls_map: Dict[str, ModelCallRecord] = {}
@@ -536,3 +546,6 @@ class ExecutionLedgerService:
                 )
             )
         return summaries
+
+
+LedgerService = ExecutionLedgerService
