@@ -87,7 +87,15 @@ class ExecutionCoordinator:
         self.session_store = session_store
         self.pending_registry = pending_registry or PendingOperationRegistry()
         self._dispatch_override = dispatch_override
-        self.pipeline_registry = pipeline_registry
+        if pipeline_registry is not None:
+            self.pipeline_registry = pipeline_registry
+        else:
+            try:
+                from core.pipelines import get_pipeline_registry
+
+                self.pipeline_registry = get_pipeline_registry()
+            except Exception:
+                self.pipeline_registry = None
         if artifact_service is not None:
             self.artifact_service = artifact_service
         else:
@@ -946,6 +954,15 @@ class ExecutionCoordinator:
                     state_machine=state_machine,
                 )
 
+                # Truthful cancellation semantics for asyncio.to_thread:
+                # Cancelling forward_task cancels the awaiting coroutine. However, Python cannot
+                # forcibly kill an already-running synchronous OS worker thread.
+                # Truthful cooperative behavior:
+                # 1. token.is_cancelled becomes True immediately.
+                # 2. KernelLMAdapter checks token before and after each model call and halts.
+                # 3. Subsequent DSPy pipeline hops are strictly prevented from executing.
+                # Note: Arbitrary synchronous CPU execution already active in the worker thread
+                # continues until it yields or returns.
                 def _sync_pipeline_forward():
                     with dspy.context(lm=lm_adapter):
                         return instance(**pipeline_inputs)
@@ -1234,25 +1251,35 @@ class ExecutionCoordinator:
             if token.is_cancelled:
                 return handle_cancellation("post_dispatch", str(outputs.get("response", "")))
 
-            # Generate canonical artifacts for pipeline outputs (Task R1.10 / R1.12)
+            # Phase 9: Generic Artifact Registration (ADR-016)
             if getattr(self, "artifact_service", None) and outputs:
-                import json
-                from core.artifacts.models import ArtifactStatus, ArtifactType
+                from core.artifacts.models import ArtifactCandidate
 
-                if outputs.get("diff_patch"):
+                candidates: List[ArtifactCandidate] = []
+                active_pipeline_reg = pipeline_reg or getattr(self, "pipeline_registry", None)
+                if isinstance(outputs, dict) and "_artifact_candidates" in outputs:
+                    candidates.extend(outputs.pop("_artifact_candidates"))
+                elif (
+                    is_pipeline
+                    and active_pipeline_reg
+                    and hasattr(active_pipeline_reg, "extract_artifact_candidates")
+                ):
+                    candidates.extend(
+                        active_pipeline_reg.extract_artifact_candidates(pipeline_name, outputs)
+                    )
+
+                for cand in candidates:
                     try:
                         art = self.artifact_service.create_artifact(
                             project_id=request.project_id,
                             execution_id=exec_id,
-                            name="diff.patch",
-                            content=str(outputs["diff_patch"]),
-                            type=ArtifactType.PATCH,
-                            mime_type="text/x-diff",
-                            status=ArtifactStatus.READY,
+                            name=cand.name,
+                            content=cand.content,
+                            type=cand.type,
+                            mime_type=cand.mime_type,
+                            status=cand.status,
                             created_by=request.task_type,
-                            lineage={"pipeline_name": pipeline_name, "field": "diff_patch"}
-                            if is_pipeline
-                            else {},
+                            lineage=cand.lineage,
                         )
                         combined_event_sink(
                             ExecutionEvent(
@@ -1262,7 +1289,9 @@ class ExecutionCoordinator:
                                 payload={
                                     "artifact_id": art.id,
                                     "name": art.name,
-                                    "type": art.type.value,
+                                    "type": art.type.value
+                                    if hasattr(art.type, "value")
+                                    else str(art.type),
                                     "size_bytes": art.size_bytes,
                                     "sha256": art.sha256_hash,
                                 },
@@ -1270,118 +1299,9 @@ class ExecutionCoordinator:
                         )
                         state_machine.current_sequence_num += 1
                     except Exception as art_ex:
-                        logger.warning("Failed to create diff_patch artifact: %s", art_ex)
-
-                if outputs.get("vulnerabilities"):
-                    try:
-                        v_content = outputs["vulnerabilities"]
-                        v_str = (
-                            json.dumps(v_content)
-                            if isinstance(v_content, (dict, list))
-                            else str(v_content)
+                        logger.warning(
+                            "Failed to create artifact candidate '%s': %s", cand.name, art_ex
                         )
-                        art = self.artifact_service.create_artifact(
-                            project_id=request.project_id,
-                            execution_id=exec_id,
-                            name="vulnerabilities.json"
-                            if isinstance(v_content, (dict, list))
-                            else "vulnerabilities.txt",
-                            content=v_str,
-                            type=ArtifactType.DATA
-                            if isinstance(v_content, (dict, list))
-                            else ArtifactType.TEXT,
-                            mime_type="application/json"
-                            if isinstance(v_content, (dict, list))
-                            else "text/plain",
-                            status=ArtifactStatus.READY,
-                            created_by=request.task_type,
-                            lineage={"pipeline_name": pipeline_name, "field": "vulnerabilities"}
-                            if is_pipeline
-                            else {},
-                        )
-                        combined_event_sink(
-                            ExecutionEvent(
-                                execution_id=exec_id,
-                                sequence_num=state_machine.current_sequence_num,
-                                event_type=ExecutionEventType.ARTIFACT_CREATED,
-                                payload={
-                                    "artifact_id": art.id,
-                                    "name": art.name,
-                                    "type": art.type.value,
-                                    "size_bytes": art.size_bytes,
-                                    "sha256": art.sha256_hash,
-                                },
-                            )
-                        )
-                        state_machine.current_sequence_num += 1
-                    except Exception as art_ex:
-                        logger.warning("Failed to create vulnerabilities artifact: %s", art_ex)
-
-                if outputs.get("fixed_code"):
-                    try:
-                        art = self.artifact_service.create_artifact(
-                            project_id=request.project_id,
-                            execution_id=exec_id,
-                            name="fixed_code.py",
-                            content=str(outputs["fixed_code"]),
-                            type=ArtifactType.CODE,
-                            mime_type="text/x-python",
-                            status=ArtifactStatus.READY,
-                            created_by=request.task_type,
-                            lineage={"pipeline_name": pipeline_name, "field": "fixed_code"}
-                            if is_pipeline
-                            else {},
-                        )
-                        combined_event_sink(
-                            ExecutionEvent(
-                                execution_id=exec_id,
-                                sequence_num=state_machine.current_sequence_num,
-                                event_type=ExecutionEventType.ARTIFACT_CREATED,
-                                payload={
-                                    "artifact_id": art.id,
-                                    "name": art.name,
-                                    "type": art.type.value,
-                                    "size_bytes": art.size_bytes,
-                                    "sha256": art.sha256_hash,
-                                },
-                            )
-                        )
-                        state_machine.current_sequence_num += 1
-                    except Exception as art_ex:
-                        logger.warning("Failed to create fixed_code artifact: %s", art_ex)
-
-                if outputs.get("clean_code"):
-                    try:
-                        art = self.artifact_service.create_artifact(
-                            project_id=request.project_id,
-                            execution_id=exec_id,
-                            name="clean_code.py",
-                            content=str(outputs["clean_code"]),
-                            type=ArtifactType.CODE,
-                            mime_type="text/x-python",
-                            status=ArtifactStatus.READY,
-                            created_by=request.task_type,
-                            lineage={"pipeline_name": pipeline_name, "field": "clean_code"}
-                            if is_pipeline
-                            else {},
-                        )
-                        combined_event_sink(
-                            ExecutionEvent(
-                                execution_id=exec_id,
-                                sequence_num=state_machine.current_sequence_num,
-                                event_type=ExecutionEventType.ARTIFACT_CREATED,
-                                payload={
-                                    "artifact_id": art.id,
-                                    "name": art.name,
-                                    "type": art.type.value,
-                                    "size_bytes": art.size_bytes,
-                                    "sha256": art.sha256_hash,
-                                },
-                            )
-                        )
-                        state_machine.current_sequence_num += 1
-                    except Exception as art_ex:
-                        logger.warning("Failed to create clean_code artifact: %s", art_ex)
 
             # Phase 8: Output Verification
             if token.is_cancelled:

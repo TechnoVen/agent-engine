@@ -57,6 +57,8 @@ class ExecutionEventType(str, Enum):
     TOKEN_DELTA = "token_delta"
     TOOL_CALL_STARTED = "tool_call_started"
     TOOL_CALL_COMPLETED = "tool_call_completed"
+    MODEL_CALL_STARTED = "model_call_started"
+    MODEL_CALL_COMPLETED = "model_call_completed"
     VERIFICATION_STARTED = "verification_started"
     VERIFICATION_COMPLETED = "verification_completed"
     OUTPUT_CHUNK = "output_chunk"

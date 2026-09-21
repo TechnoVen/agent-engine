@@ -597,7 +597,7 @@ async def test_pipeline_ledger_trace_projection(coordinator, test_storage, artif
 # Test 16: PipelineRegistry Backward Compatibility
 # ---------------------------------------------------------------------------
 def test_pipeline_backward_compatibility():
-    """Verify all existing PipelineRegistry APIs remain functional and backward compatible."""
+    """Verify backward compatibility verified for the current registered pipelines and documented API contract."""
     reg = PipelineRegistry()
 
     @register_pipeline(
@@ -631,3 +631,196 @@ def test_pipeline_backward_compatibility():
         reg.instantiate("missing_pipeline")
     with pytest.raises(KeyError):
         reg.run("missing_pipeline")
+
+
+# ---------------------------------------------------------------------------
+# Test 17: Streaming Chunks Do Not Amplify SQLite Writes (Durability Semantics)
+# ---------------------------------------------------------------------------
+@pytest.mark.anyio
+async def test_streaming_chunks_do_not_amplify_sqlite_writes(coordinator, test_storage):
+    """Verify that transient streaming output chunks do not generate rows in SQLite ledger."""
+    streamed_events = []
+
+    def listener(event):
+        streamed_events.append(event)
+
+    coordinator.event_listener = listener
+
+    req = ExecutionRequest(
+        task_type="pipeline",
+        prompt="Audit code",
+        inputs={"pipeline_name": "security_audit", "code": "def test(): pass"},
+        project_id="proj_pipeline",
+    )
+
+    result = await coordinator.execute(req)
+    assert result.status == ExecutionStatus.COMPLETED
+
+    # Check that events stored in SQLite ONLY contain durable events
+    durable_events = test_storage.get_execution_events(result.execution_id)
+    durable_types = {e["event_type"] for e in durable_events}
+
+    assert ExecutionEventType.OUTPUT_CHUNK.value not in durable_types
+    assert ExecutionEventType.TOKEN_DELTA.value not in durable_types
+    assert ExecutionEventType.STATE_CHANGE.value in durable_types
+    assert ExecutionEventType.ROUTING_RESOLVED.value in durable_types
+    assert ExecutionEventType.MODEL_CALL_STARTED.value in durable_types
+    assert ExecutionEventType.MODEL_CALL_COMPLETED.value in durable_types
+
+
+# ---------------------------------------------------------------------------
+# Test 18: Multi-Model Truth Durable Across Process Restart / Storage Reopen
+# ---------------------------------------------------------------------------
+@pytest.mark.anyio
+async def test_multi_model_truth_durable_across_storage_reopen(coordinator, test_storage, tmp_path):
+    """Verify multi-model calls survive storage reopen and reconstruct truthfully from ledger."""
+    call_count = 0
+
+    def mock_dispatch(ctx, tier, prov, model):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return {"step_out": "intermediate analysis"}
+        return {"step_out": "final conclusion"}
+
+    coordinator._dispatch_override = mock_dispatch
+    reg = PipelineRegistry(coordinator=coordinator)
+
+    class MultiModelModule(dspy.Module):
+        def __init__(self):
+            super().__init__()
+            self.s1 = dspy.Predict("text_in -> step_out")
+            self.s2 = dspy.Predict("step_in -> step_out")
+
+        def forward(self, text: str):
+            r1 = self.s1(text_in=text)
+            r2 = self.s2(step_in=r1.step_out)
+            return {"final": r2.step_out}
+
+    reg.register(
+        MultiModelModule,
+        PipelineMetadata(
+            name="multi_model_durable",
+            description="Two model call pipeline",
+            inputs=["text"],
+            outputs=["final"],
+        ),
+    )
+    coordinator.pipeline_registry = reg
+
+    req = ExecutionRequest(
+        task_type="pipeline",
+        prompt="Execute two model calls",
+        inputs={"pipeline_name": "multi_model_durable", "text": "start"},
+        project_id="proj_pipeline",
+    )
+
+    result = await coordinator.execute(req)
+    assert result.status == ExecutionStatus.COMPLETED
+    assert call_count == 2
+
+    # Simulate process restart by creating a new SQLiteBackend pointing to the same DB file
+    reopened_storage = SQLiteBackend(db_path=test_storage.db_path)
+    reopened_ledger = ExecutionLedgerService(storage=reopened_storage)
+
+    trace = reopened_ledger.get_execution_trace(result.execution_id, project_id="proj_pipeline")
+    assert trace is not None
+    assert len(trace.model_calls) == 2
+
+    # Verify model call 1
+    mc1 = trace.model_calls[0]
+    assert mc1.status == "completed"
+    assert mc1.input_tokens > 0
+    assert mc1.output_tokens > 0
+    assert mc1.provider_id is not None
+    assert mc1.model_id is not None
+
+    # Verify model call 2
+    mc2 = trace.model_calls[1]
+    assert mc2.status == "completed"
+    assert mc2.input_tokens > 0
+    assert mc2.output_tokens > 0
+
+    # Verify parent totals equal aggregate without double counting
+    assert trace.usage.total_tokens == (mc1.total_tokens + mc2.total_tokens)
+    assert trace.usage.total_cost_usd == round(mc1.cost_usd + mc2.cost_usd, 6)
+
+
+# ---------------------------------------------------------------------------
+# Test 19: Cancellation Halts Subsequent DSPy Hops
+# ---------------------------------------------------------------------------
+@pytest.mark.anyio
+async def test_pipeline_cancellation_halts_subsequent_hops(coordinator):
+    """Verify cancellation halts subsequent pipeline hops from ever executing."""
+    hop1_executed = False
+    hop2_executed = False
+    token = CancellationToken("token_subsequent_hops")
+
+    def mock_dispatch(ctx, tier, prov, model):
+        nonlocal hop1_executed, hop2_executed
+        if not hop1_executed:
+            hop1_executed = True
+            # Cancel token during/immediately after hop 1
+            token.cancel(reason="user abort after hop 1", actor="operator")
+            return {"step_out": "hop 1 done"}
+        else:
+            hop2_executed = True
+            return {"step_out": "hop 2 done"}
+
+    coordinator._dispatch_override = mock_dispatch
+    reg = PipelineRegistry(coordinator=coordinator)
+
+    class TwoHopModule(dspy.Module):
+        def __init__(self):
+            super().__init__()
+            self.h1 = dspy.Predict("text_in -> step_out")
+            self.h2 = dspy.Predict("step_in -> step_out")
+
+        def forward(self, text: str):
+            r1 = self.h1(text_in=text)
+            r2 = self.h2(step_in=r1.step_out)
+            return {"final": r2.step_out}
+
+    reg.register(
+        TwoHopModule,
+        PipelineMetadata(
+            name="two_hop_cancel",
+            description="Two hop cancel test",
+            inputs=["text"],
+            outputs=["final"],
+        ),
+    )
+    coordinator.pipeline_registry = reg
+
+    req = ExecutionRequest(
+        task_type="pipeline",
+        prompt="Execute two hops with cancellation",
+        inputs={"pipeline_name": "two_hop_cancel", "text": "start"},
+        project_id="proj_pipeline",
+    )
+
+    result = await coordinator.execute(req, cancellation_token=token)
+    assert result.status == ExecutionStatus.CANCELLED
+    assert hop1_executed is True
+    # Hop 2 must never have executed!
+    assert hop2_executed is False
+
+
+# ---------------------------------------------------------------------------
+# Test 20: PipelineRegistry.run_async
+# ---------------------------------------------------------------------------
+@pytest.mark.anyio
+async def test_pipeline_registry_run_async(coordinator):
+    """Verify asynchronous execution via PipelineRegistry.run_async."""
+    reg = get_pipeline_registry()
+    reg.set_coordinator(coordinator)
+    coordinator.pipeline_registry = reg
+
+    outputs = await reg.run_async(
+        "security_audit",
+        code="def hello(): pass",
+        language="python",
+        project_id="proj_pipeline",
+    )
+    assert isinstance(outputs, dict)
+    assert "risk_level" in outputs

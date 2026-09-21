@@ -20,6 +20,7 @@ class PipelineMetadata:
     category: str = "general"
     version: str = "1.0.0"
     author: str = "Agent Engine"
+    artifact_mappings: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -88,9 +89,67 @@ class PipelineRegistry:
             raise KeyError(f"Pipeline '{name}' not found in registry")
         return cls(**kwargs)
 
-    def run(self, name: str, **inputs: Any) -> dict[str, Any]:
-        """Instantiate and execute a registered pipeline with given inputs.
-        Dispatches through the canonical ExecutionCoordinator enforcing guardrails and governance."""
+    def extract_artifact_candidates(self, name: str, outputs: dict[str, Any]) -> list[Any]:
+        """Extract canonical ArtifactCandidate objects from pipeline outputs according to metadata."""
+        import json
+        from core.artifacts.models import ArtifactCandidate, ArtifactStatus, ArtifactType
+
+        candidates: list[ArtifactCandidate] = []
+        meta = self.get_metadata(name)
+        mappings = meta.artifact_mappings if meta else {}
+
+        default_mappings: dict[str, dict[str, Any]] = {
+            "diff_patch": {
+                "name": "diff.patch",
+                "type": ArtifactType.PATCH,
+                "mime_type": "text/x-diff",
+            },
+            "vulnerabilities": {
+                "name": "vulnerabilities.json",
+                "type": ArtifactType.DATA,
+                "mime_type": "application/json",
+            },
+            "fixed_code": {
+                "name": "fixed_code.py",
+                "type": ArtifactType.CODE,
+                "mime_type": "text/x-python",
+            },
+            "clean_code": {
+                "name": "clean_code.py",
+                "type": ArtifactType.CODE,
+                "mime_type": "text/x-python",
+            },
+        }
+
+        active_mappings = {**default_mappings, **mappings}
+
+        for field_name, map_cfg in active_mappings.items():
+            if field_name in outputs and outputs[field_name] is not None:
+                val = outputs[field_name]
+                if isinstance(val, (dict, list)):
+                    content_str = json.dumps(val, indent=2)
+                else:
+                    content_str = str(val)
+
+                name_val = map_cfg.get("name", f"{field_name}.txt")
+                if field_name == "vulnerabilities" and not isinstance(val, (dict, list)):
+                    name_val = "vulnerabilities.txt"
+
+                candidates.append(
+                    ArtifactCandidate(
+                        name=name_val,
+                        content=content_str,
+                        type=map_cfg.get("type", ArtifactType.DATA),
+                        mime_type=map_cfg.get("mime_type"),
+                        status=ArtifactStatus.READY,
+                        lineage={"pipeline_name": name, "field": field_name},
+                    )
+                )
+
+        return candidates
+
+    async def run_async(self, name: str, **inputs: Any) -> dict[str, Any]:
+        """Instantiate and execute a registered pipeline asynchronously via ExecutionCoordinator."""
         meta = self.get_metadata(name)
         if meta is None:
             raise KeyError(f"Pipeline '{name}' not found in registry")
@@ -124,6 +183,25 @@ class PipelineRegistry:
             session_id=session_id,
         )
 
+        result = await coordinator.execute(exec_req)
+
+        if result.status == ExecutionStatus.BLOCKED:
+            raise PermissionError(
+                f"Pipeline '{name}' execution blocked by guardrails: {result.error}"
+            )
+        if result.status == ExecutionStatus.CANCELLED:
+            from core.execution.cancellation import ExecutionCancelledError
+
+            raise ExecutionCancelledError(f"Pipeline '{name}' cancelled: {result.error}")
+        if result.status == ExecutionStatus.FAILED:
+            raise RuntimeError(f"Pipeline '{name}' execution failed: {result.error}")
+
+        return result.outputs
+
+    def run(self, name: str, **inputs: Any) -> dict[str, Any]:
+        """Instantiate and execute a registered pipeline with given inputs.
+        Synchronous compatibility wrapper delegating to run_async via ExecutionCoordinator."""
+
         def _run_coroutine_sync(coro: Any) -> Any:
             import asyncio
 
@@ -141,20 +219,7 @@ class PipelineRegistry:
             else:
                 return asyncio.run(coro)
 
-        result = _run_coroutine_sync(coordinator.execute(exec_req))
-
-        if result.status == ExecutionStatus.BLOCKED:
-            raise PermissionError(
-                f"Pipeline '{name}' execution blocked by guardrails: {result.error}"
-            )
-        if result.status == ExecutionStatus.CANCELLED:
-            from core.execution.cancellation import ExecutionCancelledError
-
-            raise ExecutionCancelledError(f"Pipeline '{name}' cancelled: {result.error}")
-        if result.status == ExecutionStatus.FAILED:
-            raise RuntimeError(f"Pipeline '{name}' execution failed: {result.error}")
-
-        return result.outputs
+        return _run_coroutine_sync(self.run_async(name, **inputs))
 
     def unregister(self, name: str) -> bool:
         """Remove a pipeline from the registry."""
@@ -188,6 +253,7 @@ def register_pipeline(
     category: str = "general",
     version: str = "1.0.0",
     author: str = "Agent Engine",
+    artifact_mappings: dict[str, dict[str, Any]] | None = None,
     registry: PipelineRegistry | None = None,
 ) -> Callable[[Type[dspy.Module]], Type[dspy.Module]]:
     """Decorator to register a DSPy Module class into the PipelineRegistry."""
@@ -204,6 +270,7 @@ def register_pipeline(
             category=category,
             version=version,
             author=author,
+            artifact_mappings=artifact_mappings or {},
         )
         target_registry.register(cls, meta)
         return cls

@@ -103,3 +103,14 @@ class Artifact(BaseModel):
             "created_at": self.created_at,
             "deleted_at": self.deleted_at,
         }
+
+
+class ArtifactCandidate(BaseModel):
+    """Candidate artifact descriptor emitted by pipelines, skills, or tasks."""
+
+    name: str
+    content: Any
+    type: ArtifactType = ArtifactType.OTHER
+    mime_type: Optional[str] = None
+    status: ArtifactStatus = ArtifactStatus.READY
+    lineage: Dict[str, Any] = Field(default_factory=dict)

@@ -6,6 +6,7 @@ References: docs/DATA_MODEL.md (Section 2.9 & Section 3), docs/ROADMAP.md (R1.10
 
 from core.artifacts.models import (
     Artifact,
+    ArtifactCandidate,
     ArtifactStatus,
     ArtifactStorageKind,
     ArtifactType,
@@ -24,6 +25,7 @@ from core.artifacts.storage import (
 
 __all__ = [
     "Artifact",
+    "ArtifactCandidate",
     "ArtifactStatus",
     "ArtifactStorageKind",
     "ArtifactType",

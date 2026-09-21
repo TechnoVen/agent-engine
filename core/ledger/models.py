@@ -84,6 +84,28 @@ class ContextProvenance(BaseModel):
     pipeline_author: Optional[str] = None
 
 
+class ModelCallRecord(BaseModel):
+    """Auditable record of an individual language model invocation within the execution."""
+
+    call_id: str
+    provider_id: str
+    model_id: str
+    routing_tier: Optional[str] = None
+    started_at: str
+    completed_at: Optional[str] = None
+    duration_ms: Optional[float] = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    cost: float = 0.0
+    cost_usd: float = 0.0
+    cost_provenance: CostProvenance = CostProvenance.CALCULATED
+    status: str = "completed"  # "started", "completed", "failed"
+    is_fallback: bool = False
+    fallback_info: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+
 class ToolInvocationRecord(BaseModel):
     """Auditable record of a tool invocation within the execution."""
 
@@ -159,6 +181,7 @@ class ExecutionTrace(BaseModel):
 
     routing: ModelRoutingTrace = Field(default_factory=ModelRoutingTrace)
     context: ContextProvenance = Field(default_factory=ContextProvenance)
+    model_calls: List[ModelCallRecord] = Field(default_factory=list)
     tools: List[ToolInvocationRecord] = Field(default_factory=list)
     approvals: List[ApprovalRecord] = Field(default_factory=list)
     artifacts: List[ArtifactSummaryRecord] = Field(default_factory=list)

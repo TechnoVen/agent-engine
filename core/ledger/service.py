@@ -29,6 +29,7 @@ from core.ledger.models import (
     ExecutionEventRecord,
     ExecutionSummary,
     ExecutionTrace,
+    ModelCallRecord,
     ModelRoutingTrace,
     ToolInvocationRecord,
     UsageAndCostTrace,
@@ -277,6 +278,77 @@ class ExecutionLedgerService:
                         appr.status = payload.get("decision", "approved")
                         appr.decided_by = payload.get("actor")
 
+        # 8a. Reconstruct Model Calls
+        model_calls_map: Dict[str, ModelCallRecord] = {}
+        model_calls_order: List[str] = []
+
+        for ev in raw_events:
+            ev_type = ev.get("event_type")
+            payload = ev.get("payload") or {}
+            if ev_type == ExecutionEventType.MODEL_CALL_STARTED.value:
+                c_id = payload.get("call_id") or ev.get("id")
+                rec = ModelCallRecord(
+                    call_id=c_id,
+                    provider_id=payload.get("provider_id", "unknown"),
+                    model_id=payload.get("model_id", "unknown"),
+                    routing_tier=payload.get("routing_tier"),
+                    started_at=payload.get("started_at") or ev.get("timestamp", ""),
+                    status="started",
+                    input_tokens=payload.get("prompt_tokens_estimated", 0),
+                )
+                model_calls_map[c_id] = rec
+                if c_id not in model_calls_order:
+                    model_calls_order.append(c_id)
+            elif ev_type == ExecutionEventType.MODEL_CALL_COMPLETED.value:
+                c_id = payload.get("call_id") or ev.get("id")
+                in_tok = payload.get("input_tokens", 0)
+                out_tok = payload.get("output_tokens", 0)
+                tot_tok = in_tok + out_tok
+                c_cost = payload.get("cost", payload.get("cost_usd", 0.0))
+                c_prov_raw = payload.get("cost_provenance", "calculated")
+                try:
+                    c_prov = CostProvenance(c_prov_raw)
+                except Exception:
+                    c_prov = CostProvenance.CALCULATED
+
+                if c_id in model_calls_map:
+                    rec = model_calls_map[c_id]
+                    rec.completed_at = payload.get("completed_at") or ev.get("timestamp", "")
+                    rec.status = payload.get("status", "completed")
+                    rec.input_tokens = in_tok
+                    rec.output_tokens = out_tok
+                    rec.total_tokens = tot_tok
+                    rec.cost = c_cost
+                    rec.cost_usd = c_cost
+                    rec.cost_provenance = c_prov
+                    rec.is_fallback = payload.get("is_fallback", False)
+                    rec.fallback_info = payload.get("fallback_info")
+                    rec.error = payload.get("error")
+                else:
+                    rec = ModelCallRecord(
+                        call_id=c_id,
+                        provider_id=payload.get("provider_id", "unknown"),
+                        model_id=payload.get("model_id", "unknown"),
+                        routing_tier=payload.get("routing_tier"),
+                        started_at=payload.get("started_at") or ev.get("timestamp", ""),
+                        completed_at=payload.get("completed_at") or ev.get("timestamp", ""),
+                        input_tokens=in_tok,
+                        output_tokens=out_tok,
+                        total_tokens=tot_tok,
+                        cost=c_cost,
+                        cost_usd=c_cost,
+                        cost_provenance=c_prov,
+                        status=payload.get("status", "completed"),
+                        is_fallback=payload.get("is_fallback", False),
+                        fallback_info=payload.get("fallback_info"),
+                        error=payload.get("error"),
+                    )
+                    model_calls_map[c_id] = rec
+                    if c_id not in model_calls_order:
+                        model_calls_order.append(c_id)
+
+        model_calls_list = [model_calls_map[cid] for cid in model_calls_order]
+
         # 9. Reconstruct Artifact References
         artifacts_list = [
             ArtifactSummaryRecord(
@@ -297,6 +369,18 @@ class ExecutionLedgerService:
         total_tokens = input_tokens + output_tokens
         total_cost_usd = raw_exec.get("total_cost_usd") or 0.0
         is_cost_estimated = bool(raw_exec.get("is_cost_estimated", False))
+
+        # If individual model calls occurred, ensure truthful multi-model accounting
+        if model_calls_list and (total_tokens == 0 or total_cost_usd == 0.0):
+            agg_in = sum(mc.input_tokens for mc in model_calls_list)
+            agg_out = sum(mc.output_tokens for mc in model_calls_list)
+            agg_cost = sum(mc.cost_usd for mc in model_calls_list)
+            if total_tokens == 0:
+                input_tokens = agg_in
+                output_tokens = agg_out
+                total_tokens = agg_in + agg_out
+            if total_cost_usd == 0.0:
+                total_cost_usd = round(agg_cost, 6)
 
         cost_prov_raw = raw_exec.get("cost_provenance") or req.get("cost_provenance")
         if not cost_prov_raw:
@@ -370,6 +454,7 @@ class ExecutionLedgerService:
             error_code=raw_exec.get("error_code"),
             routing=routing_trace,
             context=context_trace,
+            model_calls=model_calls_list,
             tools=list(tools_map.values()),
             approvals=approvals_list,
             artifacts=artifacts_list,
