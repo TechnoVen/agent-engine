@@ -187,7 +187,7 @@ A comprehensive repository-wide audit for simulation and fake-execution keywords
 
 | Component / Test Suite | Command | Result | Duration | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| **Full Python Regression** | `uv run pytest` | **530 passed, 0 failed** | 68.2s | 100% pass rate across 44 test suites |
+| **Full Python Regression** | `uv run pytest` | **530 passed, 0 failed, 3 warnings** | 72.60s | 100% pass rate across 44 test suites; exactly 3 upstream vendor warnings (0 project-owned) |
 | **Hard-Exit Truth Verification** | `uv run pytest tests/test_r1_hard_exit_truth.py` | **8 passed** | 4.00s | Validates 501 deferred runtimes, authoring preservation, coordinator convergence, and truthful no-provider failures |
 | **API Domain Decomposition** | `uv run pytest tests/test_api_domain_decomposition.py` | **25 passed** | 10.44s | Validates all 19 domain routers, shared services, and façade integrity |
 | **Router Hardening & Failover** | `uv run pytest tests/test_router_hardening.py` | **7 passed** | 3.99s | Circuit breaker fast-path, outage fallback < 2s |
