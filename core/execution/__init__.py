@@ -13,6 +13,7 @@ from core.execution.cancellation import (
     get_provider_cancellation_mode,
 )
 from core.execution.coordinator import ExecutionBlockedError, ExecutionCoordinator
+from core.execution.kernel_lm_adapter import KernelLMAdapter
 from core.execution.models import (
     Execution,
     ExecutionContext,
@@ -62,6 +63,7 @@ __all__ = [
     # Coordinator & Cancellation
     "ExecutionBlockedError",
     "ExecutionCoordinator",
+    "KernelLMAdapter",
     "CancellationToken",
     "CancellationReason",
     "ExecutionCancelledError",

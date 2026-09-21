@@ -539,7 +539,7 @@ A real desktop request travels through project/session context, routing, a real 
 - **Required Evidence:**
   - Golden execution trace fixture and behavioral test suite (`tests/test_ledger.py`).
 
-### [ ] R1.12 — Rewire DSPy pipeline registry
+### [x] R1.12 — Rewire DSPy pipeline registry
 
 - **Migration:** `INTEGRATE`
 - **Target release:** `0.5`
@@ -550,7 +550,7 @@ A real desktop request travels through project/session context, routing, a real 
   - Wrap legacy pipeline registry runs in executions.
   - Record DSPy program/version metadata.
 - **Acceptance Criteria:**
-  - [ ] Direct product endpoints cannot invoke DSPy outside coordinator.
+  - [x] Direct product endpoints cannot invoke DSPy outside coordinator.
 - **Required Evidence:**
   - Integration test for standard pipeline.
 

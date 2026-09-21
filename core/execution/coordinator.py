@@ -13,6 +13,8 @@ import logging
 import time
 from typing import Any, Callable, Dict, List, Optional
 
+import numpy  # noqa: F401
+
 from core.context.builder import ContextSpec, build_context, estimate_tokens
 from core.execution.cancellation import (
     CancellationToken,
@@ -71,6 +73,7 @@ class ExecutionCoordinator:
             Callable[[ExecutionContext, RoutingTier, str, str], Any]
         ] = None,
         artifact_service: Optional[Any] = None,
+        pipeline_registry: Optional[Any] = None,
     ):
         self.storage = storage or get_storage_backend()
         self.policy_engine = policy_engine or PolicyEngine()
@@ -84,6 +87,7 @@ class ExecutionCoordinator:
         self.session_store = session_store
         self.pending_registry = pending_registry or PendingOperationRegistry()
         self._dispatch_override = dispatch_override
+        self.pipeline_registry = pipeline_registry
         if artifact_service is not None:
             self.artifact_service = artifact_service
         else:
@@ -377,6 +381,35 @@ class ExecutionCoordinator:
         self._active_state_machines[exec_id] = state_machine
         self._active_state_machines[request.id] = state_machine
 
+        # Pipeline execution resolution (Task R1.12)
+        is_pipeline = (
+            request.task_type == "pipeline"
+            or "pipeline_name" in request.inputs
+            or bool(request.inputs.get("pipeline"))
+        )
+        pipeline_name = (
+            request.inputs.get("pipeline_name")
+            or request.inputs.get("pipeline")
+            or (request.task_type if request.task_type != "pipeline" else None)
+        )
+        pipeline_reg = request.inputs.get("pipeline_registry") or getattr(
+            self, "pipeline_registry", None
+        )
+        if pipeline_reg is None and is_pipeline:
+            try:
+                from core.pipelines import get_pipeline_registry
+
+                pipeline_reg = get_pipeline_registry()
+            except Exception:
+                pipeline_reg = None
+
+        pipeline_meta = None
+        if is_pipeline and pipeline_name and pipeline_reg:
+            try:
+                pipeline_meta = pipeline_reg.get_metadata(pipeline_name)
+            except Exception:
+                pipeline_meta = None
+
         def handle_cancellation(
             stage_name: str, partial_text: Optional[str] = None
         ) -> ExecutionResult:
@@ -628,6 +661,18 @@ class ExecutionCoordinator:
                 "token_budget": request.token_budget,
             }
 
+            if is_pipeline and pipeline_name:
+                context_provenance.update(
+                    {
+                        "pipeline_name": pipeline_name,
+                        "pipeline_version": pipeline_meta.version if pipeline_meta else "1.0.0",
+                        "pipeline_category": pipeline_meta.category if pipeline_meta else "general",
+                        "pipeline_author": pipeline_meta.author
+                        if pipeline_meta
+                        else "Agent Engine",
+                    }
+                )
+
             exec_context = ExecutionContext(
                 execution_id=exec_id,
                 project_id=request.project_id,
@@ -695,12 +740,58 @@ class ExecutionCoordinator:
 
             # Phase 4: Policy Pre-Flight
             state_machine.transition(ExecutionStatus.POLICY_CHECK)
-            tool_name = request.inputs.get("tool_name", request.task_type)
+            if is_pipeline:
+                tool_name = f"pipeline:{pipeline_name}" if pipeline_name else "pipeline"
+                pipeline_inputs = request.inputs.get("pipeline_inputs")
+                if not pipeline_inputs:
+                    pipeline_inputs = {
+                        k: v
+                        for k, v in request.inputs.items()
+                        if k
+                        not in (
+                            "pipeline_name",
+                            "pipeline",
+                            "tool_name",
+                            "tool_args",
+                            "pipeline_registry",
+                            "project_root",
+                            "project_instructions",
+                            "skills",
+                            "stream",
+                        )
+                    }
+                tool_args = (
+                    request.inputs.get("tool_args") or pipeline_inputs or {"prompt": request.prompt}
+                )
+            else:
+                tool_name = request.inputs.get("tool_name", request.task_type)
+                tool_args = request.inputs.get("tool_args", {"prompt": request.prompt})
+
             policy_decision: PolicyDecision = self.policy_engine.evaluate(
                 tool_name=tool_name,
-                tool_args=request.inputs.get("tool_args", {"prompt": request.prompt}),
-                context={"session_id": request.session_id},
+                tool_args=tool_args,
+                context={"session_id": request.session_id, "project_id": request.project_id},
             )
+
+            # Check declared guardrails from pipeline metadata
+            if (
+                policy_decision.decision not in ("block", "deny")
+                and is_pipeline
+                and pipeline_meta
+                and pipeline_meta.guardrails
+            ):
+                for g_name in pipeline_meta.guardrails:
+                    g_dec = self.policy_engine.evaluate(
+                        tool_name=g_name,
+                        tool_args=tool_args,
+                        context={
+                            "session_id": request.session_id,
+                            "project_id": request.project_id,
+                        },
+                    )
+                    if g_dec.decision in ("block", "deny"):
+                        policy_decision = g_dec
+                        break
 
             if policy_decision.decision == "block":
                 state_machine.transition(
@@ -793,6 +884,7 @@ class ExecutionCoordinator:
             cache_hit = False
 
             chunks_emitted = 0
+            pipeline_model_calls: List[Dict[str, Any]] = []
 
             def emit_chunk(chunk_str: str) -> None:
                 nonlocal chunks_emitted
@@ -810,7 +902,93 @@ class ExecutionCoordinator:
                     state_machine.current_sequence_num += 1
                     chunks_emitted += 1
 
-            if self._dispatch_override:
+            if is_pipeline and pipeline_name:
+                from core.execution.kernel_lm_adapter import KernelLMAdapter
+                import dspy
+
+                if not pipeline_reg:
+                    raise KeyError(
+                        f"Pipeline registry not available for pipeline '{pipeline_name}'"
+                    )
+
+                try:
+                    instance = pipeline_reg.instantiate(pipeline_name)
+                except KeyError as k_err:
+                    raise KeyError(f"Pipeline '{pipeline_name}' not found in registry") from k_err
+
+                raw_pipeline_inputs = request.inputs.get("pipeline_inputs") or request.inputs
+                orchestration_keys = {
+                    "pipeline_name",
+                    "pipeline",
+                    "pipeline_inputs",
+                    "pipeline_registry",
+                    "tool_name",
+                    "tool_args",
+                    "project_id",
+                    "session_id",
+                    "project_root",
+                    "project_instructions",
+                    "skills",
+                    "stream",
+                }
+                pipeline_inputs = {
+                    k: v for k, v in raw_pipeline_inputs.items() if k not in orchestration_keys
+                }
+
+                lm_adapter = KernelLMAdapter(
+                    exec_context=exec_context,
+                    coordinator=self,
+                    provider=provider,
+                    model_name=model_name,
+                    tier=tier,
+                    model_calls=pipeline_model_calls,
+                    event_sink=combined_event_sink,
+                    state_machine=state_machine,
+                )
+
+                def _sync_pipeline_forward():
+                    with dspy.context(lm=lm_adapter):
+                        return instance(**pipeline_inputs)
+
+                forward_task = asyncio.create_task(asyncio.to_thread(_sync_pipeline_forward))
+                token.add_callback(forward_task.cancel)
+
+                try:
+                    pred = await forward_task
+                except (asyncio.CancelledError, ExecutionCancelledError):
+                    token.cancel(
+                        reason=token.reason or CancellationReason.CLIENT_DISCONNECT,
+                        actor=token.actor or "client",
+                    )
+                    partial_summary = ""
+                    if pipeline_model_calls:
+                        last_c = pipeline_model_calls[-1]
+                        partial_summary = f"Partial model call completed: {last_c.get('model')} with {last_c.get('output_tokens')} tokens."
+                    return handle_cancellation(
+                        "pipeline_execution",
+                        partial_text=partial_summary or "Partial pipeline execution cancelled",
+                    )
+                except Exception as p_err:
+                    if token.is_cancelled:
+                        return handle_cancellation("pipeline_execution")
+                    raise p_err
+
+                if hasattr(pred, "toDict"):
+                    outputs = pred.toDict()
+                elif isinstance(pred, dict):
+                    outputs = pred
+                else:
+                    outputs = dict(pred)
+
+                if pipeline_model_calls:
+                    prompt_tokens = sum(c.get("input_tokens", 0) for c in pipeline_model_calls)
+                    completion_tokens = sum(c.get("output_tokens", 0) for c in pipeline_model_calls)
+                else:
+                    prompt_tokens = estimate_tokens(str(pipeline_inputs))
+                    completion_tokens = max(1, estimate_tokens(str(outputs)))
+
+                emit_chunk(str(outputs))
+            elif self._dispatch_override:
                 res = self._dispatch_override(exec_context, tier, provider, model_name)
                 if hasattr(res, "__aiter__"):
                     collected = []
@@ -1056,6 +1234,155 @@ class ExecutionCoordinator:
             if token.is_cancelled:
                 return handle_cancellation("post_dispatch", str(outputs.get("response", "")))
 
+            # Generate canonical artifacts for pipeline outputs (Task R1.10 / R1.12)
+            if getattr(self, "artifact_service", None) and outputs:
+                import json
+                from core.artifacts.models import ArtifactStatus, ArtifactType
+
+                if outputs.get("diff_patch"):
+                    try:
+                        art = self.artifact_service.create_artifact(
+                            project_id=request.project_id,
+                            execution_id=exec_id,
+                            name="diff.patch",
+                            content=str(outputs["diff_patch"]),
+                            type=ArtifactType.PATCH,
+                            mime_type="text/x-diff",
+                            status=ArtifactStatus.READY,
+                            created_by=request.task_type,
+                            lineage={"pipeline_name": pipeline_name, "field": "diff_patch"}
+                            if is_pipeline
+                            else {},
+                        )
+                        combined_event_sink(
+                            ExecutionEvent(
+                                execution_id=exec_id,
+                                sequence_num=state_machine.current_sequence_num,
+                                event_type=ExecutionEventType.ARTIFACT_CREATED,
+                                payload={
+                                    "artifact_id": art.id,
+                                    "name": art.name,
+                                    "type": art.type.value,
+                                    "size_bytes": art.size_bytes,
+                                    "sha256": art.sha256_hash,
+                                },
+                            )
+                        )
+                        state_machine.current_sequence_num += 1
+                    except Exception as art_ex:
+                        logger.warning("Failed to create diff_patch artifact: %s", art_ex)
+
+                if outputs.get("vulnerabilities"):
+                    try:
+                        v_content = outputs["vulnerabilities"]
+                        v_str = (
+                            json.dumps(v_content)
+                            if isinstance(v_content, (dict, list))
+                            else str(v_content)
+                        )
+                        art = self.artifact_service.create_artifact(
+                            project_id=request.project_id,
+                            execution_id=exec_id,
+                            name="vulnerabilities.json"
+                            if isinstance(v_content, (dict, list))
+                            else "vulnerabilities.txt",
+                            content=v_str,
+                            type=ArtifactType.DATA
+                            if isinstance(v_content, (dict, list))
+                            else ArtifactType.TEXT,
+                            mime_type="application/json"
+                            if isinstance(v_content, (dict, list))
+                            else "text/plain",
+                            status=ArtifactStatus.READY,
+                            created_by=request.task_type,
+                            lineage={"pipeline_name": pipeline_name, "field": "vulnerabilities"}
+                            if is_pipeline
+                            else {},
+                        )
+                        combined_event_sink(
+                            ExecutionEvent(
+                                execution_id=exec_id,
+                                sequence_num=state_machine.current_sequence_num,
+                                event_type=ExecutionEventType.ARTIFACT_CREATED,
+                                payload={
+                                    "artifact_id": art.id,
+                                    "name": art.name,
+                                    "type": art.type.value,
+                                    "size_bytes": art.size_bytes,
+                                    "sha256": art.sha256_hash,
+                                },
+                            )
+                        )
+                        state_machine.current_sequence_num += 1
+                    except Exception as art_ex:
+                        logger.warning("Failed to create vulnerabilities artifact: %s", art_ex)
+
+                if outputs.get("fixed_code"):
+                    try:
+                        art = self.artifact_service.create_artifact(
+                            project_id=request.project_id,
+                            execution_id=exec_id,
+                            name="fixed_code.py",
+                            content=str(outputs["fixed_code"]),
+                            type=ArtifactType.CODE,
+                            mime_type="text/x-python",
+                            status=ArtifactStatus.READY,
+                            created_by=request.task_type,
+                            lineage={"pipeline_name": pipeline_name, "field": "fixed_code"}
+                            if is_pipeline
+                            else {},
+                        )
+                        combined_event_sink(
+                            ExecutionEvent(
+                                execution_id=exec_id,
+                                sequence_num=state_machine.current_sequence_num,
+                                event_type=ExecutionEventType.ARTIFACT_CREATED,
+                                payload={
+                                    "artifact_id": art.id,
+                                    "name": art.name,
+                                    "type": art.type.value,
+                                    "size_bytes": art.size_bytes,
+                                    "sha256": art.sha256_hash,
+                                },
+                            )
+                        )
+                        state_machine.current_sequence_num += 1
+                    except Exception as art_ex:
+                        logger.warning("Failed to create fixed_code artifact: %s", art_ex)
+
+                if outputs.get("clean_code"):
+                    try:
+                        art = self.artifact_service.create_artifact(
+                            project_id=request.project_id,
+                            execution_id=exec_id,
+                            name="clean_code.py",
+                            content=str(outputs["clean_code"]),
+                            type=ArtifactType.CODE,
+                            mime_type="text/x-python",
+                            status=ArtifactStatus.READY,
+                            created_by=request.task_type,
+                            lineage={"pipeline_name": pipeline_name, "field": "clean_code"}
+                            if is_pipeline
+                            else {},
+                        )
+                        combined_event_sink(
+                            ExecutionEvent(
+                                execution_id=exec_id,
+                                sequence_num=state_machine.current_sequence_num,
+                                event_type=ExecutionEventType.ARTIFACT_CREATED,
+                                payload={
+                                    "artifact_id": art.id,
+                                    "name": art.name,
+                                    "type": art.type.value,
+                                    "size_bytes": art.size_bytes,
+                                    "sha256": art.sha256_hash,
+                                },
+                            )
+                        )
+                        state_machine.current_sequence_num += 1
+                    except Exception as art_ex:
+                        logger.warning("Failed to create clean_code artifact: %s", art_ex)
+
             # Phase 8: Output Verification
             if token.is_cancelled:
                 return handle_cancellation("pre_verification", str(outputs.get("response", "")))
@@ -1089,14 +1416,22 @@ class ExecutionCoordinator:
             # Phase 9: Telemetry Recording & Final Transition
             duration_ms = (time.perf_counter() - start_time) * 1000.0
             total_tokens = prompt_tokens + completion_tokens
-            cost_usd = self.cost_tracker.calculate_cost(
-                model_name, prompt_tokens, completion_tokens
-            )
-            if cost_usd == 0.0 and total_tokens > 0:
-                cost_usd = (
-                    round((prompt_tokens * 0.00000015) + (completion_tokens * 0.0000006), 6)
-                    or 0.000001
+            if is_pipeline and pipeline_model_calls:
+                cost_usd = sum(c.get("cost_usd", 0.0) for c in pipeline_model_calls)
+                if cost_usd == 0.0 and total_tokens > 0:
+                    cost_usd = (
+                        round((prompt_tokens * 0.00000015) + (completion_tokens * 0.0000006), 6)
+                        or 0.000001
+                    )
+            else:
+                cost_usd = self.cost_tracker.calculate_cost(
+                    model_name, prompt_tokens, completion_tokens
                 )
+                if cost_usd == 0.0 and total_tokens > 0:
+                    cost_usd = (
+                        round((prompt_tokens * 0.00000015) + (completion_tokens * 0.0000006), 6)
+                        or 0.000001
+                    )
 
             execution.input_tokens = prompt_tokens
             execution.output_tokens = completion_tokens
@@ -1118,7 +1453,9 @@ class ExecutionCoordinator:
 
             # Record telemetry in cost records
             self.cost_tracker.record_spend(
-                agent_name=request.task_type,
+                agent_name=f"pipeline:{pipeline_name}"
+                if is_pipeline and pipeline_name
+                else request.task_type,
                 model_name=model_name,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,

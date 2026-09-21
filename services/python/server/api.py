@@ -1051,11 +1051,14 @@ class PipelineInfo(BaseModel):
 
 class PipelineRunRequest(BaseModel):
     inputs: Dict[str, Any] = Field(default_factory=dict)
+    project_id: Optional[str] = None
+    session_id: Optional[str] = None
 
 
 class PipelineRunResponse(BaseModel):
     pipeline: str
     outputs: Dict[str, Any]
+    execution_id: Optional[str] = None
 
 
 class SafetyEvaluationRequest(BaseModel):
@@ -3137,8 +3140,13 @@ async def get_pipeline_details(name: str):
 
 
 @v1_router.post("/pipelines/{name}/run", response_model=PipelineRunResponse)
-async def run_pipeline(name: str, req: PipelineRunRequest):
-    """Execute a registered DSPy agent pipeline."""
+async def run_pipeline(
+    name: str,
+    req: PipelineRunRequest,
+    x_project_id: Optional[str] = Header(None, alias="X-Project-ID"),
+    coordinator: ExecutionCoordinator = Depends(get_execution_coordinator),
+):
+    """Execute a registered DSPy agent pipeline via the canonical ExecutionCoordinator."""
     registry = get_pipeline_registry()
     meta = registry.get_metadata(name)
     if not meta:
@@ -3146,10 +3154,62 @@ async def run_pipeline(name: str, req: PipelineRunRequest):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Pipeline '{name}' not found in registry.",
         )
+    effective_project_id = (
+        req.project_id
+        or (req.inputs.get("project_id") if isinstance(req.inputs, dict) else None)
+        or x_project_id
+        or "default"
+    )
+    effective_session_id = req.session_id or (
+        req.inputs.get("session_id") if isinstance(req.inputs, dict) else None
+    )
+
+    clean_inputs = dict(req.inputs) if isinstance(req.inputs, dict) else {}
+    exec_req = ExecutionRequest(
+        task_type="pipeline",
+        prompt=str(
+            clean_inputs.get("prompt")
+            or clean_inputs.get("code")
+            or clean_inputs.get("brief")
+            or clean_inputs.get("document_text")
+            or clean_inputs.get("outline")
+            or f"Execute pipeline {name}"
+        ),
+        inputs={
+            "pipeline_name": name,
+            "pipeline_inputs": clean_inputs,
+            **clean_inputs,
+        },
+        project_id=effective_project_id,
+        session_id=effective_session_id,
+    )
+
+    coordinator.pipeline_registry = registry
+
     try:
-        router_instance.initialize_and_configure()
-        outputs = registry.run(name, **req.inputs)
-        return PipelineRunResponse(pipeline=name, outputs=outputs)
+        result = await coordinator.execute(exec_req)
+        if result.status == ExecutionStatus.BLOCKED:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Execution of pipeline '{name}' blocked: {result.error}",
+            )
+        if result.status == ExecutionStatus.CANCELLED:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Execution of pipeline '{name}' cancelled: {result.error}",
+            )
+        if result.status == ExecutionStatus.FAILED:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Execution of pipeline '{name}' failed: {result.error}",
+            )
+        return PipelineRunResponse(
+            pipeline=name,
+            outputs=result.outputs,
+            execution_id=result.execution_id,
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

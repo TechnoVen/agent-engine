@@ -219,6 +219,10 @@ class ExecutionLedgerService:
             prompt_tokens_estimated=context_prov_dict.get("prompt_tokens_estimated", 0),
             instruction_tokens_estimated=context_prov_dict.get("instruction_tokens_estimated", 0),
             context_tokens_estimated=context_prov_dict.get("context_tokens_estimated", 0),
+            pipeline_name=context_prov_dict.get("pipeline_name"),
+            pipeline_version=context_prov_dict.get("pipeline_version"),
+            pipeline_category=context_prov_dict.get("pipeline_category"),
+            pipeline_author=context_prov_dict.get("pipeline_author"),
         )
 
         # 8. Reconstruct Tools & Approvals

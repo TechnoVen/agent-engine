@@ -333,20 +333,44 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "services/python/server/api.py"
     - "tests/test_ledger.py"
   notes: "Implemented authoritative Execution Ledger read-side projection answering 'what actually happened during this execution?' without duplicate write tables. Assembles immutable ExecutionTrace from executions, execution_events, cost_records, and artifacts. Projects requested vs resolved vs actual model/provider, runtime fallback history, context provenance (project_root, instructions SHA-256 hash without secret leakage, turn statistics), tool invocations, approval gates, artifact references, usage/cost accounting with provenance (calculated, estimated, provider_reported, unavailable), verification outcomes, and strictly monotonic durable event sequences. Exposes REST endpoints (GET /v1/executions/{id}/trace with project-scope integrity and GET /v1/projects/{id}/executions with pagination). 15/15 behavioral tests passing."
+- id: R1.12
+  title: "Rewire DSPy pipeline registry"
+  task_status: done
+  capability_maturity: S1
+  migration: INTEGRATE
+  owner: "Execution Kernel"
+  depends_on: [R1.3]
+  evidence:
+    - "core/execution/kernel_lm_adapter.py"
+    - "core/execution/coordinator.py"
+    - "core/pipelines/registry.py"
+    - "services/python/server/api.py"
+    - "core/ledger/models.py"
+    - "core/ledger/service.py"
+    - "tests/test_pipeline_kernel_integration.py"
+    - "tests/test_pipeline_registry.py"
+  notes: "Eliminated all direct bypass routes for DSPy pipelines in accordance with ADR-016. Implemented KernelLMAdapter (dspy.LM) to authoritatively intercept all internal DSPy LM calls into ModelRouter, enforcing cancellation checks, token and cost accounting, and model call provenance. Rewired PipelineRegistry.run to route exclusively through ExecutionCoordinator.execute with execution_id generation and synchronous/asynchronous safety bridges. Rewired POST /v1/pipelines/{name}/run to return canonical execution_id and record durable execution records. Enforced Single Root Execution Invariant (zero shadow executions for multi-hop DSPy programs), policy pre-flight and guardrails, budget limits, cancellation with partial artifact preservation, completed artifact registration (PATCH, DATA, CODE), and ExecutionLedgerService trace projection with pipeline identity provenance. 16/16 new integration tests passing, 475/475 full regression suite passing."
 ```
 
 ---
 
 ## 6. Active Test Suite & Deprecation Warnings Log
 
-- **Execution Kernel Core Suite:** `47 passed in 12.04s` (`uv run pytest tests/test_artifacts.py tests/test_cancellation.py tests/test_ledger.py`)
+- **Full Regression Suite:** `475 passed in 61.50s` (`uv run pytest`)
+- **Pipeline & Execution Kernel Core Suite:** `72 passed in 15.44s` (`uv run pytest tests/test_pipeline_kernel_integration.py tests/test_pipeline_registry.py tests/test_cancellation.py tests/test_artifacts.py tests/test_ledger.py`)
+  - **Pipeline Kernel Integration Suite:** `16 passed in 8.55s` (`uv run pytest tests/test_pipeline_kernel_integration.py`)
+  - **Pipeline Registry Suite:** `6 passed in 4.45s` (`uv run pytest tests/test_pipeline_registry.py`)
   - **Cancellation Suite:** `17 passed in 7.35s` (`uv run pytest tests/test_cancellation.py`)
   - **Artifacts Suite:** `15 passed in 6.95s` (`uv run pytest tests/test_artifacts.py`)
   - **Ledger Suite:** `15 passed in 6.00s` (`uv run pytest tests/test_ledger.py`)
+- **Desktop Tauri & Frontend Workspace:**
+  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.73s`)
+  - `pnpm -r build`: passed (`11.3s`)
 - **Documented Upstream Warnings (Non-blocking):**
   1. `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.` (Origin: `fastapi/testclient.py:1` — Upstream FastAPI/Starlette testclient deprecation notice; non-runtime).
   2. `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.` (Origin: `starlette/testclient.py:53` — Upstream Starlette/AnyIO import alias notice; non-runtime).
   3. `DeprecationWarning: 'asyncio.iscoroutinefunction' is deprecated and slated for removal in Python 3.16; use inspect.iscoroutinefunction() instead` (Origin: `chromadb/telemetry/opentelemetry/__init__.py:128` — Upstream ChromaDB telemetry compatibility notice for Python 3.16+; non-blocking on current Python 3.10–3.14).
+
 
 
 

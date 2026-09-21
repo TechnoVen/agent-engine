@@ -78,6 +78,10 @@ class ContextProvenance(BaseModel):
     prompt_tokens_estimated: int = 0
     instruction_tokens_estimated: int = 0
     context_tokens_estimated: int = 0
+    pipeline_name: Optional[str] = None
+    pipeline_version: Optional[str] = None
+    pipeline_category: Optional[str] = None
+    pipeline_author: Optional[str] = None
 
 
 class ToolInvocationRecord(BaseModel):
@@ -161,6 +165,11 @@ class ExecutionTrace(BaseModel):
     usage: UsageAndCostTrace = Field(default_factory=UsageAndCostTrace)
     verification: Optional[VerificationResult] = None
     events: List[ExecutionEventRecord] = Field(default_factory=list)
+
+    @property
+    def context_provenance(self) -> Dict[str, Any]:
+        """Convenience property returning dict representation of context provenance."""
+        return self.context.model_dump()
 
     def to_dict(self) -> Dict[str, Any]:
         return self.model_dump()
