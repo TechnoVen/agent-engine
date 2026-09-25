@@ -96,50 +96,95 @@ class IPCTokenManager:
     def _persist_handshake_token(self, token: str) -> None:
         """Persist token to single authoritative local handshake file with strict user-only permissions.
 
-        POSIX: 0600 (read/write only by owner).
-        Windows: restricted user ACLs via icacls.
+        POSIX:
+        - Parent directory created with 0700 mode (no symlinks followed).
+        - Written to temporary file in parent with 0600 mode and fsync.
+        - Atomically replaced via os.replace to prevent race windows.
+        Windows:
+        - Parent directory created in user profile.
+        - Restricted user ACLs via icacls (/inheritance:r /grant:r %USERNAME%:(R,W)).
+        - Any ACL failure fails closed (raises PermissionError).
         """
         path = self.get_handshake_path()
+
+        # 1. Reject unsafe symlinks
+        if path.is_symlink():
+            raise PermissionError(
+                f"Symlink detected at handshake path '{path}'; refusing to write token (fail-closed)"
+            )
+        if path.parent.is_symlink():
+            raise PermissionError(
+                f"Symlink detected at parent directory '{path.parent}'; refusing to write token (fail-closed)"
+            )
+
+        # 2. Parent directory hardening (0700 on POSIX)
+        parent = path.parent
+        parent.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":
+            try:
+                os.chmod(parent, 0o700)
+            except Exception as pe:
+                raise PermissionError(
+                    f"Failed to restrict parent directory permissions on {parent}: {pe}"
+                )
+
+        # 3. Secure temporary file creation with 0600 mode
+        tmp_name = f".ipc.token.tmp.{secrets.token_hex(8)}"
+        tmp_path = parent / tmp_name
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-            mode = 0o600
-            fd = os.open(path, flags, mode)
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(tmp_path, flags, 0o600)
             with os.fdopen(fd, "w") as f:
                 f.write(token)
-            try:
-                os.chmod(path, 0o600)
-            except Exception:
-                pass
+                f.flush()
+                os.fsync(f.fileno())
 
-            # Windows-specific ACL restriction: restrict to current user
+            if os.name != "nt":
+                os.chmod(tmp_path, 0o600)
+
+            # Windows-specific ACL restriction: restrict strictly to current user
             if os.name == "nt":
-                try:
-                    import subprocess
+                import subprocess
 
-                    username = os.environ.get("USERNAME") or os.environ.get("USER")
-                    if username:
-                        subprocess.run(
-                            [
-                                "icacls",
-                                str(path),
-                                "/inheritance:r",
-                                "/grant:r",
-                                f"{username}:(R,W)",
-                            ],
-                            check=False,
-                            capture_output=True,
-                        )
-                except Exception as win_err:
-                    logger.debug("Windows ACL hardening via icacls for %s: %s", path, win_err)
-        except Exception as ex:
-            logger.debug("Unable to write IPC handshake token to %s: %s", path, ex)
+                username = os.environ.get("USERNAME") or os.environ.get("USER")
+                if not username:
+                    raise PermissionError("Windows user identity unavailable for ACL restriction")
+                res = subprocess.run(
+                    [
+                        "icacls",
+                        str(tmp_path),
+                        "/inheritance:r",
+                        "/grant:r",
+                        f"{username}:(R,W)",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if res.returncode != 0:
+                    raise PermissionError(
+                        f"Failed to apply Windows user ACLs via icacls: {res.stderr.strip()}"
+                    )
+
+            # 4. Atomic replacement
+            os.replace(tmp_path, path)
+
+            # Ensure final permissions on target
+            if os.name != "nt":
+                os.chmod(path, 0o600)
+        except Exception:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except Exception:
+                    pass
+            raise
 
     def cleanup_handshake_file(self) -> None:
         """Clean up the local handshake file on shutdown."""
         path = self.get_handshake_path()
         try:
-            if path.exists():
+            if path.exists() and not path.is_symlink():
                 path.unlink(missing_ok=True)
         except Exception as ex:
             logger.debug("Failed to clean up handshake file %s: %s", path, ex)

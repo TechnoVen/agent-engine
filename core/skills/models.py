@@ -61,6 +61,9 @@ class SkillMetadata(BaseModel):
     permissions: List[SkillPermission] = Field(
         default_factory=list, description="Canonical declared permissions"
     )
+    workspace_scopes: List[str] = Field(
+        default_factory=list, description="Canonical declared workspace subpaths"
+    )
     implementation_hash: Optional[str] = Field(
         default=None, description="SHA-256 hash of the implementation"
     )

@@ -38,14 +38,20 @@ from core.execution.models import (
 )
 from core.ledger.service import LedgerService
 from core.safety.pending import (
+    OPERATION_DIGEST_VERSION,
     OperationExpiredError,
     PendingOperationRegistry,
     SecurityBoundaryViolation,
+    compute_canonical_operation_digest,
     redact_sensitive_data,
 )
 from core.safety.policy import PolicyEngine, PolicyRule
+from core.skills.boundary import CapabilityBoundary
+from core.skills.models import SkillPermission
 from core.storage.sqlite import SQLiteBackend
 from core.telemetry.cost import CostTracker
+from fastapi import HTTPException
+from services.python.server.dependencies import IPCTokenManager
 
 
 @pytest.fixture
@@ -560,3 +566,340 @@ class TestLedgerRedactionAndForging:
         assert res2.status == ExecutionStatus.BLOCKED
         assert res2.error_code == "APPROVAL_VIOLATION"
         assert len(dispatched) == 0
+
+
+# ============================================================================
+# Phase 2D: CTO Review Section 12 Security Closure Suite (15 Scenarios)
+# ============================================================================
+
+
+class TestSection12SecurityClosurePass:
+    """Rigorous verification of the 15 required security closure scenarios."""
+
+    def test_01_root_low_risk_execution_cannot_authorize_later_destructive_operation(
+        self, tmp_path
+    ):
+        """1. Root low-risk execution cannot authorize a later destructive operation."""
+        proj_dir = tmp_path / "project"
+        proj_dir.mkdir()
+        critical_file = proj_dir / "critical.txt"
+        critical_file.write_text("critical database contents")
+
+        policy_engine = PolicyEngine()
+        registry = PendingOperationRegistry()
+
+        # Approve a read operation
+        read_args = {"path": str(critical_file)}
+        op = registry.register_operation(
+            tool_name="filesystem.read_file",
+            tool_args=read_args,
+            capability="filesystem",
+        )
+        _, read_token = registry.approve_operation(op.operation_id)
+
+        # Boundary configured with write permissions, but given read approval token
+        boundary = CapabilityBoundary(
+            project_root=proj_dir,
+            declared_permissions=[SkillPermission.WRITE_LOCAL, SkillPermission.DESTRUCTIVE],
+            policy_engine=policy_engine,
+            pending_registry=registry,
+            approval_token=read_token,
+        )
+
+        # Attempt to delete file using read token fails closed
+        with pytest.raises(SecurityBoundaryViolation) as exc_info:
+            boundary.delete_file("critical.txt")
+        assert "Tool name mismatch" in str(
+            exc_info.value
+        ) or "Cryptographic argument verification failed" in str(exc_info.value)
+        assert critical_file.exists()
+
+    def test_02_operation_level_policy_engine_is_mandatory(self, tmp_path):
+        """2. Operation-level PolicyEngine is mandatory."""
+        proj_dir = tmp_path / "project"
+        proj_dir.mkdir()
+        target_file = proj_dir / "critical.txt"
+        target_file.write_text("data")
+
+        policy_engine = PolicyEngine()
+        # Direct boundary access with DESTRUCTIVE permission but without an approval token
+        boundary = CapabilityBoundary(
+            project_root=proj_dir,
+            declared_permissions=[SkillPermission.WRITE_LOCAL, SkillPermission.DESTRUCTIVE],
+            policy_engine=policy_engine,
+        )
+
+        # Unapproved destructive delete requires approval fail-closed
+        with pytest.raises(SecurityBoundaryViolation) as exc_info:
+            boundary.delete_file("critical.txt")
+        assert "requires approval" in str(exc_info.value).lower()
+        assert target_file.exists()
+
+    def test_03_exact_actual_arguments_are_recomputed_before_side_effect(self, tmp_path):
+        """3. Exact actual arguments are recomputed before side effect."""
+        proj_dir = tmp_path / "project"
+        proj_dir.mkdir()
+        target = proj_dir / "target.txt"
+        target.write_text("initial data")
+
+        policy_engine = PolicyEngine()
+        registry = PendingOperationRegistry()
+
+        # Approved for deleting target.txt
+        approved_args = {"path": str(target.resolve())}
+        op = registry.register_operation(
+            tool_name="filesystem.delete_file",
+            tool_args=approved_args,
+            capability="filesystem",
+        )
+        _, token = registry.approve_operation(op.operation_id)
+
+        boundary = CapabilityBoundary(
+            project_root=proj_dir,
+            declared_permissions=[SkillPermission.WRITE_LOCAL, SkillPermission.DESTRUCTIVE],
+            policy_engine=policy_engine,
+            pending_registry=registry,
+        )
+
+        # Tampering with target path immediately before execution fails
+        other_file = proj_dir / "other.txt"
+        other_file.write_text("should not be deleted")
+
+        with pytest.raises(SecurityBoundaryViolation) as exc_info:
+            boundary.delete_file("other.txt", approval_token=token)
+        assert "Cryptographic argument verification failed" in str(exc_info.value)
+        assert other_file.exists()
+        assert target.exists()
+
+    def test_04_persisted_approval_state_survives_restart(self, tmp_path):
+        """4. Persisted approval state survives/reconciles restart."""
+        db_path = str(tmp_path / "durable_restart.db")
+        storage1 = SQLiteBackend(db_path=db_path)
+        reg1 = PendingOperationRegistry(storage=storage1)
+
+        tool_args = {"command": "echo durable"}
+        op = reg1.register_operation("bash", tool_args)
+        _, token = reg1.approve_operation(op.operation_id, actor="admin_user")
+
+        # Simulate engine restart by instantiating new storage and registry
+        storage2 = SQLiteBackend(db_path=db_path)
+        reg2 = PendingOperationRegistry(storage=storage2)
+
+        recovered = reg2.get_operation(op.operation_id)
+        assert recovered is not None
+        assert recovered.status == "approved"
+        assert recovered.actor == "admin_user"
+        assert recovered.token_verifier is not None
+
+        # Consuming token on restarted registry succeeds
+        consumed = reg2.consume_token(token, "bash", tool_args)
+        assert consumed.status == "consumed"
+
+    def test_05_consumed_approval_remains_consumed_after_restart(self, tmp_path):
+        """5. Consumed approval remains consumed after restart."""
+        db_path = str(tmp_path / "consumed_restart.db")
+        storage1 = SQLiteBackend(db_path=db_path)
+        reg1 = PendingOperationRegistry(storage=storage1)
+
+        tool_args = {"action": "wipe_cache"}
+        op = reg1.register_operation("cache_cleaner", tool_args)
+        _, token = reg1.approve_operation(op.operation_id)
+        reg1.consume_token(token, "cache_cleaner", tool_args)
+
+        # Restart
+        storage2 = SQLiteBackend(db_path=db_path)
+        reg2 = PendingOperationRegistry(storage=storage2)
+
+        recovered = reg2.get_operation(op.operation_id)
+        assert recovered is not None
+        assert recovered.status == "consumed"
+
+        with pytest.raises(SecurityBoundaryViolation) as exc_info:
+            reg2.consume_token(token, "cache_cleaner", tool_args)
+        assert "already been consumed" in str(exc_info.value).lower()
+
+    def test_06_db_level_concurrent_consumption_has_exactly_one_winner(self, tmp_path):
+        """6. DB-level concurrent consumption has exactly one winner."""
+        db_path = str(tmp_path / "concurrent_cas.db")
+        storage = SQLiteBackend(db_path=db_path)
+        reg = PendingOperationRegistry(storage=storage)
+
+        tool_args = {"amount": 1000000, "account": "acc_treasury"}
+        op = reg.register_operation("transfer", tool_args)
+        _, token = reg.approve_operation(op.operation_id)
+
+        winners = []
+        failures = []
+
+        def worker():
+            try:
+                res = reg.consume_token(token, "transfer", tool_args)
+                winners.append(res)
+            except Exception as ex:
+                failures.append(ex)
+
+        threads = 10
+        with ThreadPoolExecutor(max_workers=threads) as executor:
+            futures = [executor.submit(worker) for _ in range(threads)]
+            for f in futures:
+                f.result()
+
+        assert len(winners) == 1
+        assert len(failures) == threads - 1
+        assert all(isinstance(f, SecurityBoundaryViolation) for f in failures)
+
+        # Direct database verification
+        db_record = storage.get_approval(op.operation_id)
+        assert db_record["status"] == "consumed"
+        assert db_record["consumed_at"] is not None
+
+    def test_07_raw_approval_token_is_absent_from_db_ledger_logs(self, tmp_path):
+        """7. Raw approval token is absent from DB/ledger/logs."""
+        db_path = str(tmp_path / "raw_token_absence.db")
+        storage = SQLiteBackend(db_path=db_path)
+        reg = PendingOperationRegistry(storage=storage)
+
+        tool_args = {"secret_payload": "confidential"}
+        op = reg.register_operation("secret_task", tool_args)
+        _, raw_token = reg.approve_operation(op.operation_id)
+        reg.consume_token(raw_token, "secret_task", tool_args)
+
+        # Inspect database record
+        db_rec = storage.get_approval(op.operation_id)
+        assert db_rec is not None
+        assert raw_token not in str(db_rec)
+        assert db_rec["token_verifier"] != raw_token
+        assert len(db_rec["token_verifier"]) == 64
+
+    def test_08_canonical_digest_version_is_persisted(self, tmp_path):
+        """8. Canonical digest version is persisted."""
+        db_path = str(tmp_path / "version_test.db")
+        storage = SQLiteBackend(db_path=db_path)
+        reg = PendingOperationRegistry(storage=storage)
+
+        op = reg.register_operation("sample_tool", {"k": "v"})
+        assert op.digest_version == OPERATION_DIGEST_VERSION
+
+        db_rec = storage.get_approval(op.operation_id)
+        assert db_rec["digest_version"] == OPERATION_DIGEST_VERSION
+
+        recovered = reg.get_operation(op.operation_id)
+        assert recovered.digest_version == OPERATION_DIGEST_VERSION
+
+    def test_09_operation_digest_is_deterministic(self):
+        """9. Operation digest is deterministic."""
+        args_a = {"alpha": 1, "beta": 2, "details": {"inner_x": 10, "inner_y": 20}}
+        args_b = {"beta": 2, "details": {"inner_y": 20, "inner_x": 10}, "alpha": 1}
+
+        d1 = compute_canonical_operation_digest("run_cmd", args_a, capability="exec", version=1)
+        d2 = compute_canonical_operation_digest("run_cmd", args_b, capability="exec", version=1)
+        assert d1 == d2
+
+        d_diff = compute_canonical_operation_digest(
+            "run_cmd", {"alpha": 99}, capability="exec", version=1
+        )
+        assert d1 != d_diff
+
+    def test_10_normalized_path_change_invalidates_authorization(self):
+        """10. Normalized path change invalidates authorization."""
+        reg = PendingOperationRegistry()
+        approved_args = {"path": "/app/workspace/target.py"}
+        op = reg.register_operation("fs_write", approved_args)
+        _, token = reg.approve_operation(op.operation_id)
+
+        tampered_args = {"path": "/app/workspace/other.py"}
+        with pytest.raises(SecurityBoundaryViolation) as exc_info:
+            reg.consume_token(token, "fs_write", tampered_args)
+        assert "Cryptographic argument verification failed" in str(exc_info.value)
+
+    def test_11_executable_argv_change_invalidates_authorization(self):
+        """11. Executable/argv change invalidates authorization."""
+        reg = PendingOperationRegistry()
+        approved_args = {"command": "git pull origin main"}
+        op = reg.register_operation("bash", approved_args)
+        _, token = reg.approve_operation(op.operation_id)
+
+        tampered_args = {"command": "git push origin main"}
+        with pytest.raises(SecurityBoundaryViolation) as exc_info:
+            reg.consume_token(token, "bash", tampered_args)
+        assert "Cryptographic argument verification failed" in str(exc_info.value)
+
+    def test_12_actor_mismatch_fails(self):
+        """12. Actor mismatch fails."""
+        reg = PendingOperationRegistry()
+        args = {"command": "shutdown -h now"}
+        op = reg.register_operation("sys_cmd", args)
+        _, token = reg.approve_operation(op.operation_id, actor="lead_secops")
+
+        with pytest.raises(SecurityBoundaryViolation) as exc_info:
+            reg.consume_token(token, "sys_cmd", args, actor="untrusted_caller")
+        assert "Actor mismatch" in str(exc_info.value)
+
+    def test_13_policy_exception_at_operation_boundary_fails_closed(self, tmp_path):
+        """13. Policy exception at operation boundary fails closed."""
+        proj_dir = tmp_path / "project"
+        proj_dir.mkdir()
+
+        policy_engine = PolicyEngine()
+        with patch.object(policy_engine, "evaluate", side_effect=RuntimeError("Engine failure")):
+            boundary = CapabilityBoundary(
+                project_root=proj_dir,
+                declared_permissions=[SkillPermission.WRITE_LOCAL],
+                policy_engine=policy_engine,
+            )
+            with pytest.raises(SecurityBoundaryViolation) as exc_info:
+                boundary.check_operation_policy(
+                    capability="filesystem",
+                    operation="write_file",
+                    tool_name="filesystem.write_file",
+                    tool_args={"path": "file.txt"},
+                )
+            assert "fail-closed" in str(exc_info.value).lower()
+
+    def test_14_handshake_permission_failure_fails_closed(self, tmp_path):
+        """14. Handshake permission failure fails closed."""
+        real_dir = tmp_path / "real_dir"
+        real_dir.mkdir()
+        symlink_dir = tmp_path / "symlink_dir"
+        symlink_dir.symlink_to(real_dir)
+
+        token_file = symlink_dir / "ipc.token"
+        tm = IPCTokenManager()
+
+        with patch.dict("os.environ", {"AGENT_ENGINE_TOKEN_FILE": str(token_file)}, clear=False):
+            patch_env = patch.dict("os.environ", {"AGENT_ENGINE_IPC_TOKEN": ""})
+            patch_env.start()
+            try:
+                tm._token = None
+                with pytest.raises(PermissionError) as exc_info:
+                    tm._persist_handshake_token("token_secret_123")
+                assert "symlink detected" in str(exc_info.value).lower()
+            finally:
+                patch_env.stop()
+
+    def test_15_stale_ipc_token_is_invalid_after_launch_rotation(self, tmp_path):
+        """15. Stale IPC token is invalid after launch rotation."""
+        token_file = tmp_path / "ipc.token"
+        tm = IPCTokenManager()
+
+        with patch.dict("os.environ", {"AGENT_ENGINE_TOKEN_FILE": str(token_file)}, clear=False):
+            t1 = tm.rotate_token()
+            assert t1 is not None
+
+            # Rotation invalidates t1 and generates t2
+            t2 = tm.rotate_token()
+            assert t2 is not None
+            assert t1 != t2
+            assert tm.get_token() == t2
+
+            class MockRequest:
+                headers = {"Authorization": f"Bearer {t1}"}
+
+            with pytest.raises(HTTPException) as exc_info:
+                tm.verify_request(MockRequest())
+            assert exc_info.value.status_code == 401
+
+            class ValidRequest:
+                headers = {"Authorization": f"Bearer {t2}"}
+
+            assert tm.verify_request(ValidRequest()) is True

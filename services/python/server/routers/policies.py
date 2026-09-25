@@ -143,7 +143,7 @@ async def approve_pending_operation(
     verify_ipc_token(request)
     registry = get_pending_registry()
     try:
-        op, _token = registry.approve_operation(
+        op, token = registry.approve_operation(
             operation_id=operation_id,
             actor=req.actor or "operator",
             modified_args=req.modified_args,
@@ -159,7 +159,9 @@ async def approve_pending_operation(
             reason=f"Approved by {req.actor or 'operator'}",
             session_id=op.session_id,
         )
-        return PendingOperationInfo(**op.to_dict())
+        data = op.to_dict()
+        data["approval_token"] = token
+        return PendingOperationInfo(**data)
     except OperationExpiredError as e:
         raise HTTPException(status_code=status.HTTP_410_GONE, detail=str(e))
     except ValueError as e:
@@ -209,7 +211,7 @@ async def batch_operations(req: BatchOperationRequest, request: Request):
     for op_id in req.operation_ids:
         try:
             if req.action == "approve":
-                op, _ = registry.approve_operation(op_id, actor=req.actor or "operator")
+                op, token = registry.approve_operation(op_id, actor=req.actor or "operator")
                 engine.audit_logger.log_evaluation(
                     tool_name=op.tool_name,
                     tool_args=op.tool_args,
@@ -220,7 +222,9 @@ async def batch_operations(req: BatchOperationRequest, request: Request):
                     reason=f"Batch approved by {req.actor or 'operator'}",
                     session_id=op.session_id,
                 )
-                results.append(op)
+                data = op.to_dict()
+                data["approval_token"] = token
+                results.append(data)
             elif req.action == "reject":
                 op = registry.reject_operation(
                     op_id,
@@ -237,10 +241,10 @@ async def batch_operations(req: BatchOperationRequest, request: Request):
                     reason=req.reason or "Batch rejected by operator",
                     session_id=op.session_id,
                 )
-                results.append(op)
+                results.append(op.to_dict())
         except Exception:
             continue
-    return [PendingOperationInfo(**op.to_dict()) for op in results]
+    return [PendingOperationInfo(**d) for d in results]
 
 
 @router.post("/safety/verify-execution", response_model=VerifyExecutionResponse)

@@ -192,6 +192,40 @@ class AuditLogRecord:
         }
 
 
+@dataclass
+class ApprovalRecord:
+    approval_id: str
+    capability: str
+    operation_digest: str
+    token_verifier: str
+    issued_at: float
+    expires_at: float
+    execution_id: Optional[str] = None
+    actor: str = "local_operator"
+    digest_version: int = 1
+    decision: str = "approved"
+    status: str = "pending"
+    consumed_at: Optional[float] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "approval_id": self.approval_id,
+            "execution_id": self.execution_id,
+            "actor": self.actor,
+            "capability": self.capability,
+            "operation_digest": self.operation_digest,
+            "digest_version": self.digest_version,
+            "token_verifier": self.token_verifier,
+            "issued_at": self.issued_at,
+            "expires_at": self.expires_at,
+            "decision": self.decision,
+            "status": self.status,
+            "consumed_at": self.consumed_at,
+            "metadata": self.metadata,
+        }
+
+
 class StorageBackend(ABC):
     """Abstract base repository for all Agent Engine persistent state."""
 
@@ -639,6 +673,34 @@ class StorageBackend(ABC):
     def delete_artifact(self, artifact_id: str) -> bool:
         """Mark an artifact as deleted and preserve tombstone."""
         return False
+
+    # --- 16. CANONICAL APPROVALS (R2.4) ---
+
+    def save_approval(self, approval: Dict[str, Any]) -> None:
+        """Persist or update an exact-operation approval record."""
+        pass
+
+    def get_approval(self, approval_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve an approval record by primary key."""
+        return None
+
+    def get_approval_by_verifier(self, token_verifier: str) -> Optional[Dict[str, Any]]:
+        """Retrieve an approval record by token verifier digest."""
+        return None
+
+    def atomic_consume_approval(self, approval_id: str, token_verifier: str, now: float) -> bool:
+        """Atomically transition approval from 'approved' to 'consumed'.
+
+        Returns True if exactly one matching unexpired record was consumed,
+        False if expired, already consumed, mismatched verifier, or missing.
+        """
+        return False
+
+    def list_approvals(
+        self, status: Optional[str] = None, execution_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """List persisted approval records."""
+        return []
 
 
 # Backward-compatible and semantic alias

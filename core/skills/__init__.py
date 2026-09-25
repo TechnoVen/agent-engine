@@ -19,6 +19,12 @@ from core.skills.models import (
     SkillPermission,
     SkillSource,
 )
+from core.skills.path import (
+    ResolvedWorkspacePath,
+    WorkspacePathResolver,
+    WorkspacePathViolation,
+    compute_effective_workspace_scopes,
+)
 from core.skills.registry import (
     SkillRegistryClient,
     SkillRegistryPackage,
@@ -38,6 +44,10 @@ __all__ = [
     "CapabilityBoundary",
     "check_permission",
     "validate_project_path",
+    "ResolvedWorkspacePath",
+    "WorkspacePathResolver",
+    "WorkspacePathViolation",
+    "compute_effective_workspace_scopes",
     "MultiToolSkillDiscovery",
     "SkillDiscovery",
     "SkillEditor",

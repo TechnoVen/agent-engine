@@ -16,6 +16,7 @@ logger = logging.getLogger("agent_engine.safety.policy")
 DEFAULT_POLICY_FILE = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", "..", "policies", "default.yaml")
 )
+DEFAULT_APPROVAL_TTL_SECONDS: float = 60.0
 
 
 @dataclass
@@ -31,6 +32,7 @@ class PolicyRule:
     risk_level: str = "high"  # low, medium, high, critical
     reason: Optional[str] = None
     suggestion: Optional[str] = None
+    approval_ttl_seconds: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -43,6 +45,7 @@ class PolicyRule:
             "risk_level": self.risk_level,
             "reason": self.reason,
             "suggestion": self.suggestion,
+            "approval_ttl_seconds": self.approval_ttl_seconds,
         }
 
     def matches(self, tool_name: str, tool_args: Dict[str, Any]) -> bool:
@@ -141,6 +144,7 @@ class PolicyDecision:
     audit_id: Optional[int] = None
     matched_rule: Optional[str] = None
     required_permissions: List[SkillPermission] = field(default_factory=list)
+    approval_ttl_seconds: float = DEFAULT_APPROVAL_TTL_SECONDS
 
     @property
     def is_allowed(self) -> bool:
@@ -172,6 +176,7 @@ class PolicyDecision:
             "suggestion": self.suggestion,
             "reason": self.reason,
             "audit_id": self.audit_id,
+            "approval_ttl_seconds": self.approval_ttl_seconds,
         }
 
 
@@ -186,11 +191,19 @@ class PolicyEngine:
         self,
         policy_file: Optional[str] = None,
         audit_logger: Optional[AuditLogger] = None,
+        default_approval_ttl_seconds: float = DEFAULT_APPROVAL_TTL_SECONDS,
     ):
         self.policy_file = policy_file or DEFAULT_POLICY_FILE
         self.audit_logger = audit_logger or AuditLogger()
+        self.default_approval_ttl_seconds = max(1.0, float(default_approval_ttl_seconds))
         self._rules: Dict[str, PolicyRule] = {}
         self.load_policies()
+
+    def get_approval_ttl(self, rule: Optional[PolicyRule] = None) -> float:
+        """Return policy-driven approval TTL in seconds, bounded and never unlimited."""
+        if rule and rule.approval_ttl_seconds is not None:
+            return max(1.0, float(rule.approval_ttl_seconds))
+        return self.default_approval_ttl_seconds
 
     def load_policies(self) -> None:
         """Load safety rules from the policy YAML file."""
@@ -200,6 +213,11 @@ class PolicyEngine:
                     data = yaml.safe_load(f) or {}
                 rules_list = data.get("rules", [])
                 for r in rules_list:
+                    ttl = (
+                        float(r["approval_ttl_seconds"])
+                        if r.get("approval_ttl_seconds") is not None
+                        else None
+                    )
                     rule = PolicyRule(
                         id=r["id"],
                         name=r.get("name", r["id"]),
@@ -210,6 +228,7 @@ class PolicyEngine:
                         risk_level=r.get("risk_level", "high"),
                         reason=r.get("reason"),
                         suggestion=r.get("suggestion"),
+                        approval_ttl_seconds=ttl,
                     )
                     self._rules[rule.id] = rule
                 logger.info("Loaded %d safety rules from %s", len(self._rules), self.policy_file)
@@ -306,21 +325,6 @@ class PolicyEngine:
         context: Optional[Dict[str, Any]] = None,
     ) -> List[SkillPermission]:
         """Infer canonical permissions required for the requested operation."""
-        ctx = context or {}
-        declared = ctx.get("declared_permissions")
-        if declared:
-            perms = []
-            for p in declared:
-                if isinstance(p, SkillPermission):
-                    perms.append(p)
-                elif isinstance(p, str):
-                    try:
-                        perms.append(SkillPermission(p.lower()))
-                    except ValueError:
-                        pass
-            if perms:
-                return perms
-
         t_lower = tool_name.lower()
         perms_set = set()
 
@@ -364,6 +368,9 @@ class PolicyEngine:
 
         # Consequential permission inference: check all command arguments for dangerous/admin actions
         if any(
+            k in t_lower
+            for k in ("delete", "remove", "unlink", "drop", "destroy", "purge", "rm", "delete_file")
+        ) or any(
             danger in all_text
             for danger in (
                 "rm -rf",
@@ -377,7 +384,11 @@ class PolicyEngine:
             )
         ):
             perms_set.add(SkillPermission.DESTRUCTIVE)
-            perms_set.add(SkillPermission.EXECUTE)
+            if any(
+                k in t_lower
+                for k in ("bash", "shell", "exec", "terminal", "command", "run_command")
+            ):
+                perms_set.add(SkillPermission.EXECUTE)
 
         if "admin" in t_lower or any(
             admin in all_text
@@ -496,6 +507,13 @@ class PolicyEngine:
                     session_id=session_id,
                 )
 
+            effective_rule = (
+                staging_rules[0]
+                if staging_rules
+                else (blocking_rules[0] if blocking_rules else None)
+            )
+            effective_ttl = self.get_approval_ttl(effective_rule)
+
             return PolicyDecision(
                 decision=decision,
                 risk_score=risk_score,
@@ -508,6 +526,7 @@ class PolicyEngine:
                 audit_id=audit_id if (audit_id and audit_id > 0) else None,
                 matched_rule=primary_policy_id,
                 required_permissions=required_permissions,
+                approval_ttl_seconds=effective_ttl,
             )
         except Exception as err:
             logger.error(
@@ -526,4 +545,5 @@ class PolicyEngine:
                 audit_id=None,
                 matched_rule="POLICY_EVALUATION_ERROR_FAIL_CLOSED",
                 required_permissions=[SkillPermission.EXECUTE],
+                approval_ttl_seconds=self.default_approval_ttl_seconds,
             )

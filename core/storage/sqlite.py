@@ -306,6 +306,25 @@ class SQLiteBackend(StorageBackend):
                     CREATE INDEX IF NOT EXISTS idx_artifacts_execution ON artifacts(execution_id);
                     CREATE INDEX IF NOT EXISTS idx_artifacts_type ON artifacts(type);
                     CREATE INDEX IF NOT EXISTS idx_artifacts_status ON artifacts(status);
+
+                    CREATE TABLE IF NOT EXISTS approvals (
+                        approval_id TEXT PRIMARY KEY,
+                        execution_id TEXT,
+                        actor TEXT NOT NULL DEFAULT 'local_operator',
+                        capability TEXT NOT NULL,
+                        operation_digest TEXT NOT NULL,
+                        digest_version INTEGER NOT NULL DEFAULT 1,
+                        token_verifier TEXT NOT NULL,
+                        issued_at REAL NOT NULL,
+                        expires_at REAL NOT NULL,
+                        decision TEXT NOT NULL DEFAULT 'approved',
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        consumed_at REAL,
+                        metadata_json TEXT NOT NULL DEFAULT '{}'
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_approvals_token_verifier ON approvals(token_verifier);
+                    CREATE INDEX IF NOT EXISTS idx_approvals_execution_id ON approvals(execution_id);
+                    CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
                 """)
                 conn.commit()
 
@@ -2743,6 +2762,143 @@ class SQLiteBackend(StorageBackend):
                 )
                 conn.commit()
                 return cursor.rowcount > 0
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    # --- 16. CANONICAL APPROVALS (R2.4) ---
+
+    def _row_to_approval(self, row: sqlite3.Row) -> Dict[str, Any]:
+        data = dict(row)
+        if "metadata_json" in data:
+            try:
+                data["metadata"] = json.loads(data.pop("metadata_json"))
+            except Exception:
+                data["metadata"] = {}
+        return data
+
+    def save_approval(self, approval: Dict[str, Any]) -> None:
+        """Persist or update an exact-operation approval record."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                metadata_json = json.dumps(approval.get("metadata", {}))
+                cursor.execute(
+                    """
+                    INSERT INTO approvals (
+                        approval_id, execution_id, actor, capability, operation_digest,
+                        digest_version, token_verifier, issued_at, expires_at, decision,
+                        status, consumed_at, metadata_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(approval_id) DO UPDATE SET
+                        execution_id = excluded.execution_id,
+                        actor = excluded.actor,
+                        capability = excluded.capability,
+                        operation_digest = excluded.operation_digest,
+                        digest_version = excluded.digest_version,
+                        token_verifier = excluded.token_verifier,
+                        issued_at = excluded.issued_at,
+                        expires_at = excluded.expires_at,
+                        decision = excluded.decision,
+                        status = excluded.status,
+                        consumed_at = excluded.consumed_at,
+                        metadata_json = excluded.metadata_json
+                    """,
+                    (
+                        approval["approval_id"],
+                        approval.get("execution_id"),
+                        approval.get("actor", "local_operator"),
+                        approval["capability"],
+                        approval["operation_digest"],
+                        approval.get("digest_version", 1),
+                        approval["token_verifier"],
+                        float(approval["issued_at"]),
+                        float(approval["expires_at"]),
+                        approval.get("decision", "approved"),
+                        approval.get("status", "pending"),
+                        float(approval["consumed_at"])
+                        if approval.get("consumed_at") is not None
+                        else None,
+                        metadata_json,
+                    ),
+                )
+                conn.commit()
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_approval(self, approval_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve an approval record by primary key."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM approvals WHERE approval_id = ?", (approval_id,))
+                row = cursor.fetchone()
+                return self._row_to_approval(row) if row else None
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_approval_by_verifier(self, token_verifier: str) -> Optional[Dict[str, Any]]:
+        """Retrieve an approval record by token verifier digest."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM approvals WHERE token_verifier = ?", (token_verifier,)
+                )
+                row = cursor.fetchone()
+                return self._row_to_approval(row) if row else None
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def atomic_consume_approval(self, approval_id: str, token_verifier: str, now: float) -> bool:
+        """Atomically transition approval from 'approved' to 'consumed' in SQLite."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    UPDATE approvals
+                    SET status = 'consumed', consumed_at = ?
+                    WHERE approval_id = ?
+                      AND token_verifier = ?
+                      AND status = 'approved'
+                      AND expires_at > ?
+                    """,
+                    (now, approval_id, token_verifier, now),
+                )
+                conn.commit()
+                return cursor.rowcount == 1
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_approvals(
+        self, status: Optional[str] = None, execution_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """List persisted approval records."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                query = "SELECT * FROM approvals WHERE 1=1"
+                params = []
+                if status:
+                    query += " AND status = ?"
+                    params.append(status)
+                if execution_id:
+                    query += " AND execution_id = ?"
+                    params.append(execution_id)
+                query += " ORDER BY issued_at DESC"
+                cursor.execute(query, tuple(params))
+                rows = cursor.fetchall()
+                return [self._row_to_approval(r) for r in rows]
             finally:
                 if not self._is_memory:
                     conn.close()

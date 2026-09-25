@@ -595,7 +595,7 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
 
 ## Tasks
 
-### [ ] R2.1 — Mandatory local IPC authentication
+### [x] R2.1 — Mandatory local IPC authentication
 
 - **Migration:** `REFACTOR`
 - **Target release:** `0.5`
@@ -607,12 +607,12 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
   - Require auth on privileged APIs.
   - Keep only minimal liveness endpoint unauthenticated.
 - **Acceptance Criteria:**
-  - [ ] Missing/wrong token yields 401/403.
-  - [ ] Desktop remains functional with trusted token.
+  - [x] Missing/wrong token yields 401/403.
+  - [x] Desktop remains functional with trusted token.
 - **Required Evidence:**
   - Security integration tests.
 
-### [ ] R2.2 — Origin/CORS hardening
+### [x] R2.2 — Origin/CORS hardening
 
 - **Migration:** `REFACTOR`
 - **Target release:** `0.5`
@@ -623,11 +623,11 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
   - Explicit allowed origins.
   - Production-native mode disables unnecessary browser origins.
 - **Acceptance Criteria:**
-  - [ ] Arbitrary origin rejected.
+  - [x] Arbitrary origin rejected.
 - **Required Evidence:**
   - CORS regression test.
 
-### [ ] R2.3 — Mandatory backend policy boundary
+### [x] R2.3 — Mandatory backend policy boundary
 
 - **Migration:** `REFACTOR`
 - **Target release:** `0.5`
@@ -638,12 +638,12 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
   - Move policy interception into Tool Runtime/ExecutionCoordinator.
   - Remove frontend fail-open fallback.
 - **Acceptance Criteria:**
-  - [ ] Denied tool never executes.
-  - [ ] Policy-evaluation error blocks protected work.
+  - [x] Denied tool never executes.
+  - [x] Policy-evaluation error blocks protected work.
 - **Required Evidence:**
   - Negative-path tool tests.
 
-### [ ] R2.4 — Exact-operation approval tokens
+### [x] R2.4 — Exact-operation approval tokens
 
 - **Migration:** `REFACTOR`
 - **Target release:** `0.5`
@@ -654,25 +654,25 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
   - Bind approval to execution/tool/argument digest/actor/expiry/nonce.
   - Single-use consumption.
 - **Acceptance Criteria:**
-  - [ ] Forged, replayed, expired and mismatched approvals fail.
+  - [x] Forged, replayed, expired and mismatched approvals fail.
 - **Required Evidence:**
   - Approval security suite.
 
-### [ ] R2.5 — Canonical workspace path enforcement
+### [x] R2.5 — Canonical workspace path enforcement
 
 - **Migration:** `REFACTOR`
 - **Target release:** `0.5`
-- **Initial maturity:** `S0` unless `docs/STATUS.md` verifies a higher level from legacy work.
+- **Initial maturity:** `S1 — implemented and implementation-tested`
 - **Dependencies:** R1.6
 - **User Story:** As a user, I want tools constrained to approved project roots so path traversal or symlink tricks cannot reach unrelated files.
 - **Deliverables:**
-  - Canonicalize paths.
-  - Resolve symlinks before authorization.
-  - Per-tool workspace scopes.
+  - Canonicalize paths via single `ResolvedWorkspacePath` PathLike value object.
+  - Pre-authorization realpath resolution (symlinks, ancestor chains) and pre-side-effect TOCTOU revalidation.
+  - Per-tool workspace scopes with caller-narrowing-only hierarchy (`project_root ∩ union(capability_scopes) ∩ union(policy_scopes) ∩ optional_caller_narrower_scope`).
 - **Acceptance Criteria:**
-  - [ ] `../`, symlink and absolute escape tests blocked.
+  - [x] `../`, symlink and absolute escape tests blocked (24/24 test scenarios passing). Cross-platform path semantics implemented and tested at unit level.
 - **Required Evidence:**
-  - Filesystem security tests.
+  - `tests/test_r2_workspace_paths.py` (24 dedicated security test scenarios).
 
 ### [ ] R2.6 — Secrets service and runtime injection
 

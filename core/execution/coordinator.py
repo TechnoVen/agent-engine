@@ -46,6 +46,7 @@ if TYPE_CHECKING:
 from core.safety.pending import PendingOperationRegistry
 from core.safety.policy import PolicyDecision, PolicyEngine
 from core.skills.boundary import CapabilityBoundary
+from core.skills.path import compute_effective_workspace_scopes
 from core.skills.models import Skill, SkillMetadata, SkillPermission, SkillSource
 from core.ledger.models import sanitize_sensitive_data, _SENSITIVE_KEY_PATTERN
 from core.storage import get_storage_backend
@@ -94,7 +95,7 @@ class ExecutionCoordinator:
         else:
             self.model_router = model_router
         self.session_store = session_store
-        self.pending_registry = pending_registry or PendingOperationRegistry()
+        self.pending_registry = pending_registry or PendingOperationRegistry(storage=self.storage)
         self._dispatch_override = dispatch_override
         if pipeline_registry is not None:
             self.pipeline_registry = pipeline_registry
@@ -288,10 +289,29 @@ class ExecutionCoordinator:
             perms = declared_permissions or (
                 getattr(resolved_meta, "permissions", []) if resolved_meta else []
             )
+            declared_scopes = (
+                getattr(resolved_meta, "workspace_scopes", []) if resolved_meta else []
+            )
+            caller_narrowing = None
+            if isinstance(inv_inputs, dict):
+                caller_narrowing = inv_inputs.get("requested_workspace_scope") or inv_inputs.get(
+                    "requested_working_directory"
+                )
+            effective_scopes = compute_effective_workspace_scopes(
+                project_root=project_root,
+                capability_scopes=declared_scopes,
+                requested_workspace_scope=caller_narrowing,
+            )
             boundary = CapabilityBoundary(
                 project_root=project_root,
                 declared_permissions=perms,
                 cancellation_token=token,
+                policy_engine=self.policy_engine,
+                pending_registry=self.pending_registry,
+                execution_id=execution_id,
+                actor="local_operator",
+                workspace_scopes=effective_scopes,
+                project_id=getattr(execution.request, "project_id", None) or "proj_default",
             )
 
             fn = skill_callable or default_callable
@@ -1628,10 +1648,31 @@ class ExecutionCoordinator:
                     if request.inputs.get("declared_permissions"):
                         declared_perms = request.inputs.get("declared_permissions")
 
+                    declared_scopes = (
+                        getattr(resolved_skill_meta, "workspace_scopes", [])
+                        if resolved_skill_meta
+                        else []
+                    )
+                    caller_narrowing = request.inputs.get(
+                        "requested_workspace_scope"
+                    ) or request.inputs.get("requested_working_directory")
+                    effective_scopes = compute_effective_workspace_scopes(
+                        project_root=project_root,
+                        capability_scopes=declared_scopes,
+                        requested_workspace_scope=caller_narrowing,
+                    )
+
                     boundary = CapabilityBoundary(
                         project_root=project_root,
                         declared_permissions=declared_perms,
                         cancellation_token=token,
+                        policy_engine=self.policy_engine,
+                        pending_registry=self.pending_registry,
+                        execution_id=exec_id,
+                        actor=request.inputs.get("actor", "local_operator"),
+                        approval_token=request.inputs.get("approval_token"),
+                        workspace_scopes=effective_scopes,
+                        project_id=request.project_id,
                     )
 
                     if skill_custom_callable:

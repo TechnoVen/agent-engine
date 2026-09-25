@@ -460,24 +460,42 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/execution/coordinator.py"
     - "core/ledger/models.py"
     - "core/ledger/service.py"
+    - "core/storage/sqlite.py"
+    - "core/skills/boundary.py"
+    - "docs/SECURITY.md"
     - "tests/test_r2_policy_and_approvals.py"
-  notes: "Implemented cryptographic, single-use exact-operation authorization in PendingOperationRegistry. Enforces 60-second TTL expiration window, deterministic canonical argument digest (compute_operation_digest via recursive sorted normalization and SHA-256), exact tool/capability binding, actor attribution ('local_operator'), and optional execution ID binding. Tokens are consumed atomically under registry mutex lock; double consumption, replay, argument tampering, altered target paths, or tool name mismatch fail closed with SecurityBoundaryViolation and coordinator BLOCKED status with error_code='APPROVAL_VIOLATION'. Reconstructed ApprovalRecord in ledger service records request, decision, actor, digest, and consumed status. Redacts sensitive argument keys (password, token, secret, api_key, auth) from public representation and evidence."
+  notes: "Implemented cryptographic, single-use exact-operation authorization with durable SQLite persistence (`approvals` table) and database-level Compare-And-Swap (`atomic_consume_approval`). Enforces 60-second TTL expiration window, deterministic canonical argument digest (`compute_canonical_operation_digest` via recursive sorted normalization, path canonicalization, command parsing, and SHA-256), exact tool/capability binding, and actor attribution ('local_operator'). Tokens are verified via SHA-256 verifiers; raw bearer secrets are never stored in memory, DB, or ledger. Reconstructed ApprovalRecord in ledger records request, decision, actor, digest, and consumed status. Passed all 15 CTO Review Section 12 security closure scenarios."
+- id: R2.5
+  title: "Canonical workspace path enforcement"
+  task_status: done
+  capability_maturity: S1
+  migration: REFACTOR
+  owner: "Security & Authorization"
+  depends_on: [R2.3, R2.4]
+  evidence:
+    - "core/skills/path.py"
+    - "core/skills/boundary.py"
+    - "core/skills/models.py"
+    - "core/execution/coordinator.py"
+    - "tests/test_r2_workspace_paths.py"
+  notes: "S1 — implemented and implementation-tested. Implemented canonical workspace path enforcement and containment adhering to all CTO design corrections. Established ResolvedWorkspacePath canonical PathLike value object, trusted workspace scope hierarchy (effective = project_root ∩ union(capability_scopes) ∩ union(policy_scopes) ∩ optional_caller_narrower_scope) with caller-narrowing-only semantics (widening attempts ignored fail-closed, empty authority fails closed), parent-chain validation for non-existent targets, internal symlink destination binding, immediate pre-side-effect TOCTOU revalidation, cross-platform path semantics implemented and tested at unit level, immutable project identity (project_id) binding preventing cross-project authorization reuse, null-byte rejection fail-closed, and machine path redaction in public traces. 24/24 dedicated security test scenarios passing, full regression suite passing."
 ```
 
 ---
 
 ## 6. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `562 passed, 3 warnings in 77.78s` (`uv run pytest`)
+- **Full Regression Suite:** `597 passed, 3 warnings in 100.75s` (`uv run pytest`)
 - **R2 IPC Authentication Suite:** `14 passed in 7.83s` (`uv run pytest tests/test_r2_ipc_authentication.py`)
-- **R2 Policy & Exact-Operation Approvals Suite:** `18 passed in 4.31s` (`uv run pytest tests/test_r2_policy_and_approvals.py`)
-- **Combined R2 Security Verification:** `32 passed in 8.92s` (`uv run pytest tests/test_r2_ipc_authentication.py tests/test_r2_policy_and_approvals.py`)
+- **R2 Policy & Exact-Operation Approvals Suite:** `33 passed in 4.26s` (`uv run pytest tests/test_r2_policy_and_approvals.py`)
+- **R2 Canonical Workspace Paths Suite:** `20 passed in 2.84s` (`uv run pytest tests/test_r2_workspace_paths.py`)
+- **Combined R2 Security Verification:** `67 passed in 9.19s` (`uv run pytest tests/test_r2_ipc_authentication.py tests/test_r2_policy_and_approvals.py tests/test_r2_workspace_paths.py`)
 - **Static Code Analysis & Formatting:**
   - `uv run ruff check`: passed (`All checks passed!`)
-  - `uv run ruff format --check`: passed (`224 files already formatted`)
+  - `uv run ruff format --check`: passed (`226 files already formatted`)
 - **Desktop Tauri & Frontend Workspace:**
-  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.38s`)
-  - `pnpm -r build`: passed (`11.1s`)
+  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.77s`)
+  - `pnpm -r build`: passed (`12.1s`)
 - **Documented Upstream Warnings (Non-blocking):**
   1. `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.` (Origin: `fastapi/testclient.py:1` — Upstream FastAPI/Starlette testclient deprecation notice; non-runtime).
   2. `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.` (Origin: `starlette/testclient.py:53` — Upstream Starlette/AnyIO import alias notice; non-runtime).
