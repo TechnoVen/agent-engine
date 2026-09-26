@@ -1,7 +1,4 @@
 import ast
-import builtins
-import contextlib
-import io
 
 from tools.dev_dashboard import auto_repair_naked_return, extract_code_block
 
@@ -63,86 +60,14 @@ print(optimized_data)"""
     repaired = auto_repair_naked_return(broken_code)
     clean = extract_code_block(repaired)
 
-    safe_builtins = {
-        name: getattr(builtins, name)
-        for name in [
-            "abs",
-            "all",
-            "any",
-            "ascii",
-            "bin",
-            "bool",
-            "bytearray",
-            "bytes",
-            "chr",
-            "complex",
-            "dict",
-            "divmod",
-            "enumerate",
-            "filter",
-            "float",
-            "format",
-            "frozenset",
-            "getattr",
-            "hasattr",
-            "hash",
-            "hex",
-            "int",
-            "isinstance",
-            "issubclass",
-            "iter",
-            "len",
-            "list",
-            "map",
-            "max",
-            "min",
-            "next",
-            "oct",
-            "ord",
-            "pow",
-            "print",
-            "range",
-            "repr",
-            "reversed",
-            "round",
-            "set",
-            "slice",
-            "sorted",
-            "str",
-            "sum",
-            "tuple",
-            "type",
-            "zip",
-            "open",
-            "Exception",
-            "ValueError",
-            "TypeError",
-            "RuntimeError",
-            "KeyError",
-            "IndexError",
-            "AttributeError",
-            "ImportError",
-            "ZeroDivisionError",
-            "OverflowError",
-            "StopIteration",
-            "AssertionError",
-            "SyntaxError",
-            "NameError",
-        ]
-        if hasattr(builtins, name)
-    }
-    safe_builtins["__import__"] = __import__
+    import tempfile
+    from pathlib import Path
 
-    safe_globals = {
-        "__builtins__": safe_builtins,
-        "__name__": "__sandbox__",
-        "__doc__": None,
-    }
+    from core.sandbox import SandboxService
 
-    out = io.StringIO()
-    err = io.StringIO()
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-        exec(clean, safe_globals)
-
-    assert "[1, 2, 5]" in out.getvalue()
-    assert err.getvalue() == ""
+    svc = SandboxService()
+    if svc.is_available():
+        with tempfile.TemporaryDirectory() as td:
+            res = svc.run_code(clean, workspace_dir=Path(td))
+            assert "[1, 2, 5]" in res.stdout
+            assert res.exit_code == 0

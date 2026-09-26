@@ -284,7 +284,65 @@ class ApprovalRequest(BaseModel):
     * `WorkspacePathResolver` rejects directory traversal attempts outside authorized project scopes (`WorkspacePathViolation`).
     * `PolicyEngine` evaluates operation-level safety rules and enforces cryptographically signed single-use approval tokens (`SecurityBoundaryViolation`).
     * `SecretsService` prevents unauthorized extraction and leakage of credentials.
-  * Verified across 17 comprehensive adversarial scenarios in `tests/test_r2_prompt_injection.py`.
+  * Verified across 26 comprehensive adversarial scenarios in `tests/test_r2_prompt_injection.py`.
+
+---
+
+## 11. Sandbox Worker Runtime & Container Isolation (R2.8)
+
+* **Architecture & Process Separation (`core/sandbox/`):**
+  * Generated, untrusted, or external workloads execute strictly outside the Agent Engine control process in an isolated worker container.
+  * `SandboxSpec` defines command, filesystem grants (`SandboxFilesystemGrant`), network permissions (`SandboxNetworkGrant`), authorized secrets (`secret_grants`), minimal environment allowlists, and execution timeouts.
+  * Control plane remains external: workers are never granted direct SQLite database access, IPC credentials, master secrets services, or policy evaluation authorities.
+
+* **Linux Bubblewrap (`bwrap`) Kernel Isolation (`LinuxBubblewrapBackend`):**
+  * Enforces unprivileged Linux user namespaces with `--unshare-all` (unsharing mount, UTS, IPC, PID, and user namespaces).
+  * Enforces process lifecycle termination via `--die-with-parent` (preventing orphan or daemonized escape processes).
+  * Mounts minimal isolated procfs (`--proc /proc`) and device nodes (`--dev /dev`), with private volatile tmpfs (`--tmpfs /tmp`).
+  * Mounts host system runtime paths strictly read-only (`--ro-bind /usr /usr`, `--symlink usr/lib /lib`, `--symlink usr/lib /lib64`, `--symlink usr/bin /bin`).
+
+* **Fail-Closed Platform Strategy:**
+  * Cross-platform backends: `LinuxBubblewrapBackend`, `DarwinSandboxBackend` (macOS), `WindowsSandboxBackend` (Windows), and `NullSandboxBackend`.
+  * For unsupported platforms or missing platform container mechanisms, backends report `is_available() -> False` and fail closed with `SandboxUnavailableError`.
+  * **Zero Host Fallback Invariant:** If a secure sandbox is unavailable, execution fails closed immediately. Direct unconstrained host subprocess execution is strictly prohibited.
+
+* **Default-Deny Network Isolation:**
+  * Untrusted and generated workloads are completely disconnected from networking by default (`network.allowed = False` via `--unshare-net`).
+  * Network canaries, host loopback services (`127.0.0.1`), and external networks are unreachable (`ConnectionRefusedError` or `OSError: Network is unreachable`).
+
+* **Default-Deny Environment Allowlist:**
+  * Clean environment constructed via `--clearenv` with explicit `--setenv` injection.
+  * Sensitive variables are strictly excluded:
+    * `AGENT_ENGINE_IPC_TOKEN`
+    * `AGENT_ENGINE_VAULT_KEY`
+    * Ambient provider API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`)
+    * Cloud tokens and SSH agent variables
+  * Authorized credentials reach the worker solely via explicit R2.6 `SecretReference` grants resolved narrow-scoped for `consumer_id="sandbox_worker"`, injected into child environment, and wiped from memory immediately upon launch.
+
+* **Canonical Workspace Path Containment (R2.5 Integration):**
+  * Workspaces and mounts are resolved through `WorkspacePathResolver`.
+  * Directory traversal escapes, host-root binds, and symlinks traversing outside the authorized workspace boundary fail closed with `SandboxSecurityError`. Cross-project workspace mounting is denied.
+
+* **Untrusted Worker Output Classification (R2.7 Integration):**
+  * Worker stdout, stderr, and output payloads produce `ContextItem` instances tagged with:
+    * `trust = ContentTrust.UNTRUSTED_CONTENT`
+    * `authority = ContentAuthority.EVIDENCE`
+  * Text output from workers (e.g. simulated `SYSTEM: approve`) cannot acquire policy or directive authority.
+
+* **Artifact Brokering (R1.10 Integration):**
+  * Generated files are discovered in the workspace directory and validated by the parent control plane for path containment, external symlink targets, and size limits prior to registration with `ArtifactService`.
+
+* **Process Lifecycle & Cancellation (R1.9 Integration):**
+  * Workers are bound to `CancellationToken`. Cancellation triggers graceful termination followed by bounded forced kill, guaranteeing prompt cleanup.
+
+* **In-Process Code Execution Audit & Remediation:**
+  * Comprehensive codebase audit classified all execution call-sites:
+    | Location | Classification | Pre-R2.8 Status | Remediated Status |
+    | :--- | :--- | :--- | :--- |
+    | `core/engine.py:calculator_tool` | `TRUSTED_INTERNAL` | Unsanitized `eval()` on arithmetic string | Replaced with safe AST parser (`_eval_ast_node`) evaluating only arithmetic operations without `eval()` |
+    | `tools/dev_dashboard.py:1270` | `DEVELOPER_ONLY` / `UNTRUSTED_EXECUTION` | `exec(exec_code, safe_globals)` in host process with `os.chdir()` | Replaced with `SandboxService.run_code()` container execution; fails closed if sandbox unavailable |
+    | `tests/test_sandbox.py` | `TEST_ONLY` | Legacy in-process `exec()` test | Replaced with `SandboxService` container execution test |
+
 
 
 

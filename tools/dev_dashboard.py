@@ -3,8 +3,6 @@
 # v1.0.0 | DSPy + ChromaDB + FastMCP
 
 import ast
-import builtins
-import contextlib
 import io
 import json
 import os
@@ -1264,97 +1262,30 @@ def render_speedometer_and_sandbox():
                         )
 
                 if syntax_ok:
-                    old_cwd = os.getcwd()
                     with tempfile.TemporaryDirectory() as tmpdir:
-                        os.chdir(tmpdir)
                         try:
-                            # Rich safe builtins for sandboxed execution
-                            safe_builtins = {
-                                name: getattr(builtins, name)
-                                for name in [
-                                    "abs",
-                                    "all",
-                                    "any",
-                                    "ascii",
-                                    "bin",
-                                    "bool",
-                                    "bytearray",
-                                    "bytes",
-                                    "chr",
-                                    "complex",
-                                    "dict",
-                                    "divmod",
-                                    "enumerate",
-                                    "filter",
-                                    "float",
-                                    "format",
-                                    "frozenset",
-                                    "getattr",
-                                    "hasattr",
-                                    "hash",
-                                    "hex",
-                                    "int",
-                                    "isinstance",
-                                    "issubclass",
-                                    "iter",
-                                    "len",
-                                    "list",
-                                    "map",
-                                    "max",
-                                    "min",
-                                    "next",
-                                    "oct",
-                                    "ord",
-                                    "pow",
-                                    "print",
-                                    "range",
-                                    "repr",
-                                    "reversed",
-                                    "round",
-                                    "set",
-                                    "slice",
-                                    "sorted",
-                                    "str",
-                                    "sum",
-                                    "tuple",
-                                    "type",
-                                    "zip",
-                                    "open",
-                                    "Exception",
-                                    "ValueError",
-                                    "TypeError",
-                                    "RuntimeError",
-                                    "KeyError",
-                                    "IndexError",
-                                    "AttributeError",
-                                    "ImportError",
-                                    "ZeroDivisionError",
-                                    "OverflowError",
-                                    "StopIteration",
-                                    "AssertionError",
-                                    "SyntaxError",
-                                    "NameError",
-                                ]
-                                if hasattr(builtins, name)
-                            }
-                            safe_builtins["__import__"] = __import__
+                            from pathlib import Path
 
-                            safe_globals = {
-                                "__builtins__": safe_builtins,
-                                "__name__": "__sandbox__",
-                                "__doc__": None,
-                            }
+                            from core.sandbox import SandboxService
 
-                            with (
-                                contextlib.redirect_stdout(output_capture),
-                                contextlib.redirect_stderr(error_capture),
-                            ):
-                                exec(exec_code, safe_globals)
-
+                            sandbox_svc = SandboxService()
+                            if sandbox_svc.is_available():
+                                res = sandbox_svc.run_code(exec_code, workspace_dir=Path(tmpdir))
+                                if res.stdout:
+                                    output_capture.write(res.stdout)
+                                if res.stderr:
+                                    error_capture.write(res.stderr)
+                                if res.exit_code != 0 and not res.stderr:
+                                    error_capture.write(
+                                        f"Process exited with code {res.exit_code}\n"
+                                    )
+                            else:
+                                error_capture.write(
+                                    "Secure container sandbox is unavailable on this platform. "
+                                    "Unsandboxed execution in host process is disabled fail-closed (R2.8).\n"
+                                )
                         except Exception as e:
                             error_capture.write(f"Runtime Exception: {e}\n")
-                        finally:
-                            os.chdir(old_cwd)
 
                 # Display results
                 st.subheader("📤 Execution Output")

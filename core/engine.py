@@ -1,7 +1,47 @@
+import ast
+import operator
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import dspy
 from pydantic import BaseModel, Field
+
+_SAFE_ARITHMETIC_OPS = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.FloorDiv: operator.floordiv,
+    ast.Mod: operator.mod,
+    ast.Pow: operator.pow,
+    ast.USub: operator.neg,
+    ast.UAdd: operator.pos,
+}
+
+
+def _eval_ast_node(node: ast.AST) -> Union[int, float]:
+    if isinstance(node, ast.Expression):
+        return _eval_ast_node(node.body)
+    elif isinstance(node, ast.Constant):
+        if isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+            return node.value
+        raise TypeError(f"Unsupported constant type: {type(node.value).__name__}")
+    elif isinstance(node, ast.BinOp):
+        op_type = type(node.op)
+        if op_type not in _SAFE_ARITHMETIC_OPS:
+            raise ValueError(f"Unsupported binary operator: {op_type.__name__}")
+        left = _eval_ast_node(node.left)
+        right = _eval_ast_node(node.right)
+        if op_type is ast.Pow and (abs(right) > 100 or abs(left) > 10000):
+            raise ValueError("Exponentiation arguments out of safe bounds")
+        return _SAFE_ARITHMETIC_OPS[op_type](left, right)
+    elif isinstance(node, ast.UnaryOp):
+        op_type = type(node.op)
+        if op_type not in _SAFE_ARITHMETIC_OPS:
+            raise ValueError(f"Unsupported unary operator: {op_type.__name__}")
+        operand = _eval_ast_node(node.operand)
+        return _SAFE_ARITHMETIC_OPS[op_type](operand)
+    else:
+        raise ValueError(f"Unsupported syntax: {type(node).__name__}")
 
 
 class NodeConfig(BaseModel):
@@ -79,13 +119,14 @@ def register_tool(name: str):
 # Built-in sample tools
 @register_tool("calculator")
 def calculator_tool(expression: str) -> str:
-    """Evaluate a mathematical expression safely."""
+    """Evaluate a mathematical expression safely via AST parsing."""
     try:
-        # Simple arithmetic evaluator for safety
-        allowed = set("0123456789+-*/(). %")
-        if all(c in allowed for c in expression.strip()):
-            return str(eval(expression.strip()))
-        return "Error: Expression contains unsupported characters"
+        cleaned = expression.strip()
+        if not cleaned:
+            return "Error: Empty expression"
+        parsed = ast.parse(cleaned, mode="eval")
+        result = _eval_ast_node(parsed)
+        return str(result)
     except Exception as e:
         return f"Error: {e}"
 

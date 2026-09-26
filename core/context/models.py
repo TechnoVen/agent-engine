@@ -185,6 +185,8 @@ class ContextItem:
             ContentTrust.TRUSTED_USER,
         ) and self.authority in (ContentAuthority.SYSTEM_POLICY, ContentAuthority.USER_DIRECTIVE)
 
+    has_instruction_authority = can_exercise_authority
+
     @property
     def rendered_projection(self) -> str:
         """Model-safe rendered projection (e.g. structured envelope for untrusted content)."""

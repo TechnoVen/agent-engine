@@ -199,6 +199,8 @@ class CancellationToken:
         else:
             self._callbacks.append(cb)
 
+    register_callback = add_callback
+
     async def wait(self) -> None:
         """Await cancellation signal."""
         await self._event.wait()

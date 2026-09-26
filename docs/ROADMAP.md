@@ -716,7 +716,7 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
 - **Required Evidence:**
   - Adversarial context tests (`tests/test_r2_prompt_injection.py` — 17 comprehensive scenarios).
 
-### [ ] R2.8 — Sandbox worker runtime
+### [x] R2.8 — Sandbox worker runtime
 
 - **Migration:** `SUPERSEDE`
 - **Target release:** `0.5`
@@ -724,12 +724,12 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
 - **Dependencies:** R2.3
 - **User Story:** As a user, I want generated or external code to run outside the Agent Engine control process so mistakes cannot directly compromise the host.
 - **Deliverables:**
-  - Separate worker process/container boundary.
-  - Explicit filesystem/network/secret mounts.
+  - Separate worker process/container boundary (`SandboxBackend`, `LinuxBubblewrapBackend`, `SandboxService`).
+  - Explicit filesystem/network/secret mounts (`SandboxFilesystemGrant`, `SandboxMount`, `SandboxNetworkGrant`).
 - **Acceptance Criteria:**
-  - [ ] Generated code cannot access host secrets or paths outside sandbox grants.
+  - [x] Generated code cannot access host secrets or paths outside sandbox grants.
 - **Required Evidence:**
-  - Sandbox negative tests.
+  - Sandbox negative tests (`tests/test_r2_sandbox_runtime.py` — 18 comprehensive security scenarios).
 
 ### [ ] R2.9 — Sandbox resource limits
 

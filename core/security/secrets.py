@@ -288,6 +288,8 @@ class SecretsService:
             updated_at=now,
         )
 
+    store_secret = create
+
     def delete(self, ref: SecretReference) -> bool:
         """Delete a secret across all backends."""
         srv = self._service_name_for_ref(ref)
