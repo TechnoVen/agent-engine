@@ -88,9 +88,13 @@ async def get_credential_endpoint(
     request: Request,
     reveal: bool = Query(False, description="Whether to reveal the plaintext secret value"),
 ):
-    """Retrieve a stored credential. Masked by default unless reveal=true is explicitly set."""
+    """Retrieve a stored credential. Plaintext reveal is permanently disabled for security."""
     if reveal:
         verify_ipc_token(request)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Plaintext credential reveal is disabled for security",
+        )
 
     mgr = _get_credential_manager()
     val = mgr.get_credential(service, key)
@@ -104,8 +108,8 @@ async def get_credential_endpoint(
         key=key,
         masked_value=mask_secret(val),
         backend=mgr.active_backend_name,
-        value=val if reveal else None,
-        revealed=reveal,
+        value=None,
+        revealed=False,
         updated_at=time.time(),
     )
 

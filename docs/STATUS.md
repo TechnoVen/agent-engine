@@ -479,23 +479,40 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/execution/coordinator.py"
     - "tests/test_r2_workspace_paths.py"
   notes: "S1 — implemented and implementation-tested. Implemented canonical workspace path enforcement and containment adhering to all CTO design corrections. Established ResolvedWorkspacePath canonical PathLike value object, trusted workspace scope hierarchy (effective = project_root ∩ union(capability_scopes) ∩ union(policy_scopes) ∩ optional_caller_narrower_scope) with caller-narrowing-only semantics (widening attempts ignored fail-closed, empty authority fails closed), parent-chain validation for non-existent targets, internal symlink destination binding, immediate pre-side-effect TOCTOU revalidation, cross-platform path semantics implemented and tested at unit level, immutable project identity (project_id) binding preventing cross-project authorization reuse, null-byte rejection fail-closed, and machine path redaction in public traces. 24/24 dedicated security test scenarios passing, full regression suite passing."
+- id: R2.6
+  title: "Secrets service and runtime injection"
+  task_status: done
+  capability_maturity: S1
+  migration: EXPAND
+  owner: "Security & Authorization"
+  depends_on: [R2.1]
+  evidence:
+    - "core/security/secrets.py"
+    - "core/security/credentials.py"
+    - "core/security/__init__.py"
+    - "core/models.py"
+    - "core/router/model_router.py"
+    - "services/python/server/routers/credentials.py"
+    - "tests/test_r2_secrets_service.py"
+  notes: "S1 — implemented and implementation-tested. Unified credential and secrets subsystem into SecretsService. Implemented strong value object isolation: SecretReference (public), SecretMetadata (masked public), SecretValue (transient internal container with str/repr/format returning '***', reveal() strictly scoped, and wipe() zeroing). Storage hierarchy prioritizes OS Keychain with hardened AES-256-GCM EncryptedVault fallback. Eliminated weak machine identifiers; vault uses 256-bit high-entropy key via AGENT_ENGINE_VAULT_KEY or vault.key with 0600 POSIX permissions. Added automatic transparent migration for existing legacy vaults. Permanently eliminated plaintext reveal APIs (reveal=true rejected with 403 Forbidden). Implemented backend-only connection testing. Completely eliminated global os.environ pollution from core/models.py and model_router.py; API keys injected directly into dspy.LM and child subprocess invocation environments. Enforced consumer authorization and project scope isolation. 25/25 dedicated security test scenarios passing, 626/626 full regression passing."
 ```
 
 ---
 
 ## 6. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `597 passed, 3 warnings in 100.75s` (`uv run pytest`)
+- **Full Regression Suite:** `626 passed, 3 warnings in 75.19s` (`uv run pytest`)
 - **R2 IPC Authentication Suite:** `14 passed in 7.83s` (`uv run pytest tests/test_r2_ipc_authentication.py`)
 - **R2 Policy & Exact-Operation Approvals Suite:** `33 passed in 4.26s` (`uv run pytest tests/test_r2_policy_and_approvals.py`)
-- **R2 Canonical Workspace Paths Suite:** `20 passed in 2.84s` (`uv run pytest tests/test_r2_workspace_paths.py`)
-- **Combined R2 Security Verification:** `67 passed in 9.19s` (`uv run pytest tests/test_r2_ipc_authentication.py tests/test_r2_policy_and_approvals.py tests/test_r2_workspace_paths.py`)
+- **R2 Canonical Workspace Paths Suite:** `24 passed in 2.90s` (`uv run pytest tests/test_r2_workspace_paths.py`)
+- **R2 Secrets Service & Runtime Injection Suite:** `25 passed in 3.89s` (`uv run pytest tests/test_r2_secrets_service.py`)
+- **Combined R2 Security Verification:** `96 passed in 13.08s` (`uv run pytest tests/test_r2_ipc_authentication.py tests/test_r2_policy_and_approvals.py tests/test_r2_workspace_paths.py tests/test_r2_secrets_service.py`)
 - **Static Code Analysis & Formatting:**
   - `uv run ruff check`: passed (`All checks passed!`)
-  - `uv run ruff format --check`: passed (`226 files already formatted`)
+  - `uv run ruff format --check`: passed
 - **Desktop Tauri & Frontend Workspace:**
-  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.77s`)
-  - `pnpm -r build`: passed (`12.1s`)
+  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.80s`)
+  - `pnpm -r build`: passed (`12.3s`)
 - **Documented Upstream Warnings (Non-blocking):**
   1. `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.` (Origin: `fastapi/testclient.py:1` — Upstream FastAPI/Starlette testclient deprecation notice; non-runtime).
   2. `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.` (Origin: `starlette/testclient.py:53` — Upstream Starlette/AnyIO import alias notice; non-runtime).

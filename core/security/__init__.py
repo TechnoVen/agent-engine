@@ -14,14 +14,28 @@ from core.security.credentials import (
     mask_secret,
     reset_credential_manager,
 )
+from core.security.secrets import (
+    SecretMetadata,
+    SecretReference,
+    SecretValue,
+    SecretsService,
+    get_secrets_service,
+    reset_secrets_service,
+)
 
 __all__ = [
     "CredentialBackend",
     "CredentialManager",
     "EncryptedVaultBackend",
     "KeyringBackend",
+    "SecretMetadata",
+    "SecretReference",
+    "SecretValue",
+    "SecretsService",
     "VaultIntegrityError",
     "get_credential_manager",
+    "get_secrets_service",
     "mask_secret",
     "reset_credential_manager",
+    "reset_secrets_service",
 ]

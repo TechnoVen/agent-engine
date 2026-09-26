@@ -286,12 +286,10 @@ def test_api_credentials_crud(test_client):
     assert get_data["value"] is None
     assert get_data["revealed"] is False
 
-    # 5. Get credential with reveal=true
+    # 5. Get credential with reveal=true returns 403 Forbidden (reveal eliminated)
     get_rev_res = test_client.get("/v1/credentials/llm/OPENAI_API_KEY?reveal=true")
-    assert get_rev_res.status_code == 200
-    rev_data = get_rev_res.json()
-    assert rev_data["value"] == "sk-proj-supersecretkey9999"
-    assert rev_data["revealed"] is True
+    assert get_rev_res.status_code == 403
+    assert "disabled" in get_rev_res.json()["detail"].lower()
 
     # 6. Delete credential
     del_res = test_client.delete("/v1/credentials/llm/OPENAI_API_KEY")

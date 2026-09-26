@@ -196,14 +196,13 @@ def test_credential_reveal_protection(client, monkeypatch):
     unauth_reveal = client.get("/v1/credentials/openai/api_key?reveal=true")
     assert unauth_reveal.status_code == 401
 
-    # Authenticated plaintext reveal should succeed
+    # Plaintext reveal is permanently eliminated in R2.6 and returns 403 Forbidden
     auth_reveal = client.get(
         "/v1/credentials/openai/api_key?reveal=true",
         headers={"Authorization": f"Bearer {secret_token}"},
     )
-    assert auth_reveal.status_code == 200
-    assert auth_reveal.json()["value"] == "sk-real-secret-12345"
-    assert auth_reveal.json()["revealed"] is True
+    assert auth_reveal.status_code == 403
+    assert "disabled" in auth_reveal.json()["detail"].lower()
 
 
 # ---------------------------------------------------------------------------

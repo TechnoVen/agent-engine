@@ -89,7 +89,8 @@ class ApprovalRequest(BaseModel):
 
 * **Secret Masking Invariant:**
   * All log outputs, telemetry records, and REST API responses mask secrets (`sk-...xxxx`).
-  * Plaintext secret exposure requires an explicit administrative parameter (`reveal=true`) and is recorded in the security audit log.
+  * Plaintext secret exposure via API (`reveal=true`) is permanently eliminated in Milestone R2.6 and returns `403 Forbidden`.
+  * Provider connection testing executes strictly backend-side without returning raw secrets.
 
 ---
 
@@ -192,4 +193,34 @@ class ApprovalRequest(BaseModel):
   * Rejects foreign Windows drive absolute paths (e.g. `C:\Windows\System32`) on POSIX systems.
   * Cross-platform path semantics are implemented and tested at the unit level.
   * Subprocess boundaries enforce canonical working directory (`cwd`) resolution, requiring `cwd` to exist, be a directory, and reside within authorized scopes. Subprocess commands are executed with structured argument vectors (`*cmd`), eliminating shell injection.
+
+---
+
+## 9. Unified Secrets Service & Runtime Injection (R2.6)
+
+* **Value Object Isolation:**
+  * Secrets handling enforces strict value object boundaries:
+    * `SecretReference`: Public immutable identifier containing `provider`, `name`, `scope`, and optional `project_id`. Canonical format: `{project_id}:{scope}:{provider}:{name}`. Never holds secret material.
+    * `SecretMetadata`: Public immutable metadata containing `SecretReference`, `backend`, `masked_value` (e.g. `sk-...4567`), `created_at`, `updated_at`. Plaintext values are strictly absent.
+    * `SecretValue`: Transient in-memory container. Guarantees `str(val) == '***'`, `repr(val) == '<SecretValue: ***>'`, `f"{val}" == '***'`, and format-string masking. Exposes `reveal()` only during authorized execution and provides `use()` context manager with memory zeroing/scrubbing upon completion.
+
+* **Hardened High-Entropy Key Material & Elimination of Weak Identifiers:**
+  * Weak hardware and machine identifiers (`uuid.getnode()`, username, hostname, machine-id) have been completely eliminated from the master key derivation pipeline.
+  * Key derivation requires explicit `AGENT_ENGINE_VAULT_KEY` (minimum 8 characters) or automatically generates and persists a cryptographically secure 256-bit random key in `vault.key`.
+  * On POSIX systems, `vault.key` strictly enforces `0600` permissions (`-rw-------`). Any permissive mode (group or world readable/writable) fails closed with `VaultIntegrityError`.
+  * Transparent automated migration: Existing vaults created prior to R2.6 are securely decrypted upon first access using legacy derivation and immediately re-encrypted with the new hardened 256-bit key.
+
+* **Elimination of Plaintext Reveal APIs:**
+  * The REST API endpoint `/v1/credentials/{service}/{key}?reveal=true` permanently rejects reveal requests with `403 Forbidden` (`detail="Plaintext credential reveal is disabled for security"`).
+  * API responses consistently return `value: null` and `revealed: false`.
+  * Provider connection testing (`POST /v1/credentials/test`) resolves credentials strictly backend-side and returns connection latency and validity without leaking secret material to the frontend.
+
+* **Elimination of Global `os.environ` Pollution:**
+  * Dynamic model instantiation (`core/models.py:get_model_provider` and `ModelRouter.create_lm`) passes API keys directly to model clients via constructor arguments (`dspy.LM(..., api_key=...)`), completely eliminating global process environment mutation.
+  * Tool and capability subprocess execution (`CapabilityBoundary.run_subprocess`) injects secrets exclusively into the child process invocation environment (`env={...}`) at spawn time, leaving parent process environment clean.
+
+* **Consumer Authorization & Project Scope Isolation:**
+  * Secret resolution (`SecretsService.resolve_for_consumer`) enforces caller capability checks, consumer identity matching against an authorized consumer whitelist, and strict project scope isolation (cross-project resolution fails closed with `PermissionError`).
+  * Missing or unauthorized secrets fail closed with `KeyError` or `PermissionError`.
+
 

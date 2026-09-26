@@ -21,10 +21,12 @@ def get_model_provider(
     model_name: str | None = None,
     cache: bool = True,
     max_tokens: int | None = None,
+    api_key: str | None = None,
 ) -> dspy.LM:
     """
-    Dynamic model factory with explicit OS environment variable injection,
+    Dynamic model factory with direct secret parameter injection,
     extended local timeout margins, and a fail-safe fallback routing loop.
+    Does not mutate global os.environ.
     """
     provider_name = provider_name.lower()
     local_model = os.getenv("LOCAL_MODEL_NAME", "qwen2.5-coder-3b-instruct-q4_k_m")
@@ -33,26 +35,22 @@ def get_model_provider(
     if max_tokens is None:
         max_tokens = int(os.getenv("DEFAULT_MAX_TOKENS", "4096"))
 
-    # Securely resolve credentials from CredentialManager or environment
+    # Securely resolve credentials from SecretsService or environment
     try:
-        from core.security import get_credential_manager
+        from core.security import get_secrets_service
 
-        cred_mgr = get_credential_manager()
+        secrets_svc = get_secrets_service()
     except Exception:
-        cred_mgr = None
+        secrets_svc = None
 
-    for key in (
-        "GEMINI_API_KEY",
-        "GOOGLE_API_KEY",
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "DEEPSEEK_API_KEY",
-        "KIMI_API_KEY",
-        "GROQ_API_KEY",
-    ):
-        value = cred_mgr.get_api_key(key) if cred_mgr else os.getenv(key)
-        if value:
-            os.environ[key] = value
+    def _resolve_key(key_name: str) -> str | None:
+        if api_key:
+            return api_key
+        if secrets_svc:
+            val = secrets_svc.get_api_key(key_name)
+            if val:
+                return val
+        return os.getenv(key_name)
 
     try:
         if provider_name in ("local", "llamacpp", "gemma4"):
@@ -82,9 +80,10 @@ def get_model_provider(
         if provider_name in ("gemini", "google"):
             target_model = model_name or "gemini/gemini-2.5-flash"
             logger.info(f"Engaging Gemini cloud channel client: {target_model}")
+            resolved_key = _resolve_key("GEMINI_API_KEY") or _resolve_key("GOOGLE_API_KEY")
             return dspy.LM(
                 target_model,
-                api_key=os.getenv("GEMINI_API_KEY"),
+                api_key=resolved_key,
                 max_tokens=min(max_tokens, 2000),
                 cache=cache,
             )
@@ -93,8 +92,17 @@ def get_model_provider(
             logger.info("Engaging OpenAI cloud channel client.")
             return dspy.LM(
                 model_name or "openai/gpt-4o-mini",
-                api_key=os.getenv("OPENAI_API_KEY"),
+                api_key=_resolve_key("OPENAI_API_KEY"),
                 max_tokens=min(max_tokens, 2000),
+                cache=cache,
+            )
+
+        if provider_name == "anthropic":
+            logger.info("Engaging Anthropic cloud channel client.")
+            return dspy.LM(
+                model=model_name or "anthropic/claude-3-5-sonnet-20241022",
+                api_key=_resolve_key("ANTHROPIC_API_KEY"),
+                max_tokens=min(max_tokens, 4000),
                 cache=cache,
             )
 
@@ -102,7 +110,7 @@ def get_model_provider(
             logger.info("Engaging DeepSeek cloud channel client.")
             return dspy.LM(
                 model=model_name or "deepseek/deepseek-chat",
-                api_key=os.getenv("DEEPSEEK_API_KEY"),
+                api_key=_resolve_key("DEEPSEEK_API_KEY"),
                 api_base="https://deepseek.com",
                 max_tokens=min(max_tokens, 4000),
                 cache=cache,
@@ -112,7 +120,7 @@ def get_model_provider(
             logger.info("Engaging Kimi cloud channel client.")
             return dspy.LM(
                 model=model_name or "moonshot-v1-8k",
-                api_key=os.getenv("KIMI_API_KEY"),
+                api_key=_resolve_key("KIMI_API_KEY"),
                 api_base="https://moonshot.cn",
                 max_tokens=min(max_tokens, 8000),
                 cache=cache,
@@ -122,7 +130,7 @@ def get_model_provider(
             logger.info("Engaging Groq cloud channel client.")
             return dspy.LM(
                 model=model_name or "groq/llama-3.3-70b-specdec",
-                api_key=os.getenv("GROQ_API_KEY"),
+                api_key=_resolve_key("GROQ_API_KEY"),
                 max_tokens=min(max_tokens, 8000),
                 cache=cache,
             )

@@ -13,14 +13,11 @@ Architecture:
 from __future__ import annotations
 
 import abc
-import hashlib
 import json
 import logging
 import os
 import pathlib
-import platform
 import time
-import uuid
 from typing import Any, Dict, List, Optional
 
 from cryptography.exceptions import InvalidTag
@@ -121,13 +118,22 @@ class EncryptedVaultBackend(CredentialBackend):
     NONCE_SIZE = 12
     PBKDF2_ITERATIONS = 100_000
 
-    def __init__(self, vault_path: Optional[str | pathlib.Path] = None):
+    def __init__(
+        self,
+        vault_path: Optional[str | pathlib.Path] = None,
+        key_file_path: Optional[str | pathlib.Path] = None,
+    ):
         if vault_path is None:
             # Default to data/credentials.vault relative to project root
             base_dir = pathlib.Path(__file__).resolve().parent.parent.parent / "data"
             self.vault_path = base_dir / "credentials.vault"
         else:
             self.vault_path = pathlib.Path(vault_path)
+
+        if key_file_path is None:
+            self.key_file_path = self.vault_path.with_name("vault.key")
+        else:
+            self.key_file_path = pathlib.Path(key_file_path)
 
         self._master_seed = self._derive_master_seed()
 
@@ -136,32 +142,78 @@ class EncryptedVaultBackend(CredentialBackend):
         return "encrypted_vault"
 
     def _derive_master_seed(self) -> bytes:
-        """Derive a stable, machine-specific seed string for PBKDF2 key derivation."""
-        # 1. Custom vault key override if set in environment
+        """Derive high-entropy key material for PBKDF2 key derivation.
+
+        Rejects weak machine identifiers (MAC, hostname, username).
+        Requires explicit AGENT_ENGINE_VAULT_KEY or generates a 256-bit key
+        persisted in a 0600-permission key file.
+        """
+        # 1. Environment variable override
         env_key = os.environ.get("AGENT_ENGINE_VAULT_KEY")
-        if env_key:
-            return env_key.encode("utf-8")
+        if env_key is not None:
+            stripped = env_key.strip()
+            if not stripped:
+                raise VaultIntegrityError(
+                    "AGENT_ENGINE_VAULT_KEY environment variable is empty or blank"
+                )
+            if len(stripped) < 8:
+                raise VaultIntegrityError(
+                    "AGENT_ENGINE_VAULT_KEY must have at least 8 characters of key material"
+                )
+            return stripped.encode("utf-8")
 
-        # 2. Machine/OS unique identifiers
-        components = [
-            str(uuid.getnode()),  # MAC address
-            os.environ.get("USER", os.environ.get("USERNAME", "agent_engine")),
-            platform.node(),
-            platform.machine(),
-        ]
+        # 2. Key file management
+        if self.key_file_path.exists():
+            # Check permissions on POSIX
+            if os.name != "nt":
+                try:
+                    mode = self.key_file_path.stat().st_mode & 0o777
+                    if mode & 0o077:
+                        raise VaultIntegrityError(
+                            f"Insecure permissions on vault key file '{self.key_file_path}': "
+                            f"mode {oct(mode)} is too permissive; must be 0600."
+                        )
+                except OSError as e:
+                    if isinstance(e, VaultIntegrityError):
+                        raise
+                    raise VaultIntegrityError(f"Could not stat vault key file: {e}") from e
 
-        # On Linux, try reading machine-id for stable hardware anchoring
-        for mid_path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
             try:
-                if os.path.exists(mid_path):
-                    with open(mid_path, "r", encoding="utf-8") as f:
-                        components.append(f.read().strip())
-                    break
-            except Exception:
-                pass
+                with open(self.key_file_path, "rb") as f:
+                    key_bytes = f.read().strip()
+                if len(key_bytes) < 16:
+                    raise VaultIntegrityError(
+                        f"Vault key file '{self.key_file_path}' contains insufficient key material (< 16 bytes)"
+                    )
+                return key_bytes
+            except Exception as e:
+                if isinstance(e, VaultIntegrityError):
+                    raise
+                raise VaultIntegrityError(f"Failed to read vault key file: {e}") from e
 
-        combined = ":".join(components)
-        return hashlib.sha256(combined.encode("utf-8")).digest()
+        # 3. Generate new 256-bit random key and persist with 0600 permissions
+        try:
+            self.key_file_path.parent.mkdir(parents=True, exist_ok=True)
+            generated_key = os.urandom(32).hex().encode("utf-8")
+            tmp_key_path = self.key_file_path.with_suffix(".tmp")
+            with open(tmp_key_path, "wb") as f:
+                f.write(generated_key)
+            if os.name != "nt":
+                try:
+                    os.chmod(tmp_key_path, 0o600)
+                except Exception:
+                    pass
+            os.replace(tmp_key_path, self.key_file_path)
+            if os.name != "nt":
+                try:
+                    os.chmod(self.key_file_path, 0o600)
+                except Exception:
+                    pass
+            return generated_key
+        except Exception as e:
+            if isinstance(e, VaultIntegrityError):
+                raise
+            raise VaultIntegrityError(f"Failed to generate or persist secure vault key: {e}") from e
 
     def _derive_aes_key(self, salt: bytes) -> bytes:
         """Derive a 256-bit (32 byte) key from the master seed and salt using PBKDF2."""
@@ -201,6 +253,11 @@ class EncryptedVaultBackend(CredentialBackend):
             decrypted_bytes = aesgcm.decrypt(nonce, ciphertext_and_tag, self.MAGIC)
             return json.loads(decrypted_bytes.decode("utf-8"))
         except InvalidTag as e:
+            # Check if this is an existing legacy vault that can be transparently migrated
+            migrated_data = self._try_legacy_migration(salt, nonce, ciphertext_and_tag)
+            if migrated_data is not None:
+                return migrated_data
+
             logger.error(
                 "Failed to decrypt credentials vault: Authentication tag mismatch (tampering detected)"
             )
@@ -213,6 +270,57 @@ class EncryptedVaultBackend(CredentialBackend):
                 raise
             logger.error(f"Error reading credentials vault: {e}")
             raise VaultIntegrityError(f"Vault read failed: {e}") from e
+
+    def _try_legacy_migration(
+        self, salt: bytes, nonce: bytes, ciphertext_and_tag: bytes
+    ) -> Optional[Dict[str, Any]]:
+        """Attempt to decrypt a legacy vault created with machine-derived seed and re-encrypt it.
+
+        This guarantees that upgrading to 256-bit vault keys does not destroy existing
+        vault data, and automatically re-encrypts the vault with the hardened 256-bit key.
+        """
+        import hashlib
+        import platform
+        import uuid
+
+        try:
+            components = [
+                str(uuid.getnode()),
+                os.environ.get("USER", os.environ.get("USERNAME", "agent_engine")),
+                platform.node(),
+                platform.machine(),
+            ]
+            for mid_path in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+                try:
+                    if os.path.exists(mid_path):
+                        with open(mid_path, "r", encoding="utf-8") as f:
+                            components.append(f.read().strip())
+                        break
+                except Exception:
+                    pass
+
+            combined = ":".join(components)
+            legacy_seed = hashlib.sha256(combined.encode("utf-8")).digest()
+
+            kdf = PBKDF2HMAC(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=salt,
+                iterations=self.PBKDF2_ITERATIONS,
+            )
+            legacy_key = kdf.derive(legacy_seed)
+            aesgcm = AESGCM(legacy_key)
+            decrypted_bytes = aesgcm.decrypt(nonce, ciphertext_and_tag, self.MAGIC)
+            data = json.loads(decrypted_bytes.decode("utf-8"))
+
+            logger.info(
+                f"Successfully migrated legacy machine-derived vault '{self.vault_path}' to hardened 256-bit vault key."
+            )
+            # Re-write the vault using the new hardened key
+            self._write_vault_data(data)
+            return data
+        except Exception:
+            return None
 
     def _write_vault_data(self, data: Dict[str, Any]) -> None:
         """Encrypt and atomically write data to the vault file."""

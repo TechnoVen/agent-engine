@@ -674,22 +674,31 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
 - **Required Evidence:**
   - `tests/test_r2_workspace_paths.py` (24 dedicated security test scenarios).
 
-### [ ] R2.6 — Secrets service and runtime injection
+### [x] R2.6 — Secrets service and runtime injection (S1)
 
 - **Migration:** `EXPAND`
 - **Target release:** `0.5`
-- **Initial maturity:** `S0` unless `docs/STATUS.md` verifies a higher level from legacy work.
+- **Initial maturity:** `S1` (Implemented and implementation-tested per R2 security baseline)
 - **Dependencies:** R2.1
 - **User Story:** As Nadir, I want credentials kept out of model context and renderer state so tools can authenticate without exposing secrets to the model.
 - **Deliverables:**
-  - Unify keychain/vault interface.
-  - Inject secrets only into authorized tool/provider execution.
-  - Remove plaintext reveal from normal renderer path.
+  - Unified SecretsService coordinating OS Keychain and AES-256-GCM Encrypted Vault fallback.
+  - Eliminated weak machine identifiers; hardened 256-bit random key material in `vault.key` (0600 POSIX permissions) or `AGENT_ENGINE_VAULT_KEY` with automatic transparent legacy vault migration.
+  - Eliminated plaintext reveal APIs (`reveal=true` returns 403 Forbidden).
+  - Eliminated global `os.environ` pollution in `core/models.py` and `model_router.py`.
+  - Injected secrets directly into model parameters (`dspy.LM(..., api_key=...)`) and child subprocess execution environments (`env={...}`).
+  - Scoped secret resolution by consumer identity, authorized consumer whitelist, and project ID.
 - **Acceptance Criteria:**
-  - [ ] Execution trace redacts secrets.
-  - [ ] Model prompt snapshots contain no secrets unless explicit exceptional policy permits.
+  - [x] Execution trace redacts secrets (SecretValue returns `'***'` in str, repr, format).
+  - [x] Model prompt snapshots contain no secrets; direct injection bypassing prompt/context.
+  - [x] Plaintext reveal endpoint disabled fail-closed with 403 Forbidden.
+  - [x] Child process environment injection does not contaminate parent `os.environ`.
 - **Required Evidence:**
-  - Secret-leak tests.
+  - `core/security/secrets.py`
+  - `core/security/credentials.py`
+  - `core/models.py`
+  - `services/python/server/routers/credentials.py`
+  - `tests/test_r2_secrets_service.py` (25 dedicated test scenarios).
 
 ### [ ] R2.7 — Untrusted-content labeling and prompt-injection controls
 

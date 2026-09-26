@@ -386,15 +386,13 @@ class ModelRouter:
 
         model_name = kwargs.get("model") or kwargs.get("model_name")
         api_key = kwargs.get("api_key")
-        if api_key:
-            key_name = f"{provider.upper()}_API_KEY"
-            os.environ[key_name] = api_key
 
         lm = get_model_provider(
             provider_name=provider,
             model_name=model_name,
             cache=cache,
             max_tokens=num_ctx,
+            api_key=api_key,
         )
         if provider == "openai":
             label = f"OpenAI ({model_name or 'gpt-4o-mini'})"
