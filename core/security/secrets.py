@@ -22,6 +22,7 @@ from dataclasses import dataclass
 import logging
 import os
 import pathlib
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -37,6 +38,8 @@ from core.security.credentials import (
 
 logger = logging.getLogger("agent_engine.security.secrets")
 
+_REF_COMPONENT_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
+
 
 @dataclass(frozen=True)
 class SecretReference:
@@ -47,10 +50,33 @@ class SecretReference:
     scope: str = "default"
     project_id: Optional[str] = None
 
+    def __post_init__(self):
+        for field_name, val in [
+            ("provider", self.provider),
+            ("name", self.name),
+            ("scope", self.scope),
+        ]:
+            if not val or not isinstance(val, str) or not _REF_COMPONENT_PATTERN.match(val):
+                raise ValueError(
+                    f"Invalid SecretReference {field_name} '{val}': must match [a-zA-Z0-9_\\-\\.]+"
+                )
+        if self.project_id is not None:
+            if not isinstance(self.project_id, str) or not _REF_COMPONENT_PATTERN.match(
+                self.project_id
+            ):
+                raise ValueError(
+                    f"Invalid SecretReference project_id '{self.project_id}': "
+                    "must match [a-zA-Z0-9_\\-\\.]+"
+                )
+
     @property
     def canonical_id(self) -> str:
         proj = self.project_id or "global"
         return f"{proj}:{self.scope}:{self.provider}:{self.name}"
+
+    def to_tuple(self) -> tuple[str, str, str, str]:
+        """Structured tuple representation for unambiguous exact matching."""
+        return (self.project_id or "global", self.scope, self.provider, self.name)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -83,20 +109,22 @@ class SecretMetadata:
 
 
 class SecretValue:
-    """Transient, in-memory secret container.
+    """Transient, in-memory secret container bound to an authorized consumer.
 
     Guarantees:
     - str(secret_value) == '***'
     - repr(secret_value) == '<SecretValue: ***>'
     - Does not expose secret in string formatting
-    - reveal() provides plaintext only within authorized execution
-    - use() context manager zeroes/scrubs reference upon exit
+    - reveal(consumer_id) provides plaintext only to the bound consumer
+    - use(consumer_id) context manager drops reference upon exit
+    - wipe() clears references and documents Python memory semantics
     """
 
-    def __init__(self, value: str):
+    def __init__(self, value: str, authorized_consumer: Optional[str] = None):
         if not isinstance(value, str):
             raise TypeError("Secret value must be a string")
         self._val: Optional[str] = value
+        self._authorized_consumer: Optional[str] = authorized_consumer
 
     def __str__(self) -> str:
         return "***"
@@ -107,23 +135,46 @@ class SecretValue:
     def __format__(self, format_spec: str) -> str:
         return "***"
 
-    def reveal(self) -> str:
-        """Return plaintext secret for authorized runtime injection."""
+    @property
+    def authorized_consumer(self) -> Optional[str]:
+        return self._authorized_consumer
+
+    def reveal(self, consumer_id: Optional[str] = None) -> str:
+        """Return plaintext secret for authorized runtime injection.
+
+        Fails closed with PermissionError if consumer_id does not match the bound consumer.
+        """
         if self._val is None:
             raise ValueError("SecretValue has already been destroyed or wiped")
+        if self._authorized_consumer is not None:
+            if not consumer_id or consumer_id != self._authorized_consumer:
+                raise PermissionError(
+                    f"Consumer mismatch: SecretValue bound to '{self._authorized_consumer}', "
+                    f"cannot be revealed by '{consumer_id}'"
+                )
         return self._val
 
     @contextmanager
-    def use(self):
+    def use(self, consumer_id: Optional[str] = None):
         """Context manager yielding the plaintext value and guaranteeing cleanup."""
         try:
-            yield self.reveal()
+            yield self.reveal(consumer_id=consumer_id)
         finally:
             pass
 
     def wipe(self) -> None:
-        """Explicitly clear secret material from memory."""
+        """Explicitly clear secret material and consumer references from this container.
+
+        Note on Python memory semantics:
+        Because Python strings (`str`) are immutable and managed by Python's internal
+        small-object allocator and garbage collector, true cryptographic overwriting/zeroing
+        of the underlying memory buffer cannot be guaranteed in pure Python.
+        `wipe()` minimizes the exposure window by clearing the container reference,
+        enabling prompt garbage collection and guaranteeing that all subsequent `reveal()`
+        calls fail closed.
+        """
         self._val = None
+        self._authorized_consumer = None
 
 
 class SecretsService:
@@ -360,6 +411,7 @@ class SecretsService:
         Enforces:
         - Project scope isolation: Consumer project_id must match secret project_id.
         - Consumer capability / actor validation.
+        - Consumer binding on the returned SecretValue.
         - Fails closed on unauthorized access.
         """
         ctx = context or {}
@@ -383,19 +435,29 @@ class SecretsService:
         raw = self._get_raw(ref)
         if raw is None:
             # Fall back to checking standard provider mappings
-            raw = self.get_api_key(ref.provider)
+            allow_env = ctx.get("allow_env_fallback")
+            raw = self.get_api_key(ref.provider, allow_env_fallback=allow_env)
 
         if raw is None:
             raise KeyError(f"Secret '{ref.canonical_id}' not found")
 
-        return SecretValue(raw)
+        return SecretValue(raw, authorized_consumer=consumer_id)
 
     # -----------------------------------------------------------------------
     # Provider API Key Helpers (backward-compatible and direct injection)
     # -----------------------------------------------------------------------
 
-    def get_api_key(self, provider_or_key: str) -> Optional[str]:
-        """Resolve provider API key without mutating global os.environ."""
+    def get_api_key(
+        self,
+        provider_or_key: str,
+        allow_env_fallback: Optional[bool] = None,
+    ) -> Optional[str]:
+        """Resolve provider API key without mutating global os.environ.
+
+        Prefers stored secrets (vault/keyring). Environment variable fallback
+        is only performed if explicitly allowed, or if enabled via
+        AGENT_ENGINE_ALLOW_ENV_CREDENTIALS=1 / non-production environment.
+        """
         raw = provider_or_key.strip()
         env_key = PROVIDER_ENV_MAP.get(raw.lower(), raw)
 
@@ -413,7 +475,7 @@ class SecretsService:
                 "your_key_here",
             ) and not s.startswith("<")
 
-        # 1. Check project/scoped secret reference
+        # 1. Check project/scoped secret reference in stored backends (preferred)
         ref = SecretReference(provider=raw.lower(), name=env_key)
         val = self._get_raw(ref)
         if _is_valid(val):
@@ -435,15 +497,26 @@ class SecretsService:
                 except Exception:
                     pass
 
-        # 3. Process environment variable fallback (read-only; no mutation)
-        env_val = os.getenv(env_key)
-        if _is_valid(env_val):
-            return env_val
+        # 3. Process environment variable fallback (only if permitted)
+        if allow_env_fallback is None:
+            env_mode = os.getenv("ENV_MODE", "").lower()
+            env_flag = os.getenv("AGENT_ENGINE_ALLOW_ENV_CREDENTIALS", "").lower()
+            if env_flag in ("1", "true", "yes"):
+                allow_env_fallback = True
+            elif env_mode == "production":
+                allow_env_fallback = False
+            else:
+                allow_env_fallback = True
 
-        if raw.lower() in ("gemini", "google"):
-            alt = os.getenv("GOOGLE_API_KEY")
-            if _is_valid(alt):
-                return alt
+        if allow_env_fallback:
+            env_val = os.getenv(env_key)
+            if _is_valid(env_val):
+                return env_val
+
+            if raw.lower() in ("gemini", "google"):
+                alt = os.getenv("GOOGLE_API_KEY")
+                if _is_valid(alt):
+                    return alt
 
         return None
 
@@ -511,7 +584,7 @@ class SecretsService:
         elif ref:
             try:
                 sec_val = self.resolve_for_consumer("connection_tester", ref)
-                key_to_test = sec_val.reveal()
+                key_to_test = sec_val.reveal(consumer_id="connection_tester")
             except Exception:
                 pass
         if not key_to_test:

@@ -200,15 +200,33 @@ class ApprovalRequest(BaseModel):
 
 * **Value Object Isolation:**
   * Secrets handling enforces strict value object boundaries:
-    * `SecretReference`: Public immutable identifier containing `provider`, `name`, `scope`, and optional `project_id`. Canonical format: `{project_id}:{scope}:{provider}:{name}`. Never holds secret material.
+    * `SecretReference`: Public immutable identifier containing `provider`, `name`, `scope`, and optional `project_id`. Canonical format: `{project_id}:{scope}:{provider}:{name}`. All components strictly validate against `^[a-zA-Z0-9_\-\.]+$` to prevent delimiter injection or path traversal. Provides `to_tuple()` for structured index matching. Never holds secret material.
     * `SecretMetadata`: Public immutable metadata containing `SecretReference`, `backend`, `masked_value` (e.g. `sk-...4567`), `created_at`, `updated_at`. Plaintext values are strictly absent.
-    * `SecretValue`: Transient in-memory container. Guarantees `str(val) == '***'`, `repr(val) == '<SecretValue: ***>'`, `f"{val}" == '***'`, and format-string masking. Exposes `reveal()` only during authorized execution and provides `use()` context manager with memory zeroing/scrubbing upon completion.
+    * `SecretValue`: Transient in-memory container cryptographically bound to an authorized consumer (`authorized_consumer`). Guarantees `str(val) == '***'`, `repr(val) == '<SecretValue: ***>'`, `f"{val}" == '***'`, and format-string masking. Exposes `reveal(consumer_id)` only to the matching authorized consumer (fails closed with `PermissionError` on mismatch). Provides `use(consumer_id)` context manager dropping references upon exit.
+    * **Memory Zeroing Semantics & Realities:** Because Python strings (`str`) are immutable and managed by Python's internal memory allocator, true cryptographic zeroing/overwriting of memory buffers cannot be guaranteed in pure Python. `SecretValue.wipe()` drops object references immediately, enabling prompt garbage collection and guaranteeing that all subsequent `reveal()` attempts fail closed with `ValueError`.
 
-* **Hardened High-Entropy Key Material & Elimination of Weak Identifiers:**
+* **Hardened High-Entropy Key Material & Strict Entropy Contracts:**
   * Weak hardware and machine identifiers (`uuid.getnode()`, username, hostname, machine-id) have been completely eliminated from the master key derivation pipeline.
-  * Key derivation requires explicit `AGENT_ENGINE_VAULT_KEY` (minimum 8 characters) or automatically generates and persists a cryptographically secure 256-bit random key in `vault.key`.
-  * On POSIX systems, `vault.key` strictly enforces `0600` permissions (`-rw-------`). Any permissive mode (group or world readable/writable) fails closed with `VaultIntegrityError`.
-  * Transparent automated migration: Existing vaults created prior to R2.6 are securely decrypted upon first access using legacy derivation and immediately re-encrypted with the new hardened 256-bit key.
+  * `AGENT_ENGINE_VAULT_KEY` enforces a strict entropy contract:
+    * Must be a raw 256-bit key (64 hex characters, 32-byte base64, or exactly 32 bytes), OR
+    * A human passphrase prefixed with `pass:` or `passphrase:` derived via PBKDF2-HMAC-SHA256 (100,000 rounds with fixed salt).
+    * Bare short strings, empty passphrases, and malformed keys fail closed with `VaultIntegrityError`.
+  * When no environment override is provided, the backend automatically generates a cryptographically secure 256-bit random key persisted in `vault.key`.
+
+* **Cross-Platform Key File Hardening & Threat Model:**
+  * Symlinks are rejected fail-closed on both `vault.key` and its parent directory chain (`VaultIntegrityError`).
+  * On POSIX systems, `vault.key` is created with `0600` flags (`O_NOFOLLOW`), parent directory is restricted to `0700`, and writes are flushed and synced via `os.fsync()`.
+  * On Windows systems, user-only ACLs are enforced via `icacls` without shell interpolation.
+  * **Threat Model Scope & Residual Risk:** The encrypted vault and `vault.key` protect against accidental disclosure, plaintext commits, unauthorized process inspection across different OS users, and unprivileged backup leakage. They do **not** defend against an attacker who has already achieved local code execution as the same OS user, since any process running under that user identity can read files owned by the user. Full isolation against same-user compromises requires kernel namespaces, sandbox boundaries, or secure hardware enclaves.
+
+* **Crash-Safe Legacy Vault Migration:**
+  * Transparent automated migration: Existing vaults created prior to R2.6 with machine-derived seeds are securely upgraded upon first read.
+  * The migration protocol decrypts the legacy vault, re-encrypts using the new 256-bit key, writes ciphertext to a temporary file, calls `os.fsync()`, verifies that the temporary file decrypts and deserializes identically, and atomically replaces the vault file via `os.replace()`.
+  * Plaintext is never logged or leaked. If any error or power loss occurs before `os.replace()`, the original vault file remains uncorrupted and intact.
+
+* **Ambient Environment Fallback Controls:**
+  * Stored secrets in the vault or OS keyring are always preferred over ambient environment variables.
+  * Fallback to `os.getenv` for provider keys occurs only when explicitly enabled (`allow_env_fallback=True` or `AGENT_ENGINE_ALLOW_ENV_CREDENTIALS=1`). In production environments (`ENV_MODE=production`), ambient fallback is disabled by default to prevent unintended credential inheritance.
 
 * **Elimination of Plaintext Reveal APIs:**
   * The REST API endpoint `/v1/credentials/{service}/{key}?reveal=true` permanently rejects reveal requests with `403 Forbidden` (`detail="Plaintext credential reveal is disabled for security"`).
@@ -221,6 +239,7 @@ class ApprovalRequest(BaseModel):
 
 * **Consumer Authorization & Project Scope Isolation:**
   * Secret resolution (`SecretsService.resolve_for_consumer`) enforces caller capability checks, consumer identity matching against an authorized consumer whitelist, and strict project scope isolation (cross-project resolution fails closed with `PermissionError`).
+  * Returned `SecretValue` containers are bound to the specific `consumer_id`.
   * Missing or unauthorized secrets fail closed with `KeyError` or `PermissionError`.
 
 

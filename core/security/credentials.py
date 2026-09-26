@@ -13,10 +13,12 @@ Architecture:
 from __future__ import annotations
 
 import abc
+import base64
 import json
 import logging
 import os
 import pathlib
+import secrets as stdlib_secrets
 import time
 from typing import Any, Dict, List, Optional
 
@@ -144,9 +146,13 @@ class EncryptedVaultBackend(CredentialBackend):
     def _derive_master_seed(self) -> bytes:
         """Derive high-entropy key material for PBKDF2 key derivation.
 
-        Rejects weak machine identifiers (MAC, hostname, username).
-        Requires explicit AGENT_ENGINE_VAULT_KEY or generates a 256-bit key
-        persisted in a 0600-permission key file.
+        Enforces:
+        - Environment variable AGENT_ENGINE_VAULT_KEY must be a raw 256-bit key (64 hex characters,
+          32-byte base64, or exactly 32 bytes) or a human passphrase prefixed with 'pass:' or 'passphrase:'.
+        - Strict fail-closed rejection of short, bare, or malformed keys.
+        - Rejection of symlinks on key file and parent directory chain.
+        - POSIX 0700 parent directory and 0600 key file permissions (O_NOFOLLOW creation).
+        - Windows user-only ACL enforcement via icacls without shell interpolation.
         """
         # 1. Environment variable override
         env_key = os.environ.get("AGENT_ENGINE_VAULT_KEY")
@@ -156,13 +162,65 @@ class EncryptedVaultBackend(CredentialBackend):
                 raise VaultIntegrityError(
                     "AGENT_ENGINE_VAULT_KEY environment variable is empty or blank"
                 )
-            if len(stripped) < 8:
-                raise VaultIntegrityError(
-                    "AGENT_ENGINE_VAULT_KEY must have at least 8 characters of key material"
+
+            # Passphrase with PBKDF2 derivation
+            if stripped.startswith("pass:") or stripped.startswith("passphrase:"):
+                passphrase = stripped.split(":", 1)[1].encode("utf-8")
+                if not passphrase:
+                    raise VaultIntegrityError(
+                        "AGENT_ENGINE_VAULT_KEY passphrase component cannot be empty"
+                    )
+                kdf = PBKDF2HMAC(
+                    algorithm=hashes.SHA256(),
+                    length=32,
+                    salt=b"agent_engine_vault_passphrase_salt",
+                    iterations=100_000,
                 )
-            return stripped.encode("utf-8")
+                return kdf.derive(passphrase)
+
+            # Raw 256-bit key: 64 hex characters
+            if len(stripped) == 64:
+                try:
+                    raw = bytes.fromhex(stripped)
+                    if len(raw) == 32:
+                        return raw
+                except ValueError:
+                    pass
+
+            # Raw 256-bit key: 32-byte base64
+            if len(stripped) == 44:
+                try:
+                    raw = base64.b64decode(stripped, validate=True)
+                    if len(raw) == 32:
+                        return raw
+                except Exception:
+                    pass
+
+            # Raw 256-bit key: exactly 32 bytes
+            raw_bytes = stripped.encode("utf-8")
+            if len(raw_bytes) == 32:
+                return raw_bytes
+
+            raise VaultIntegrityError(
+                "AGENT_ENGINE_VAULT_KEY must be a 256-bit key (64 hex characters, 32-byte base64, "
+                "or exactly 32 bytes) or a human passphrase prefixed with 'pass:' or 'passphrase:'."
+            )
 
         # 2. Key file management
+        # Symlink prevention: neither key_file nor its parent directory chain may be a symlink
+        if self.key_file_path.is_symlink():
+            raise VaultIntegrityError(
+                f"Symlink detected at vault key path '{self.key_file_path}'; refusing to access (fail-closed)"
+            )
+        parent_dir = self.key_file_path.parent
+        curr = parent_dir
+        while curr != curr.parent:
+            if curr.is_symlink():
+                raise VaultIntegrityError(
+                    f"Symlink detected at parent directory '{curr}'; refusing to access (fail-closed)"
+                )
+            curr = curr.parent
+
         if self.key_file_path.exists():
             # Check permissions on POSIX
             if os.name != "nt":
@@ -173,17 +231,31 @@ class EncryptedVaultBackend(CredentialBackend):
                             f"Insecure permissions on vault key file '{self.key_file_path}': "
                             f"mode {oct(mode)} is too permissive; must be 0600."
                         )
+                    parent_mode = parent_dir.stat().st_mode & 0o777
+                    if parent_mode & 0o077:
+                        try:
+                            os.chmod(parent_dir, 0o700)
+                        except OSError:
+                            pass
+                        parent_mode = parent_dir.stat().st_mode & 0o777
+                        if parent_mode & 0o077:
+                            raise VaultIntegrityError(
+                                f"Insecure permissions on vault key parent directory '{parent_dir}': "
+                                f"mode {oct(parent_mode)} is too permissive; must be 0700."
+                            )
                 except OSError as e:
                     if isinstance(e, VaultIntegrityError):
                         raise
-                    raise VaultIntegrityError(f"Could not stat vault key file: {e}") from e
+                    raise VaultIntegrityError(
+                        f"Could not stat vault key file or directory: {e}"
+                    ) from e
 
             try:
                 with open(self.key_file_path, "rb") as f:
                     key_bytes = f.read().strip()
-                if len(key_bytes) < 16:
+                if len(key_bytes) < 32:
                     raise VaultIntegrityError(
-                        f"Vault key file '{self.key_file_path}' contains insufficient key material (< 16 bytes)"
+                        f"Vault key file '{self.key_file_path}' contains insufficient key material (< 32 bytes)"
                     )
                 return key_bytes
             except Exception as e:
@@ -193,16 +265,36 @@ class EncryptedVaultBackend(CredentialBackend):
 
         # 3. Generate new 256-bit random key and persist with 0600 permissions
         try:
-            self.key_file_path.parent.mkdir(parents=True, exist_ok=True)
+            parent_dir.mkdir(parents=True, exist_ok=True)
+            if os.name != "nt":
+                try:
+                    os.chmod(parent_dir, 0o700)
+                except Exception as pe:
+                    raise VaultIntegrityError(
+                        f"Failed to restrict parent directory permissions on '{parent_dir}': {pe}"
+                    )
+
             generated_key = os.urandom(32).hex().encode("utf-8")
-            tmp_key_path = self.key_file_path.with_suffix(".tmp")
-            with open(tmp_key_path, "wb") as f:
+            tmp_key_name = f".vault.key.tmp.{stdlib_secrets.token_hex(8)}"
+            tmp_key_path = parent_dir / tmp_key_name
+
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(tmp_key_path, flags, 0o600)
+            with os.fdopen(fd, "wb") as f:
                 f.write(generated_key)
+                f.flush()
+                os.fsync(f.fileno())
+
             if os.name != "nt":
                 try:
                     os.chmod(tmp_key_path, 0o600)
                 except Exception:
                     pass
+
+            # Windows-specific ACL restriction: restrict strictly to current user without shell interpolation
+            if os.name == "nt":
+                self._apply_windows_acl(tmp_key_path)
+
             os.replace(tmp_key_path, self.key_file_path)
             if os.name != "nt":
                 try:
@@ -214,6 +306,31 @@ class EncryptedVaultBackend(CredentialBackend):
             if isinstance(e, VaultIntegrityError):
                 raise
             raise VaultIntegrityError(f"Failed to generate or persist secure vault key: {e}") from e
+
+    @staticmethod
+    def _apply_windows_acl(tmp_key_path: pathlib.Path) -> None:
+        """Apply Windows-specific ACL restriction: restrict strictly to current user without shell interpolation."""
+        import subprocess
+
+        username = os.environ.get("USERNAME") or os.environ.get("USER")
+        if not username:
+            raise VaultIntegrityError("Windows user identity unavailable for ACL restriction")
+        res = subprocess.run(
+            [
+                "icacls",
+                str(tmp_key_path),
+                "/inheritance:r",
+                "/grant:r",
+                f"{username}:(R,W)",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if res.returncode != 0:
+            raise VaultIntegrityError(
+                f"Failed to apply Windows user ACLs via icacls: {res.stderr.strip()}"
+            )
 
     def _derive_aes_key(self, salt: bytes) -> bytes:
         """Derive a 256-bit (32 byte) key from the master seed and salt using PBKDF2."""
@@ -276,13 +393,19 @@ class EncryptedVaultBackend(CredentialBackend):
     ) -> Optional[Dict[str, Any]]:
         """Attempt to decrypt a legacy vault created with machine-derived seed and re-encrypt it.
 
-        This guarantees that upgrading to 256-bit vault keys does not destroy existing
-        vault data, and automatically re-encrypts the vault with the hardened 256-bit key.
+        Crash-safe migration protocol:
+        1. Decrypt legacy vault with legacy machine-derived key.
+        2. Encrypt contents with the new hardened 256-bit key.
+        3. Write new ciphertext to a staging temporary file.
+        4. Flush and fsync the temporary file.
+        5. Verify the temporary file can be decrypted and matches data.
+        6. Atomically replace the old vault file via os.replace.
         """
         import hashlib
         import platform
         import uuid
 
+        tmp_migrated_path = None
         try:
             components = [
                 str(uuid.getnode()),
@@ -313,13 +436,64 @@ class EncryptedVaultBackend(CredentialBackend):
             decrypted_bytes = aesgcm.decrypt(nonce, ciphertext_and_tag, self.MAGIC)
             data = json.loads(decrypted_bytes.decode("utf-8"))
 
+            # Crash-safe re-encryption with new hardened 256-bit key
+            new_salt = os.urandom(self.SALT_SIZE)
+            new_nonce = os.urandom(self.NONCE_SIZE)
+            new_key = self._derive_aes_key(new_salt)
+            new_aesgcm = AESGCM(new_key)
+
+            serialized = json.dumps(data, indent=2).encode("utf-8")
+            new_ciphertext = new_aesgcm.encrypt(new_nonce, serialized, self.MAGIC)
+            new_payload = self.MAGIC + new_salt + new_nonce + new_ciphertext
+
+            tmp_migrated_path = self.vault_path.with_name(f".{self.vault_path.name}.migration.tmp")
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(tmp_migrated_path, flags, 0o600)
+            with os.fdopen(fd, "wb") as f:
+                f.write(new_payload)
+                f.flush()
+                os.fsync(f.fileno())
+
+            if os.name != "nt":
+                try:
+                    os.chmod(tmp_migrated_path, 0o600)
+                except Exception:
+                    pass
+
+            # Pre-replacement verification: verify that temporary file decrypts successfully
+            with open(tmp_migrated_path, "rb") as vf:
+                verify_data = vf.read()
+            v_offset = len(self.MAGIC)
+            v_salt = verify_data[v_offset : v_offset + self.SALT_SIZE]
+            v_offset += self.SALT_SIZE
+            v_nonce = verify_data[v_offset : v_offset + self.NONCE_SIZE]
+            v_offset += self.NONCE_SIZE
+            v_cipher = verify_data[v_offset:]
+            v_key = self._derive_aes_key(v_salt)
+            v_decrypted = AESGCM(v_key).decrypt(v_nonce, v_cipher, self.MAGIC)
+            v_parsed = json.loads(v_decrypted.decode("utf-8"))
+            if v_parsed != data:
+                raise VaultIntegrityError("Migration verification mismatch in temporary file")
+
+            # Atomic replacement
+            os.replace(tmp_migrated_path, self.vault_path)
+            if os.name != "nt":
+                try:
+                    os.chmod(self.vault_path, 0o600)
+                except Exception:
+                    pass
+
             logger.info(
                 f"Successfully migrated legacy machine-derived vault '{self.vault_path}' to hardened 256-bit vault key."
             )
-            # Re-write the vault using the new hardened key
-            self._write_vault_data(data)
             return data
-        except Exception:
+        except Exception as me:
+            if tmp_migrated_path and tmp_migrated_path.exists():
+                try:
+                    tmp_migrated_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            logger.debug(f"Legacy vault migration was not applicable or failed: {me}")
             return None
 
     def _write_vault_data(self, data: Dict[str, Any]) -> None:
@@ -336,19 +510,28 @@ class EncryptedVaultBackend(CredentialBackend):
 
         vault_payload = self.MAGIC + salt + nonce + ciphertext
 
-        # Atomic write via temporary file
-        tmp_path = self.vault_path.with_suffix(".tmp")
+        # Atomic write via temporary file with fsync
+        tmp_path = self.vault_path.with_name(f".{self.vault_path.name}.tmp")
         try:
-            with open(tmp_path, "wb") as f:
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+            fd = os.open(tmp_path, flags, 0o600)
+            with os.fdopen(fd, "wb") as f:
                 f.write(vault_payload)
+                f.flush()
+                os.fsync(f.fileno())
 
-            # Restrict permissions: 0o600 (owner read/write only)
-            try:
-                os.chmod(tmp_path, 0o600)
-            except Exception:
-                pass
+            if os.name != "nt":
+                try:
+                    os.chmod(tmp_path, 0o600)
+                except Exception:
+                    pass
 
             os.replace(tmp_path, self.vault_path)
+            if os.name != "nt":
+                try:
+                    os.chmod(self.vault_path, 0o600)
+                except Exception:
+                    pass
         except Exception as e:
             if tmp_path.exists():
                 tmp_path.unlink(missing_ok=True)
