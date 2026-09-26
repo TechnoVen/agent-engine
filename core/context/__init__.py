@@ -22,6 +22,8 @@ from core.context.models import (
     ContentProvenance,
     ContentTrust,
     ContextItem,
+    classify_ingress_content,
+    deduplicate_context_items,
     sanitize_untrusted_content,
 )
 
@@ -39,6 +41,8 @@ __all__ = [
     "UNTRUSTED_ENVELOPE_END",
     "UNTRUSTED_ENVELOPE_START",
     "build_context",
+    "classify_ingress_content",
+    "deduplicate_context_items",
     "estimate_object_tokens",
     "estimate_tokens",
     "sanitize_untrusted_content",

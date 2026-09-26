@@ -163,18 +163,75 @@ class EncryptedVaultBackend(CredentialBackend):
                     "AGENT_ENGINE_VAULT_KEY environment variable is empty or blank"
                 )
 
-            # Passphrase with PBKDF2 derivation
+            # Passphrase with PBKDF2 derivation: persist/version KDF algorithm, parameters, and random salt
             if stripped.startswith("pass:") or stripped.startswith("passphrase:"):
-                passphrase = stripped.split(":", 1)[1].encode("utf-8")
+                body = stripped.split(":", 1)[1]
+                if not body:
+                    raise VaultIntegrityError(
+                        "AGENT_ENGINE_VAULT_KEY passphrase component cannot be empty"
+                    )
+
+                # Format may be pass:<32hex_salt>:<passphrase> or pass:<passphrase>
+                if ":" in body and len(body.split(":", 1)[0]) == 32:
+                    try:
+                        salt_hex, passphrase_str = body.split(":", 1)
+                        passphrase_salt = bytes.fromhex(salt_hex)
+                        passphrase = passphrase_str.encode("utf-8")
+                    except ValueError:
+                        passphrase_salt = None
+                        passphrase = body.encode("utf-8")
+                else:
+                    passphrase_salt = None
+                    passphrase = body.encode("utf-8")
+
                 if not passphrase:
                     raise VaultIntegrityError(
                         "AGENT_ENGINE_VAULT_KEY passphrase component cannot be empty"
                     )
+
+                if passphrase_salt is None:
+                    # Persist/load random salt for this vault to ensure no static or implicit salt
+                    passphrase_salt_path = self.vault_path.with_name(
+                        f".{self.vault_path.name}.passphrase.salt"
+                    )
+                    if passphrase_salt_path.is_symlink():
+                        raise VaultIntegrityError(
+                            f"Symlink detected at passphrase salt path '{passphrase_salt_path}'; rejecting fail-closed"
+                        )
+                    if passphrase_salt_path.exists():
+                        try:
+                            with open(passphrase_salt_path, "rb") as sf:
+                                passphrase_salt = sf.read()
+                            if len(passphrase_salt) != self.SALT_SIZE:
+                                raise VaultIntegrityError("Corrupted passphrase salt file")
+                        except Exception as e:
+                            if isinstance(e, VaultIntegrityError):
+                                raise
+                            raise VaultIntegrityError(
+                                f"Failed to read passphrase salt file: {e}"
+                            ) from e
+                    else:
+                        passphrase_salt = os.urandom(self.SALT_SIZE)
+                        try:
+                            passphrase_salt_path.parent.mkdir(parents=True, exist_ok=True)
+                            flags = (
+                                os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+                            )
+                            sfd = os.open(passphrase_salt_path, flags, 0o600)
+                            with os.fdopen(sfd, "wb") as sf:
+                                sf.write(passphrase_salt)
+                                sf.flush()
+                                os.fsync(sf.fileno())
+                        except Exception as e:
+                            raise VaultIntegrityError(
+                                f"Failed to persist passphrase salt: {e}"
+                            ) from e
+
                 kdf = PBKDF2HMAC(
                     algorithm=hashes.SHA256(),
                     length=32,
-                    salt=b"agent_engine_vault_passphrase_salt",
-                    iterations=100_000,
+                    salt=passphrase_salt,
+                    iterations=self.PBKDF2_ITERATIONS,
                 )
                 return kdf.derive(passphrase)
 

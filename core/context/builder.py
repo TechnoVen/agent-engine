@@ -16,9 +16,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from core.context.models import (
     ContentAuthority,
-    ContentProvenance,
     ContentTrust,
     ContextItem,
+    classify_ingress_content,
 )
 
 logger = logging.getLogger(__name__)
@@ -326,6 +326,74 @@ class ContextBuilder:
     def __init__(self, default_hard_ceiling: int = 32000):
         self.default_hard_ceiling = default_hard_ceiling
 
+    # -----------------------------------------------------------------------
+    # Preferred Backend Ingestion Methods (Derived Ingestion Authority)
+    # -----------------------------------------------------------------------
+    def add_system_policy(
+        self,
+        content: str,
+        label: str = "system_policy",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> ContextItem:
+        return ContextItem.from_system_policy(content=content, label=label, metadata=metadata)
+
+    def add_project_instruction(
+        self,
+        content: str,
+        project_id: Optional[str] = None,
+        label: str = "project_instruction",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> ContextItem:
+        return ContextItem.from_project_instruction(
+            content=content, project_id=project_id, label=label, metadata=metadata
+        )
+
+    def add_user_directive(
+        self,
+        content: str,
+        label: str = "user_directive",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> ContextItem:
+        return ContextItem.from_user_directive(content=content, label=label, metadata=metadata)
+
+    def add_internal_state(
+        self,
+        content: str,
+        label: str = "internal_state",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> ContextItem:
+        return ContextItem.from_internal_state(content=content, label=label, metadata=metadata)
+
+    def add_external_content(
+        self,
+        content: str,
+        source_id: str,
+        source_type: str = "external",
+        metadata: Optional[Dict[str, Any]] = None,
+        raw_content: Optional[str] = None,
+    ) -> ContextItem:
+        return ContextItem.from_external_content(
+            content=content,
+            source_id=source_id,
+            source_type=source_type,
+            metadata=metadata,
+            raw_content=raw_content,
+        )
+
+    def add_tool_result(
+        self,
+        tool_name: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        raw_content: Optional[str] = None,
+    ) -> ContextItem:
+        return ContextItem.from_tool_result(
+            tool_name=tool_name,
+            content=content,
+            metadata=metadata,
+            raw_content=raw_content,
+        )
+
     def build(
         self,
         spec: ContextSpec,
@@ -336,8 +404,9 @@ class ContextBuilder:
         Build a minimal, budgeted context according to ContextSpec:
         1. Validate presence of declared required fields.
         2. Filter only declared required and optional fields (whitelisting).
-        3. Conditionally execute RAG retrieval only if allow_retrieval=True.
-        4. Enforce token budget (<8,000 target, hard ceiling).
+        3. Enforce backend ingress trust boundaries (data may downgrade, never self-upgrade).
+        4. Conditionally execute RAG retrieval only if allow_retrieval=True.
+        5. Enforce token budget (<8,000 target, hard ceiling) while preserving provenance.
         """
         # 1. Validate required fields
         for k in spec.required_fields:
@@ -357,34 +426,87 @@ class ContextBuilder:
         for k in candidate_keys:
             if k in available:
                 val = available[k]
+                is_untrusted_field = k in spec.untrusted_fields or k.startswith(
+                    ("untrusted_", "external_", "third_party_", "tool_", "retrieved_")
+                )
+
                 if isinstance(val, ContextItem):
-                    item = val
-                else:
-                    is_untrusted = k in spec.untrusted_fields or k.startswith(
-                        ("untrusted_", "external_", "third_party_")
-                    )
-                    if is_untrusted:
-                        item = ContextItem(
-                            content=str(val) if not isinstance(val, str) else val,
-                            trust=ContentTrust.UNTRUSTED_CONTENT,
-                            authority=ContentAuthority.EVIDENCE,
-                            provenance=ContentProvenance.create(
-                                source_id=k, source_type="untrusted_field"
-                            ),
-                            label=k,
+                    # Ingress boundary check: untrusted fields or callers cannot self-upgrade
+                    if is_untrusted_field:
+                        # Downgrade to UNTRUSTED_CONTENT / EVIDENCE fail-closed
+                        item = ContextItem.from_external_content(
+                            content=val.content,
+                            source_id=val.provenance.source_id if val.provenance else k,
+                            source_type=val.provenance.source_type
+                            if val.provenance
+                            else "untrusted_field",
+                            metadata=val.provenance.metadata if val.provenance else {},
+                            raw_content=val.raw_content,
                         )
                     elif k in ("prompt", "user_prompt", "query", "user_directive", "goal"):
-                        item = ContextItem(
+                        # User directive ingress
+                        item = val
+                    elif k == "system_prompt":
+                        item = val
+                    else:
+                        # External payloads claiming SYSTEM or USER_DIRECTIVE on arbitrary fields are downgraded
+                        if val.trust in (
+                            ContentTrust.SYSTEM,
+                            ContentTrust.TRUSTED_USER,
+                        ) and val.authority in (
+                            ContentAuthority.SYSTEM_POLICY,
+                            ContentAuthority.USER_DIRECTIVE,
+                        ):
+                            item = ContextItem.from_external_content(
+                                content=val.content,
+                                source_id=val.provenance.source_id if val.provenance else k,
+                                source_type="unauthorized_authority_claim",
+                                metadata={
+                                    "claimed_trust": val.trust.value,
+                                    "claimed_authority": val.authority.value,
+                                },
+                                raw_content=val.raw_content,
+                            )
+                        else:
+                            item = val
+                elif isinstance(val, dict) and (
+                    "content" in val or "trust" in val or "authority" in val
+                ):
+                    # Caller-supplied DTO claiming trust/authority: classify via ingress boundary
+                    content_str = str(val.get("content", ""))
+                    if is_untrusted_field:
+                        item = ContextItem.from_external_content(
+                            content=content_str,
+                            source_id=k,
+                            source_type="untrusted_dto",
+                            metadata=val.get("metadata", {}),
+                        )
+                    else:
+                        item = classify_ingress_content(
+                            content=content_str,
+                            ingress_channel="user"
+                            if k in ("prompt", "user_prompt", "query", "user_directive", "goal")
+                            else "external_api",
+                            claimed_trust=val.get("trust"),
+                            claimed_authority=val.get("authority"),
+                            source_id=k,
+                            metadata=val.get("metadata"),
+                        )
+                else:
+                    if is_untrusted_field:
+                        item = ContextItem.from_external_content(
                             content=str(val) if not isinstance(val, str) else val,
-                            trust=ContentTrust.TRUSTED_USER,
-                            authority=ContentAuthority.USER_DIRECTIVE,
+                            source_id=k,
+                            source_type="untrusted_field",
+                        )
+                    elif k in ("prompt", "user_prompt", "query", "user_directive", "goal"):
+                        item = ContextItem.from_user_directive(
+                            content=str(val) if not isinstance(val, str) else val,
                             label=k,
                         )
                     else:
-                        item = ContextItem(
+                        item = ContextItem.from_internal_state(
                             content=str(val) if not isinstance(val, str) else val,
-                            trust=ContentTrust.INTERNAL_STATE,
-                            authority=ContentAuthority.EVIDENCE,
                             label=k,
                         )
 
@@ -398,10 +520,8 @@ class ContextBuilder:
 
         # Add system prompt if specified
         if spec.system_prompt:
-            sys_item = ContextItem(
+            sys_item = ContextItem.from_system_policy(
                 content=spec.system_prompt,
-                trust=ContentTrust.SYSTEM,
-                authority=ContentAuthority.SYSTEM_POLICY,
                 label="system_prompt",
             )
             context_items["system_prompt"] = sys_item
@@ -421,14 +541,10 @@ class ContextBuilder:
                         raw_rag = raw_rag[: max(1, spec.retrieval_budget_tokens // 100)]
 
                 rag_str = str(raw_rag) if not isinstance(raw_rag, str) else raw_rag
-                rag_item = ContextItem(
+                rag_item = ContextItem.from_external_content(
                     content=rag_str,
-                    trust=ContentTrust.UNTRUSTED_CONTENT,
-                    authority=ContentAuthority.EVIDENCE,
-                    provenance=ContentProvenance.create(
-                        source_id="rag_retrieval", source_type="retrieval"
-                    ),
-                    label="retrieved_context",
+                    source_id="rag_retrieval",
+                    source_type="retrieval",
                 )
                 context_items["retrieved_context"] = rag_item
                 if spec.enforce_untrusted_envelopes:
@@ -449,6 +565,24 @@ class ContextBuilder:
 
         final_tokens = sum(estimate_object_tokens(v) for v in truncated_dict.values())
 
+        # Update items with child derivations preserving trust, authority, and raw provenance
+        final_items: Dict[str, ContextItem] = {}
+        for k, item in context_items.items():
+            if k in truncated_fields and k in truncated_dict:
+                truncated_text = str(truncated_dict[k])
+                derived = item.derive_child(
+                    new_content=truncated_text,
+                    transformation_type="truncated",
+                    metadata_update={
+                        "truncated_tokens": estimate_object_tokens(truncated_text),
+                    },
+                )
+                final_items[k] = derived
+                if spec.enforce_untrusted_envelopes and derived.is_untrusted:
+                    truncated_dict[k] = derived.format_envelope()
+            else:
+                final_items[k] = item
+
         return BuiltContext(
             data=truncated_dict,
             estimated_tokens=final_tokens,
@@ -456,7 +590,7 @@ class ContextBuilder:
             was_truncated=was_truncated,
             truncated_fields=truncated_fields,
             warnings=warnings,
-            items=context_items,
+            items=final_items,
         )
 
 
