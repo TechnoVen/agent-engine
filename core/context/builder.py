@@ -14,6 +14,13 @@ from dataclasses import dataclass, field
 import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from core.context.models import (
+    ContentAuthority,
+    ContentProvenance,
+    ContentTrust,
+    ContextItem,
+)
+
 logger = logging.getLogger(__name__)
 
 # Cache the tiktoken encoding instance to avoid repeated initialization
@@ -84,6 +91,8 @@ class ContextSpec:
 
     required_fields: List[str]
     optional_fields: List[str] = field(default_factory=list)
+    untrusted_fields: List[str] = field(default_factory=list)
+    enforce_untrusted_envelopes: bool = True
     max_tokens: int = 4000
     hard_ceiling_tokens: int = 32000
     allow_retrieval: bool = False
@@ -108,6 +117,7 @@ class BuiltContext(dict):
         was_truncated: bool = False,
         truncated_fields: Optional[List[str]] = None,
         warnings: Optional[List[str]] = None,
+        items: Optional[Dict[str, ContextItem]] = None,
     ):
         super().__init__(data)
         self.data = data
@@ -116,6 +126,33 @@ class BuiltContext(dict):
         self.was_truncated = was_truncated
         self.truncated_fields = truncated_fields or []
         self.warnings = warnings or []
+        self.items: Dict[str, ContextItem] = items or {}
+
+    def get_item(self, key: str) -> Optional[ContextItem]:
+        """Retrieve the typed ContextItem for a given field key."""
+        return self.items.get(key)
+
+    @property
+    def has_untrusted_content(self) -> bool:
+        """True if any context item contains untrusted external data."""
+        return any(item.is_untrusted for item in self.items.values())
+
+    def get_untrusted_items(self) -> List[ContextItem]:
+        """Return all items labeled as untrusted external content."""
+        return [item for item in self.items.values() if item.is_untrusted]
+
+    def format_prompt_block(self, key: str) -> str:
+        """Format an item for prompt rendering, wrapping in envelopes if untrusted."""
+        if key in self.items:
+            return self.items[key].format_envelope()
+        return str(self.get(key, ""))
+
+    def render_full_prompt(self) -> str:
+        """Render all context items sequentially into an envelope-isolated prompt string."""
+        blocks = []
+        for k, v in self.items.items():
+            blocks.append(f"### {k.upper()}\n{v.format_envelope()}")
+        return "\n\n".join(blocks)
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize envelope into a standard dictionary."""
@@ -126,6 +163,8 @@ class BuiltContext(dict):
             "was_truncated": self.was_truncated,
             "truncated_fields": self.truncated_fields,
             "warnings": self.warnings,
+            "has_untrusted_content": self.has_untrusted_content,
+            "untrusted_fields": [k for k, v in self.items.items() if v.is_untrusted],
         }
 
 
@@ -308,18 +347,64 @@ class ContextBuilder:
                         f"Required context field '{k}' is missing from input payload."
                     )
 
-        # 2. Filter whitelisted fields
+        # 2. Filter whitelisted fields and construct typed ContextItem objects
         ctx: Dict[str, Any] = {}
-        for k in spec.required_fields:
-            if k in available:
-                ctx[k] = available[k]
+        context_items: Dict[str, ContextItem] = {}
 
-        for k in spec.optional_fields:
+        candidate_keys = list(spec.required_fields) + [
+            k for k in spec.optional_fields if k not in spec.required_fields
+        ]
+        for k in candidate_keys:
             if k in available:
-                ctx[k] = available[k]
+                val = available[k]
+                if isinstance(val, ContextItem):
+                    item = val
+                else:
+                    is_untrusted = k in spec.untrusted_fields or k.startswith(
+                        ("untrusted_", "external_", "third_party_")
+                    )
+                    if is_untrusted:
+                        item = ContextItem(
+                            content=str(val) if not isinstance(val, str) else val,
+                            trust=ContentTrust.UNTRUSTED_CONTENT,
+                            authority=ContentAuthority.EVIDENCE,
+                            provenance=ContentProvenance.create(
+                                source_id=k, source_type="untrusted_field"
+                            ),
+                            label=k,
+                        )
+                    elif k in ("prompt", "user_prompt", "query", "user_directive", "goal"):
+                        item = ContextItem(
+                            content=str(val) if not isinstance(val, str) else val,
+                            trust=ContentTrust.TRUSTED_USER,
+                            authority=ContentAuthority.USER_DIRECTIVE,
+                            label=k,
+                        )
+                    else:
+                        item = ContextItem(
+                            content=str(val) if not isinstance(val, str) else val,
+                            trust=ContentTrust.INTERNAL_STATE,
+                            authority=ContentAuthority.EVIDENCE,
+                            label=k,
+                        )
+
+                context_items[k] = item
+                if spec.enforce_untrusted_envelopes and item.is_untrusted:
+                    ctx[k] = item.format_envelope()
+                elif isinstance(val, ContextItem):
+                    ctx[k] = item.format_envelope() if item.is_untrusted else item.content
+                else:
+                    ctx[k] = val
 
         # Add system prompt if specified
         if spec.system_prompt:
+            sys_item = ContextItem(
+                content=spec.system_prompt,
+                trust=ContentTrust.SYSTEM,
+                authority=ContentAuthority.SYSTEM_POLICY,
+                label="system_prompt",
+            )
+            context_items["system_prompt"] = sys_item
             ctx["system_prompt"] = spec.system_prompt
 
         # 3. Conditional RAG retrieval
@@ -334,7 +419,22 @@ class ContextBuilder:
                         raw_rag = raw_rag[:char_limit] + " ...[truncated RAG context]"
                     elif isinstance(raw_rag, list):
                         raw_rag = raw_rag[: max(1, spec.retrieval_budget_tokens // 100)]
-                ctx["retrieved_context"] = raw_rag
+
+                rag_str = str(raw_rag) if not isinstance(raw_rag, str) else raw_rag
+                rag_item = ContextItem(
+                    content=rag_str,
+                    trust=ContentTrust.UNTRUSTED_CONTENT,
+                    authority=ContentAuthority.EVIDENCE,
+                    provenance=ContentProvenance.create(
+                        source_id="rag_retrieval", source_type="retrieval"
+                    ),
+                    label="retrieved_context",
+                )
+                context_items["retrieved_context"] = rag_item
+                if spec.enforce_untrusted_envelopes:
+                    ctx["retrieved_context"] = rag_item.format_envelope()
+                else:
+                    ctx["retrieved_context"] = raw_rag
 
         # Calculate original tokens before truncation
         original_tokens = sum(estimate_object_tokens(v) for v in ctx.values())
@@ -356,6 +456,7 @@ class ContextBuilder:
             was_truncated=was_truncated,
             truncated_fields=truncated_fields,
             warnings=warnings,
+            items=context_items,
         )
 
 

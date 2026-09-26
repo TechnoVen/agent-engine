@@ -132,13 +132,13 @@ def test_encrypted_vault_custom_seed(tmp_path):
     """Test that custom AGENT_ENGINE_VAULT_KEY seed secures the vault."""
     vault_file = tmp_path / "custom_seed.vault"
 
-    with patch.dict(os.environ, {"AGENT_ENGINE_VAULT_KEY": "passphrase-alpha"}):
+    with patch.dict(os.environ, {"AGENT_ENGINE_VAULT_KEY": "pass:passphrase-alpha"}):
         vault1 = EncryptedVaultBackend(vault_path=vault_file)
         vault1.set("service", "key", "secret-with-seed-alpha")
         assert vault1.get("service", "key") == "secret-with-seed-alpha"
 
     # Attempt to read with different key seed must fail
-    with patch.dict(os.environ, {"AGENT_ENGINE_VAULT_KEY": "wrong-passphrase"}):
+    with patch.dict(os.environ, {"AGENT_ENGINE_VAULT_KEY": "pass:wrong-passphrase"}):
         vault2 = EncryptedVaultBackend(vault_path=vault_file)
         with pytest.raises(VaultIntegrityError):
             vault2.get("service", "key")

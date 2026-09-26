@@ -700,11 +700,11 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
   - `services/python/server/routers/credentials.py`
   - `tests/test_r2_secrets_service.py` (25 dedicated test scenarios).
 
-### [ ] R2.7 — Untrusted-content labeling and prompt-injection controls
+### [x] R2.7 — Untrusted-content labeling and prompt-injection controls
 
 - **Migration:** `NEW`
 - **Target release:** `0.5`
-- **Initial maturity:** `S0` unless `docs/STATUS.md` verifies a higher level from legacy work.
+- **Initial maturity:** `S1` (Implemented and verified per `docs/STATUS.md`).
 - **Dependencies:** R1.7, R2.3
 - **User Story:** As a user, I want emails, web pages and retrieved documents treated as untrusted data so embedded instructions cannot silently override my policies.
 - **Deliverables:**
@@ -712,9 +712,9 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
   - Context builder separates system/user instructions from untrusted data.
   - Tool authorization never derives from retrieved text.
 - **Acceptance Criteria:**
-  - [ ] Prompt-injection fixtures cannot authorize tools or alter policy.
+  - [x] Prompt-injection fixtures cannot authorize tools or alter policy.
 - **Required Evidence:**
-  - Adversarial context tests.
+  - Adversarial context tests (`tests/test_r2_prompt_injection.py` — 17 comprehensive scenarios).
 
 ### [ ] R2.8 — Sandbox worker runtime
 

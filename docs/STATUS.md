@@ -494,19 +494,34 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/router/model_router.py"
     - "services/python/server/routers/credentials.py"
     - "tests/test_r2_secrets_service.py"
-  notes: "S1 — implemented and implementation-tested. Unified credential and secrets subsystem into SecretsService. Implemented strong value object isolation: SecretReference (public), SecretMetadata (masked public), SecretValue (transient internal container with str/repr/format returning '***', reveal() strictly scoped, and wipe() zeroing). Storage hierarchy prioritizes OS Keychain with hardened AES-256-GCM EncryptedVault fallback. Eliminated weak machine identifiers; vault uses 256-bit high-entropy key via AGENT_ENGINE_VAULT_KEY or vault.key with 0600 POSIX permissions. Added automatic transparent migration for existing legacy vaults. Permanently eliminated plaintext reveal APIs (reveal=true rejected with 403 Forbidden). Implemented backend-only connection testing. Completely eliminated global os.environ pollution from core/models.py and model_router.py; API keys injected directly into dspy.LM and child subprocess invocation environments. Enforced consumer authorization and project scope isolation. 25/25 dedicated security test scenarios passing, 626/626 full regression passing."
+  notes: "S1 — implemented and implementation-tested. Unified credential and secrets subsystem into SecretsService. Implemented strong value object isolation: SecretReference (public), SecretMetadata (masked public), SecretValue (transient internal container with str/repr/format returning '***', reveal() strictly scoped, and wipe() zeroing). Storage hierarchy prioritizes OS Keychain with hardened AES-256-GCM EncryptedVault fallback. Eliminated weak machine identifiers; vault uses 256-bit high-entropy key via AGENT_ENGINE_VAULT_KEY or vault.key with 0600 POSIX permissions. Added automatic transparent migration for existing legacy vaults. Permanently eliminated plaintext reveal APIs (reveal=true rejected with 403 Forbidden). Implemented backend-only connection testing. Completely eliminated global os.environ pollution from core/models.py and model_router.py; API keys injected directly into dspy.LM and child subprocess invocation environments. Enforced consumer authorization and project scope isolation. 30/30 dedicated security test scenarios passing, full regression passing."
+- id: R2.7
+  title: "Untrusted-content labeling and prompt-injection controls"
+  task_status: done
+  capability_maturity: S1
+  migration: NEW
+  owner: "Security & Prompt Architecture"
+  depends_on: [R1.7, R2.3]
+  evidence:
+    - "core/context/models.py"
+    - "core/context/builder.py"
+    - "core/context/__init__.py"
+    - "core/skills/boundary.py"
+    - "tests/test_r2_prompt_injection.py"
+  notes: "S1 — implemented and implementation-tested. Established canonical content trust and authority separation (ContentTrust: SYSTEM, TRUSTED_USER, INTERNAL_STATE, UNTRUSTED_CONTENT; ContentAuthority: SYSTEM_POLICY, USER_DIRECTIVE, EVIDENCE). Enforced strict inviolable security invariant: untrusted content can never claim or exercise SYSTEM_POLICY or USER_DIRECTIVE authority (raises ValueError fail-closed). Implemented ContentProvenance tracking (source_id, source_type, content_hash, metadata). Structured envelopes (<<<BEGIN_UNTRUSTED_EXTERNAL_DATA>>> / <<<END_UNTRUSTED_EXTERNAL_DATA>>>) with mandatory delimiter escaping, zero-width Unicode smuggling sanitization, and role spoofing neutralization (prepending [DATA] to simulated system/human/assistant turns). ContextBuilder now enforces automatic enveloping for untrusted fields, RAG retrievals, and untrusted inputs. Defends across 17 comprehensive adversarial scenarios (jailbreaks, fake approvals, fake policies, path escapes, delimiter breakouts, secret exfiltration, token exhaustion DoS, etc.). Full backend defense-in-depth: backend capability boundary, policy engine, and secrets service fail closed regardless of LLM generation. 17/17 dedicated security test scenarios passing, 648/648 full regression passing."
 ```
 
 ---
 
 ## 6. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `626 passed, 3 warnings in 75.19s` (`uv run pytest`)
+- **Full Regression Suite:** `648 passed, 3 warnings in 78.50s` (`uv run pytest`)
 - **R2 IPC Authentication Suite:** `14 passed in 7.83s` (`uv run pytest tests/test_r2_ipc_authentication.py`)
 - **R2 Policy & Exact-Operation Approvals Suite:** `33 passed in 4.26s` (`uv run pytest tests/test_r2_policy_and_approvals.py`)
 - **R2 Canonical Workspace Paths Suite:** `24 passed in 2.90s` (`uv run pytest tests/test_r2_workspace_paths.py`)
-- **R2 Secrets Service & Runtime Injection Suite:** `25 passed in 3.89s` (`uv run pytest tests/test_r2_secrets_service.py`)
-- **Combined R2 Security Verification:** `96 passed in 13.08s` (`uv run pytest tests/test_r2_ipc_authentication.py tests/test_r2_policy_and_approvals.py tests/test_r2_workspace_paths.py tests/test_r2_secrets_service.py`)
+- **R2 Secrets Service & Runtime Injection Suite:** `30 passed in 4.50s` (`uv run pytest tests/test_r2_secrets_service.py`)
+- **R2 Prompt-Injection & Untrusted Content Suite:** `17 passed in 3.31s` (`uv run pytest tests/test_r2_prompt_injection.py`)
+- **Combined R2 Security Verification:** `118 passed in 18.25s` (`uv run pytest tests/test_r2_ipc_authentication.py tests/test_r2_policy_and_approvals.py tests/test_r2_workspace_paths.py tests/test_r2_secrets_service.py tests/test_r2_prompt_injection.py`)
 - **Static Code Analysis & Formatting:**
   - `uv run ruff check`: passed (`All checks passed!`)
   - `uv run ruff format --check`: passed
