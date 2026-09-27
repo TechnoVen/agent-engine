@@ -48,9 +48,12 @@ from core.sandbox.backend import (
 )
 from core.sandbox.models import (
     SandboxFilesystemGrant,
+    SandboxMount,
+    SandboxMountMode,
     SandboxSecurityError,
     SandboxSpec,
     SandboxStatus,
+    SandboxTerminalReason,
     SandboxUnavailableError,
 )
 from core.sandbox.service import SandboxService
@@ -249,14 +252,25 @@ def test_08_explicit_secret_injected_to_authorized_worker(
 
         spec = SandboxSpec(
             command=[],
-            script="import os; print('RESOLVED_KEY=' + str(os.environ.get('OPENAI_API_KEY')))",
+            script="""
+import os, hashlib
+key = os.environ.get('OPENAI_API_KEY', '')
+print('KEY_HASH=' + hashlib.sha256(key.encode()).hexdigest())
+print('RESOLVED_KEY=' + str(key))
+""",
             filesystem=SandboxFilesystemGrant(workspace_dir=temp_workspace),
             secret_grants=[ref],
         )
 
         res = sbx_svc.execute(spec, project_id="proj_alpha")
         assert res.is_success
-        assert "RESOLVED_KEY=sk-proj-authorized-key-424242" in res.stdout
+        import hashlib
+
+        expected_hash = hashlib.sha256(b"sk-proj-authorized-key-424242").hexdigest()
+        assert f"KEY_HASH={expected_hash}" in res.stdout
+        # Assert injected secret was redacted from execution evidence (Item 3 & 4)
+        assert "sk-proj-authorized-key-424242" not in res.stdout
+        assert "RESOLVED_KEY=[REDACTED_SECRET]" in res.stdout
 
 
 def test_09_unrelated_secret_remains_inaccessible(
@@ -292,8 +306,10 @@ print('ANTHROPIC=' + str(os.environ.get('ANTHROPIC_API_KEY')))
 
         res = sbx_svc.execute(spec, project_id="proj_1")
         assert res.is_success
-        assert "OPENAI=sk-allowed-key-11111" in res.stdout
+        assert "OPENAI=[REDACTED_SECRET]" in res.stdout
         assert "ANTHROPIC=None" in res.stdout
+        assert "sk-allowed-key-11111" not in res.stdout
+        assert "sk-unrelated-key-22222" not in res.stdout
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Bubblewrap requires Linux")
@@ -414,13 +430,16 @@ def test_15_artifact_brokering_validates_path_containment(
     if not sandbox_service.is_available():
         pytest.skip("Bubblewrap backend is not available on this host")
 
-    code = """
-with open('valid_artifact.json', 'w') as f:
-    f.write('{"result": 42}')
-with open('nested_report.md', 'w') as f:
+    output_dir = temp_workspace / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    code = f"""
+with open('{output_dir}/valid_artifact.json', 'w') as f:
+    f.write('{{"result": 42}}')
+with open('{output_dir}/nested_report.md', 'w') as f:
     f.write('# Report')
 """
-    res = sandbox_service.run_code(code, workspace_dir=temp_workspace)
+    res = sandbox_service.run_code(code, workspace_dir=temp_workspace, output_dir=output_dir)
     assert res.is_success
 
     assert "valid_artifact.json" in res.artifacts
@@ -493,3 +512,301 @@ def test_18_production_accessible_exec_eval_remediated():
 
     fenced = "```python\nprint(100 + 200)\n```"
     assert extract_code_block(fenced) == "print(100 + 200)"
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Bubblewrap requires Linux")
+def test_19_default_source_workspace_is_read_only(
+    sandbox_service: SandboxService, temp_workspace: Path
+):
+    """Scenario 19: Default source workspace is mounted READ_ONLY.
+
+    Untrusted code cannot modify or overwrite source files in the project workspace.
+    """
+    if not sandbox_service.is_available():
+        pytest.skip("Bubblewrap backend is not available on this host")
+
+    source_file = temp_workspace / "main.py"
+    source_file.write_text("print('original')", encoding="utf-8")
+
+    code = f"""
+from pathlib import Path
+try:
+    Path('{source_file}').write_text("tampered")
+    print("TAMPER_SUCCESS")
+except OSError as e:
+    print("READ_ONLY_BLOCKED:" + type(e).__name__)
+"""
+    res = sandbox_service.run_code(code, workspace_dir=temp_workspace)
+    assert res.is_success
+    assert "TAMPER_SUCCESS" not in res.stdout
+    assert "READ_ONLY_BLOCKED:OSError" in res.stdout
+    assert source_file.read_text(encoding="utf-8") == "print('original')"
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Bubblewrap requires Linux")
+def test_20_scratch_and_output_directories_are_writable(
+    sandbox_service: SandboxService, temp_workspace: Path
+):
+    """Scenario 20: Scratch and output directories are writable while source workspace remains read-only."""
+    if not sandbox_service.is_available():
+        pytest.skip("Bubblewrap backend is not available on this host")
+
+    scratch_dir = temp_workspace / "scratch"
+    output_dir = temp_workspace / "output"
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    code = f"""
+from pathlib import Path
+# 1. Scratch write succeeds
+Path('{scratch_dir}/temp_calc.dat').write_text("scratch_data")
+# 2. Output write succeeds
+Path('{output_dir}/model_weights.bin').write_text("binary_artifact")
+# 3. Workspace root write fails
+try:
+    Path('{temp_workspace}/escaped.txt').write_text("fail")
+    print("ROOT_WRITE_SUCCESS")
+except OSError:
+    print("ROOT_WRITE_BLOCKED")
+"""
+    res = sandbox_service.run_code(
+        code,
+        workspace_dir=temp_workspace,
+        scratch_dir=scratch_dir,
+        output_dir=output_dir,
+    )
+    assert res.is_success
+    assert "ROOT_WRITE_BLOCKED" in res.stdout
+    assert "ROOT_WRITE_SUCCESS" not in res.stdout
+    assert (scratch_dir / "temp_calc.dat").read_text() == "scratch_data"
+    assert (output_dir / "model_weights.bin").read_text() == "binary_artifact"
+    assert "model_weights.bin" in res.artifacts
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Bubblewrap requires Linux")
+def test_21_narrow_rw_grant_does_not_broaden_to_project(
+    sandbox_service: SandboxService, temp_workspace: Path
+):
+    """Scenario 21: Explicit narrow RW mount does not broaden to project root."""
+    if not sandbox_service.is_available():
+        pytest.skip("Bubblewrap backend is not available on this host")
+
+    narrow_rw = temp_workspace / "specific_staging"
+    narrow_rw.mkdir(parents=True, exist_ok=True)
+
+    mount = SandboxMount(
+        source=narrow_rw,
+        target=narrow_rw,
+        mode=SandboxMountMode.READ_WRITE,
+    )
+    spec = SandboxSpec(
+        command=[],
+        script=f"""
+from pathlib import Path
+Path('{narrow_rw}/ok.txt').write_text('granted')
+try:
+    Path('{temp_workspace}/tamper.txt').write_text('fail')
+    print('TAMPER_SUCCESS')
+except OSError:
+    print('TAMPER_BLOCKED')
+""",
+        filesystem=SandboxFilesystemGrant(
+            workspace_dir=temp_workspace,
+            project_mount_mode=SandboxMountMode.READ_ONLY,
+            mounts=[mount],
+        ),
+    )
+    res = sandbox_service.execute(spec)
+    assert res.is_success
+    assert "TAMPER_BLOCKED" in res.stdout
+    assert "TAMPER_SUCCESS" not in res.stdout
+    assert (narrow_rw / "ok.txt").read_text() == "granted"
+    assert not (temp_workspace / "tamper.txt").exists()
+
+
+def test_22_secret_authority_bound_to_execution_and_capability():
+    """Scenario 22: Secret authority is strictly bound to execution_id and capability_id (Item 2).
+
+    Sandbox A cannot use Sandbox B secrets, and different consumer IDs fail closed.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        backend = EncryptedVaultBackend(
+            vault_path=Path(td) / "vault.db",
+            key_file_path=Path(td) / "vault.key",
+        )
+        sec_svc = SecretsService(primary_backend=backend)
+        ref = SecretReference(provider="test_prov", name="scoped_token", project_id="p1")
+        sec_svc.store_secret(ref, "secret_payload_999")
+
+        # Resolve for execution A
+        consumer_a = "sandbox:p1:sbx-exec-aaa:calc"
+        sec_val = sec_svc.resolve_for_consumer(consumer_a, ref)
+
+        # Attempting reveal with consumer B fails closed with PermissionError
+        consumer_b = "sandbox:p1:sbx-exec-bbb:calc"
+        with pytest.raises(PermissionError):
+            sec_val.reveal(consumer_b)
+
+        # Reveal with matching consumer A succeeds
+        assert sec_val.reveal(consumer_a) == "secret_payload_999"
+
+        # Wipe container
+        sec_val.wipe()
+        with pytest.raises(ValueError, match="already been destroyed"):
+            sec_val.reveal(consumer_a)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Bubblewrap requires Linux")
+def test_23_printed_secret_redacted_from_context_item_and_ledger(temp_workspace: Path):
+    """Scenario 23: Secret printed by worker is scrubbed from stdout, stderr, and ContextItem."""
+    with tempfile.TemporaryDirectory() as td:
+        backend = EncryptedVaultBackend(
+            vault_path=Path(td) / "vault.db",
+            key_file_path=Path(td) / "vault.key",
+        )
+        sec_svc = SecretsService(primary_backend=backend)
+        ref = SecretReference(provider="openai", name="api_key", project_id="proj_redact")
+        sec_svc.store_secret(ref, "sk-super-secret-token-xyz789")
+
+        sbx_svc = SandboxService(secrets_service=sec_svc)
+        if not sbx_svc.is_available():
+            pytest.skip("Bubblewrap backend is not available on this host")
+
+        code = """
+import os, sys
+k = os.environ.get('OPENAI_API_KEY', '')
+sys.stdout.write(f"STDOUT_LEAK={k}\\n")
+sys.stderr.write(f"STDERR_LEAK={k}\\n")
+"""
+        spec = SandboxSpec(
+            command=[],
+            script=code,
+            filesystem=SandboxFilesystemGrant(workspace_dir=temp_workspace),
+            secret_grants=[ref],
+        )
+        res = sbx_svc.execute(spec, project_id="proj_redact")
+        assert res.is_success
+
+        raw = "sk-super-secret-token-xyz789"
+        assert raw not in res.stdout
+        assert raw not in res.stderr
+        assert "[REDACTED_SECRET]" in res.stdout
+        assert "[REDACTED_SECRET]" in res.stderr
+
+        # ContextItem evidence check
+        ctx_item = res.to_context_item(redacted_secrets=[raw])
+        assert raw not in ctx_item.content
+        assert "[REDACTED_SECRET]" in ctx_item.content
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Bubblewrap requires Linux")
+def test_24_host_home_data_run_tmp_canaries_inaccessible(
+    sandbox_service: SandboxService, temp_workspace: Path
+):
+    """Scenario 24: Audited bwrap mount set: Host /home, /run, /var, and host /tmp canaries are inaccessible."""
+    if not sandbox_service.is_available():
+        pytest.skip("Bubblewrap backend is not available on this host")
+
+    # Create canary in host /tmp and host home
+    host_tmp_canary = Path("/tmp") / f"canary_host_tmp_{os.getpid()}.txt"
+    host_home_canary = Path.home() / f"canary_host_home_{os.getpid()}.txt"
+    try:
+        host_tmp_canary.write_text("HOST_TMP_LEAK_CANARY", encoding="utf-8")
+        host_home_canary.write_text("HOST_HOME_LEAK_CANARY", encoding="utf-8")
+
+        code = f"""
+import os
+print('HOST_TMP_EXISTS=' + str(os.path.exists('{host_tmp_canary}')))
+print('HOST_HOME_EXISTS=' + str(os.path.exists('{host_home_canary}')))
+print('HOST_RUN_EXISTS=' + str(os.path.exists('/run')))
+print('HOST_VAR_EXISTS=' + str(os.path.exists('/var')))
+"""
+        res = sandbox_service.run_code(code, workspace_dir=temp_workspace)
+        assert res.is_success
+        assert "HOST_TMP_EXISTS=False" in res.stdout
+        assert "HOST_HOME_EXISTS=False" in res.stdout
+        assert "HOST_RUN_EXISTS=False" in res.stdout
+        assert "HOST_VAR_EXISTS=False" in res.stdout
+    finally:
+        if host_tmp_canary.exists():
+            host_tmp_canary.unlink()
+        if host_home_canary.exists():
+            host_home_canary.unlink()
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Bubblewrap requires Linux")
+def test_25_cancellation_kills_child_and_grandchild_processes(
+    sandbox_service: SandboxService, temp_workspace: Path
+):
+    """Scenario 25: Cancellation terminates the entire process group including child and grandchild processes."""
+    if not sandbox_service.is_available():
+        pytest.skip("Bubblewrap backend is not available on this host")
+
+    token = CancellationToken(execution_id="test_cancel_tree")
+    # Script spawns child and grandchild that sleep
+    code = """
+import subprocess, time
+subprocess.Popen(["sleep", "120"])
+subprocess.Popen(["python3", "-c", "import subprocess; subprocess.Popen(['sleep', '120'])"])
+time.sleep(60)
+"""
+
+    def _cancel_later():
+        time.sleep(0.4)
+        token.cancel()
+
+    thread = threading.Thread(target=_cancel_later)
+    thread.start()
+
+    res = sandbox_service.run_code(
+        code,
+        workspace_dir=temp_workspace,
+        timeout_seconds=5.0,
+        cancellation_token=token,
+    )
+    thread.join()
+
+    assert res.cancelled is True
+    assert res.terminal_reason == SandboxTerminalReason.USER_CANCELLED
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Bubblewrap requires Linux")
+def test_26_non_regular_artifact_candidates_rejected(
+    sandbox_service: SandboxService, temp_workspace: Path
+):
+    """Scenario 26: Artifact brokering rejects FIFOs, device nodes, and escaping symlinks."""
+    if not sandbox_service.is_available():
+        pytest.skip("Bubblewrap backend is not available on this host")
+
+    output_dir = temp_workspace / "out"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Worker generates artifacts during execution
+    code = f"""
+import os
+from pathlib import Path
+
+# 1. Create a regular artifact
+Path('{output_dir}/valid.json').write_text('{{"status": "ok"}}')
+
+# 2. Create a FIFO (named pipe)
+try:
+    os.mkfifo('{output_dir}/bad_fifo.pipe')
+except Exception:
+    pass
+
+# 3. Create a symlink escaping workspace to /etc/hosts
+try:
+    os.symlink('/etc/hosts', '{output_dir}/leak_hosts')
+except Exception:
+    pass
+"""
+    res = sandbox_service.run_code(
+        code,
+        workspace_dir=temp_workspace,
+        output_dir=output_dir,
+    )
+    assert res.is_success
+    assert "valid.json" in res.artifacts
+    assert "bad_fifo.pipe" not in res.artifacts
+    assert "leak_hosts" not in res.artifacts

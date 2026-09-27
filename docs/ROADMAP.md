@@ -729,22 +729,22 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
 - **Acceptance Criteria:**
   - [x] Generated code cannot access host secrets or paths outside sandbox grants.
 - **Required Evidence:**
-  - Sandbox negative tests (`tests/test_r2_sandbox_runtime.py` — 18 comprehensive security scenarios).
+  - Sandbox negative tests (`tests/test_r2_sandbox_runtime.py` — 26 comprehensive security scenarios).
 
-### [ ] R2.9 — Sandbox resource limits
+### [x] R2.9 — Sandbox resource limits
 
 - **Migration:** `NEW`
 - **Target release:** `0.5`
-- **Initial maturity:** `S0` unless `docs/STATUS.md` verifies a higher level from legacy work.
+- **Initial maturity:** `S1`
 - **Dependencies:** R2.8
 - **User Story:** As a user, I want untrusted work limited by CPU, memory, process count and runtime so runaway code cannot freeze my machine.
 - **Deliverables:**
-  - CPU/RAM/time/process/network policies.
-  - Kill and cleanup behavior.
+  - CPU/RAM/time/process/network policies (`SandboxResourcePolicy`, `SandboxTerminalReason`).
+  - Kill and cleanup behavior (cgroup v2 `systemd-run --user --scope`, `RLIMIT_CPU`, streaming backpressure readers, process group termination via `os.killpg`, capacity accounting).
 - **Acceptance Criteria:**
-  - [ ] Limit violations terminate job and record reason.
+  - [x] Limit violations terminate job and record reason.
 - **Required Evidence:**
-  - Resource-limit tests.
+  - Resource-limit tests (`tests/test_r2_sandbox_resource_limits.py` — 22 comprehensive resource limit test scenarios covering memory, CPU, process count, wall-clock time, stdout/stderr byte limits, capacity admission, cgroup v2, and fail-closed isolation).
 
 ### [ ] R2.10 — Safe staged patch application
 

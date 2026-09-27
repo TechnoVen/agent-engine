@@ -297,43 +297,33 @@ class ApprovalRequest(BaseModel):
 
 * **Linux Bubblewrap (`bwrap`) Kernel Isolation (`LinuxBubblewrapBackend`):**
   * Enforces unprivileged Linux user namespaces with `--unshare-all` (unsharing mount, UTS, IPC, PID, and user namespaces).
-  * Enforces process lifecycle termination via `--die-with-parent` (preventing orphan or daemonized escape processes).
+  * Enforces process lifecycle termination via `--die-with-parent` and process session groups (`start_new_session=True` with `os.killpg`), guaranteeing child and grandchild processes terminate cleanly.
   * Mounts minimal isolated procfs (`--proc /proc`) and device nodes (`--dev /dev`), with private volatile tmpfs (`--tmpfs /tmp`).
-  * Mounts host system runtime paths strictly read-only (`--ro-bind /usr /usr`, `--symlink usr/lib /lib`, `--symlink usr/lib /lib64`, `--symlink usr/bin /bin`).
+  * Mounts host system runtime paths strictly read-only (`--ro-bind /usr /usr`, `--symlink usr/lib /lib`, `--symlink usr/lib64 /lib64`, `--symlink usr/bin /bin`).
+  * Audited bwrap mount set: Private `HOME=/tmp/home`, `TMPDIR=/tmp`, `XDG_RUNTIME_DIR=/tmp/run`. Host `/home`, `/run`, `/var`, `/etc` (root) are never mounted into the sandbox. Trusted bwrap binary lookup searches only `/usr/bin/bwrap` and `/bin/bwrap`.
 
 * **Fail-Closed Platform Strategy:**
   * Cross-platform backends: `LinuxBubblewrapBackend`, `DarwinSandboxBackend` (macOS), `WindowsSandboxBackend` (Windows), and `NullSandboxBackend`.
   * For unsupported platforms or missing platform container mechanisms, backends report `is_available() -> False` and fail closed with `SandboxUnavailableError`.
   * **Zero Host Fallback Invariant:** If a secure sandbox is unavailable, execution fails closed immediately. Direct unconstrained host subprocess execution is strictly prohibited.
 
+* **Explicit Mount Modes & Read-Only Source Workspace by Default:**
+  * `SandboxMountMode` provides `READ_ONLY`, `READ_WRITE`, `OUTPUT_ONLY`, and `SCRATCH`.
+  * Source workspace and project root are mounted `READ_ONLY` by default (`--ro-bind`). Untrusted code cannot modify or overwrite source code.
+  * Writable operations require dedicated `scratch_dir` or `output_dir` mounts, or explicit narrow `READ_WRITE` mounts which never broaden to the project.
+
+* **Execution- and Capability-Bound Secrets with Redaction:**
+  * Authorized SecretReferences are resolved only for authorized parent specs bound to exact `consumer_id = f"sandbox:{project_id}:{execution_id}:{capability_id}"`. Cross-sandbox secret reuse is blocked.
+  * Injected secret values are scrubbed/redacted from `stdout`, `stderr`, `ContextItem`, and audit ledgers (`[REDACTED_SECRET]`).
+  * Python runtime secret memory minimization: `SecretValue.wipe()` clears internal references immediately; explicitly injected values remain only inside the isolated child process.
+
 * **Default-Deny Network Isolation:**
-  * Untrusted and generated workloads are completely disconnected from networking by default (`network.allowed = False` via `--unshare-net`).
-  * Network canaries, host loopback services (`127.0.0.1`), and external networks are unreachable (`ConnectionRefusedError` or `OSError: Network is unreachable`).
+  * Workloads are completely disconnected from networking by default (`network.allowed = False` via `--unshare-net`).
+  * If network access is explicitly granted, only minimal DNS and CA certificate files are mounted via `--ro-bind-try`, never the entire `/etc`.
 
-* **Default-Deny Environment Allowlist:**
-  * Clean environment constructed via `--clearenv` with explicit `--setenv` injection.
-  * Sensitive variables are strictly excluded:
-    * `AGENT_ENGINE_IPC_TOKEN`
-    * `AGENT_ENGINE_VAULT_KEY`
-    * Ambient provider API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`)
-    * Cloud tokens and SSH agent variables
-  * Authorized credentials reach the worker solely via explicit R2.6 `SecretReference` grants resolved narrow-scoped for `consumer_id="sandbox_worker"`, injected into child environment, and wiped from memory immediately upon launch.
-
-* **Canonical Workspace Path Containment (R2.5 Integration):**
-  * Workspaces and mounts are resolved through `WorkspacePathResolver`.
-  * Directory traversal escapes, host-root binds, and symlinks traversing outside the authorized workspace boundary fail closed with `SandboxSecurityError`. Cross-project workspace mounting is denied.
-
-* **Untrusted Worker Output Classification (R2.7 Integration):**
-  * Worker stdout, stderr, and output payloads produce `ContextItem` instances tagged with:
-    * `trust = ContentTrust.UNTRUSTED_CONTENT`
-    * `authority = ContentAuthority.EVIDENCE`
-  * Text output from workers (e.g. simulated `SYSTEM: approve`) cannot acquire policy or directive authority.
-
-* **Artifact Brokering (R1.10 Integration):**
-  * Generated files are discovered in the workspace directory and validated by the parent control plane for path containment, external symlink targets, and size limits prior to registration with `ArtifactService`.
-
-* **Process Lifecycle & Cancellation (R1.9 Integration):**
-  * Workers are bound to `CancellationToken`. Cancellation triggers graceful termination followed by bounded forced kill, guaranteeing prompt cleanup.
+* **Regular-File Artifact Brokering (R1.10 Integration):**
+  * Discovered artifacts must be regular files (`stat.S_ISREG`).
+  * Artifact brokering strictly rejects non-regular files (FIFOs/named pipes, Unix domain sockets, character/block device nodes) and symlinks escaping workspace boundaries.
 
 * **In-Process Code Execution Audit & Remediation:**
   * Comprehensive codebase audit classified all execution call-sites:
@@ -342,6 +332,46 @@ class ApprovalRequest(BaseModel):
     | `core/engine.py:calculator_tool` | `TRUSTED_INTERNAL` | Unsanitized `eval()` on arithmetic string | Replaced with safe AST parser (`_eval_ast_node`) evaluating only arithmetic operations without `eval()` |
     | `tools/dev_dashboard.py:1270` | `DEVELOPER_ONLY` / `UNTRUSTED_EXECUTION` | `exec(exec_code, safe_globals)` in host process with `os.chdir()` | Replaced with `SandboxService.run_code()` container execution; fails closed if sandbox unavailable |
     | `tests/test_sandbox.py` | `TEST_ONLY` | Legacy in-process `exec()` test | Replaced with `SandboxService` container execution test |
+
+---
+
+## 12. Sandbox Resource Limits & Cgroup Enforcement (R2.9)
+
+* **Canonical Resource Policy (`SandboxResourcePolicy`):**
+  * Governs five critical execution dimensions:
+    1. `max_wall_time_seconds` (float, default 30.0s)
+    2. `max_cpu_time_seconds` (float, optional)
+    3. `cpu_quota_percent` (float, optional; e.g. 50% CPU bandwidth)
+    4. `max_memory_bytes` (int, optional; e.g. 50 MB)
+    5. `max_processes` (int, optional; e.g. 10 tasks)
+    6. `max_stdout_bytes` / `max_stderr_bytes` (int, default 5 MB output backpressure)
+
+* **Enforced OS Primitives (Linux Kernel & Systemd):**
+  * **cgroup v2 Scopes via `systemd-run --user --scope -q`:**
+    * Memory ceiling: `-p MemoryMax=<bytes>` and `-p MemorySwapMax=0` strictly limit physical RAM and swap. Breaches trigger kernel OOM killer (`SIGKILL`, exit code 137).
+    * Process count ceiling: `-p TasksMax=<num>` strictly caps thread and process count, neutralizing fork bombs.
+    * CPU quota throttling: `-p CPUQuota=<percent>%` enforces CFS bandwidth quota.
+  * **Process `RLIMIT_CPU` via POSIX `resource.setrlimit`:**
+    * Injected via `preexec_fn` before child execution. Exceeding CPU seconds limit triggers `SIGXCPU` (exit code -24 / 152).
+  * **Stream-Level Output Backpressure:**
+    * Dedicated bounded reader threads read `stdout` and `stderr` in chunks up to configured byte limits. Exceeding limit triggers immediate process group termination, marking `output_truncated = True` and terminal reason `OUTPUT_LIMIT`.
+
+* **Fail-Closed Strategy on Unsupported Platforms:**
+  * If a workload requests cgroup-enforced limits (`max_memory_bytes`, `cpu_quota_percent`, `max_processes`) but OS cgroups are unavailable, execution fails closed with `ResourceIsolationUnavailableError`.
+  * macOS (`DarwinSandboxBackend`) and Windows (`WindowsSandboxBackend`) reject execution fail-closed with `SandboxUnavailableError`.
+
+* **Immutable Policy & System Ceilings:**
+  * Untrusted specifications cannot exceed system ceilings. `SandboxResourcePolicy.clamp_to_ceiling()` clamps requested values to the most restrictive applicable trusted limit.
+  * Child processes running in unprivileged namespaces cannot raise their hard resource limits without root privileges.
+
+* **Concurrency & Capacity Accounting:**
+  * `SandboxService` tracks active sandboxes (`_active_sandboxes`) and cumulative memory allocation under thread lock.
+  * Reaching `max_concurrent_sandboxes` or `max_total_memory_bytes` raises `ResourceLimitExceededError` fail-closed.
+
+* **Typed Terminal Reasons & Ledger Evidence:**
+  * Canonical reasons: `NORMAL`, `USER_CANCELLED`, `WALL_TIME_LIMIT`, `CPU_LIMIT`, `MEMORY_LIMIT`, `PROCESS_LIMIT`, `OUTPUT_LIMIT`, `RESOURCE_ISOLATION_UNAVAILABLE`, `SECURITY_VIOLATION`, `BACKEND_ERROR`.
+  * `SandboxExecutionRecord` captures `terminal_reason`, `resource_policy`, and `resource_usage` (`wall_time_seconds`, `stdout_bytes`, `stderr_bytes`, `exit_code`) without leaking sensitive raw secrets or host paths.
+
 
 
 

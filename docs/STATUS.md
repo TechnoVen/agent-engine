@@ -525,27 +525,43 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/engine.py"
     - "tests/test_r2_sandbox_runtime.py"
     - "tests/test_sandbox.py"
-  notes: "S1 — implemented and implementation-tested. Delivered container-isolated Sandbox Worker Runtime. Established SandboxSpec, SandboxResult, SandboxFilesystemGrant, SandboxMount, SandboxNetworkGrant, and SandboxExecutionRecord. Implemented LinuxBubblewrapBackend utilizing Linux Bubblewrap (bwrap) unprivileged user namespaces (--unshare-all, --unshare-net, --clearenv, --die-with-parent, /proc, /dev, system ro-binds, and workspace bind mounts). Enforced default-deny network isolation and default-deny environment allowlisting (zero host env leakage; IPC token, vault keys, and ambient API keys strictly excluded). Integrated R2.6 SecretsService for last-moment child-only secret injection with immediate memory wiping. Integrated R2.5 canonical workspace containment and symlink escape prevention. Integrated R2.7 by classifying worker stdout/stderr and output files as UNTRUSTED_CONTENT / EVIDENCE via ContextItem. Integrated R1.9 CancellationToken process lifecycle termination. Integrated R1.10 artifact brokering with containment, size, and symlink validation. Implemented fail-closed platform backend strategy (DarwinSandboxBackend, WindowsSandboxBackend fail closed with SandboxUnavailableError; zero host fallback). Remediated in-process execution: replaced eval() in calculator_tool with safe AST parser; replaced Streamlit dev_dashboard in-process exec() with SandboxService. 18/18 dedicated security scenarios passing, 675/675 full regression passing."
+  notes: "S1 — implemented and implementation-tested. Delivered container-isolated Sandbox Worker Runtime with complete Closure Pass hardening. Established SandboxSpec, SandboxResult, SandboxFilesystemGrant, SandboxMount, SandboxNetworkGrant, and SandboxExecutionRecord. Implemented explicit mount modes (READ_ONLY, READ_WRITE, OUTPUT_ONLY, SCRATCH) with project workspaces mounted READ_ONLY by default. Implemented LinuxBubblewrapBackend utilizing Linux Bubblewrap (bwrap) unprivileged user namespaces (--unshare-all, --unshare-net, --clearenv, --die-with-parent, /proc, /dev, minimal system ro-binds, private HOME=/tmp/home, TMPDIR=/tmp, XDG_RUNTIME_DIR=/tmp/run; host /home, /run, /var, root /etc never mounted). Enforced default-deny network isolation and default-deny environment allowlisting (zero host env leakage; IPC token, vault keys, and ambient API keys strictly excluded). Enforced execution- and capability-bound secret grants (consumer_id = sandbox:<project_id>:<execution_id>:<capability_id>) with zero-secrets default and automatic redaction from stdout, stderr, and untrusted ContextItem evidence. Probed bwrap from trusted system paths (/usr/bin/bwrap, /bin/bwrap) with minimal unprivileged user namespace testing. Integrated R2.5 canonical workspace containment and symlink escape prevention. Integrated R2.7 by classifying worker stdout/stderr and output files as UNTRUSTED_CONTENT / EVIDENCE via ContextItem. Integrated R1.9 CancellationToken process lifecycle termination cleaning the entire process tree via os.killpg. Integrated R1.10 artifact brokering with strict regular-file, size, and symlink containment validation. Implemented fail-closed platform backend strategy (DarwinSandboxBackend, WindowsSandboxBackend fail closed with SandboxUnavailableError; zero host fallback). Remediated in-process execution: replaced eval() in calculator_tool with safe AST parser; replaced Streamlit dev_dashboard in-process exec() with SandboxService. 26/26 dedicated security scenarios passing, 705/705 full regression passing."
+- id: R2.9
+  title: "Sandbox resource limits"
+  task_status: done
+  capability_maturity: S1
+  migration: NEW
+  owner: "Security & Sandbox Architecture"
+  depends_on: [R2.8]
+  evidence:
+    - "core/sandbox/models.py"
+    - "core/sandbox/backend.py"
+    - "core/sandbox/service.py"
+    - "core/sandbox/__init__.py"
+    - "tests/test_r2_sandbox_resource_limits.py"
+  notes: "S1 — implemented and implementation-tested. Established canonical SandboxResourcePolicy with immutable ceiling clamping (SandboxService system defaults), typed SandboxTerminalReason (NORMAL, MEMORY_LIMIT, CPU_LIMIT, WALL_TIME_LIMIT, PROCESS_LIMIT, OUTPUT_LIMIT, USER_CANCELLED, SYSTEM_ERROR), and ResourceLimitExceededError / ResourceIsolationUnavailableError. Integrated Linux cgroup v2 user scopes via systemd-run --user --scope -q (MemoryMax, MemorySwapMax=0, CPUQuota, TasksMax) and rlimit (RLIMIT_CPU) in preexec_fn. Implemented bounded stdout/stderr streaming backpressure readers terminating process groups via os.killpg upon limit breach. Implemented admission concurrency and memory capacity accounting in SandboxService (_active_sandboxes, max_concurrent_sandboxes, max_total_memory_bytes). Enforced fail-closed isolation across non-cgroup environments and non-Linux platforms (no unconstrained host execution fallback). 22/22 dedicated resource limit test scenarios passing, 705/705 full regression passing."
 ```
 
 ---
 
 ## 6. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `675 passed, 3 warnings in 85.21s` (`uv run pytest`)
+- **Full Regression Suite:** `705 passed, 3 warnings in 85.02s` (`uv run pytest`)
 - **R2 IPC Authentication Suite:** `14 passed in 7.83s` (`uv run pytest tests/test_r2_ipc_authentication.py`)
 - **R2 Policy & Exact-Operation Approvals Suite:** `33 passed in 4.26s` (`uv run pytest tests/test_r2_policy_and_approvals.py`)
 - **R2 Canonical Workspace Paths Suite:** `24 passed in 2.90s` (`uv run pytest tests/test_r2_workspace_paths.py`)
 - **R2 Secrets Service & Runtime Injection Suite:** `30 passed in 4.50s` (`uv run pytest tests/test_r2_secrets_service.py`)
 - **R2 Prompt-Injection & Untrusted Content Suite:** `26 passed in 3.14s` (`uv run pytest tests/test_r2_prompt_injection.py`)
-- **R2 Sandbox Worker Runtime Suite:** `18 passed in 6.35s` (`uv run pytest tests/test_r2_sandbox_runtime.py`)
-- **Combined R2 Security Verification:** `145 passed in 29.0s` across 6 security suites
+- **R2 Sandbox Worker Runtime Suite:** `26 passed in 7.95s` (`uv run pytest tests/test_r2_sandbox_runtime.py`)
+- **R2 Sandbox Resource Limits Suite:** `22 passed in 18.25s` (`uv run pytest tests/test_r2_sandbox_resource_limits.py`)
+- **Sandbox Baseline Integration Suite:** `4 passed in 0.85s` (`uv run pytest tests/test_sandbox.py`)
+- **Combined R2 Security Verification:** `179 passed in 27.71s` across 8 security suites
 - **Static Code Analysis & Formatting:**
   - `uv run ruff check`: passed (`All checks passed!`)
-  - `uv run ruff format --check`: passed (`235 files already formatted`)
+  - `uv run ruff format --check`: passed (`236 files already formatted`)
 - **Desktop Tauri & Frontend Workspace:**
-  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.48s`)
-  - `pnpm -r build`: passed (`12.3s`)
+  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.70s`)
+  - `pnpm -r build`: passed (`12.4s`)
 - **Documented Upstream Warnings (Non-blocking):**
   1. `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.` (Origin: `fastapi/testclient.py:1` — Upstream FastAPI/Starlette testclient deprecation notice; non-runtime).
   2. `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.` (Origin: `starlette/testclient.py:53` — Upstream Starlette/AnyIO import alias notice; non-runtime).
