@@ -16,6 +16,7 @@ Design Invariants:
 from __future__ import annotations
 
 import abc
+from dataclasses import dataclass, field
 import logging
 import os
 from pathlib import Path
@@ -24,11 +25,12 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from core.sandbox.models import (
     ResourceIsolationUnavailableError,
     SandboxMountMode,
+    SandboxResourcePolicy,
     SandboxResult,
     SandboxSpec,
     SandboxStatus,
@@ -69,7 +71,7 @@ def _read_stream_bounded(
     chunks: List[bytes],
     truncated_flag: List[bool],
 ) -> None:
-    """Read a binary stream up to max_bytes, signaling cancel_event if exceeded."""
+    """Read a binary stream up to max_bytes, signaling cancel_event and draining on breach (Section 8)."""
     total = 0
     try:
         while True:
@@ -84,6 +86,11 @@ def _read_stream_bounded(
                     chunks.append(chunk[:keep_len])
                 truncated_flag[0] = True
                 cancel_event.set()
+                # Continuous drain without storing so child process does not block on full pipe (Section 8)
+                while True:
+                    discard = stream.read(65536)
+                    if not discard:
+                        break
                 break
             chunks.append(chunk)
     except Exception:
@@ -93,6 +100,251 @@ def _read_stream_bounded(
             stream.close()
         except Exception:
             pass
+
+
+@dataclass
+class ResourceControlHandle:
+    """Canonical handle for inspecting and managing a sandbox cgroup v2 resource scope (R2.9).
+
+    Tracks kernel counters (memory.events, pids.events, cpu.stat) and manages factual evidence
+    prior to scope destruction (CTO Review Sections 1, 2, 5, 15).
+    """
+
+    unit_name: str
+    policy: SandboxResourcePolicy
+    cgroup_path: Optional[Path] = None
+    latest_events: Dict[str, Any] = field(default_factory=dict)
+    _discovered: bool = False
+    cgroup_enabled: bool = False
+
+    def discover_cgroup_path(self, proc_pid: int) -> Optional[Path]:
+        """Resolve the cgroup v2 directory path for the given process PID."""
+        if self.cgroup_path and self.cgroup_path.exists():
+            return self.cgroup_path
+
+        proc_cgroup = Path(f"/proc/{proc_pid}/cgroup")
+        if not proc_cgroup.exists():
+            return None
+
+        unit_base = self.unit_name.removesuffix(".scope")
+        try:
+            with open(proc_cgroup, "r", encoding="utf-8") as f:
+                for line in f:
+                    # In cgroup v2 unified hierarchy: "0::<cgroup_path>"
+                    parts = line.strip().split(":", 2)
+                    if len(parts) == 3 and parts[0] == "0":
+                        rel_path = parts[2].lstrip("/")
+                        # Invariant: Must belong to our specific transient scope unit, NEVER the parent cgroup!
+                        if unit_base in rel_path:
+                            candidate = Path("/sys/fs/cgroup") / rel_path
+                            if candidate.exists():
+                                self.cgroup_path = candidate
+                                self._discovered = True
+                                return self.cgroup_path
+        except Exception as e:
+            logger.debug(f"Failed to read cgroup path for PID {proc_pid}: {e}")
+
+        # Fallback to direct scope name resolution in user.slice
+        try:
+            user_id = os.getuid()
+            for candidate_dir in (
+                Path(
+                    f"/sys/fs/cgroup/user.slice/user-{user_id}.slice/user@{user_id}.service/app.slice/{self.unit_name}"
+                ),
+                Path(
+                    f"/sys/fs/cgroup/user.slice/user-{user_id}.slice/user@{user_id}.service/app.slice/{unit_base}.scope"
+                ),
+            ):
+                if candidate_dir.exists():
+                    self.cgroup_path = candidate_dir
+                    self._discovered = True
+                    return self.cgroup_path
+        except Exception:
+            pass
+
+        return None
+
+    def sample_evidence(self) -> Dict[str, Any]:
+        """Sample current kernel counters from the cgroup hierarchy before destruction (Section 2)."""
+        if not self._discovered or not self.cgroup_path or not self.cgroup_path.exists():
+            return self.latest_events
+
+        evidence = dict(self.latest_events)
+
+        # 1. memory.events (oom, oom_kill, max)
+        mem_events_path = self.cgroup_path / "memory.events"
+        if mem_events_path.exists():
+            try:
+                with open(mem_events_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) == 2:
+                            evidence[f"memory_events_{parts[0]}"] = int(parts[1])
+            except Exception:
+                pass
+
+        # 2. memory.current & memory.peak
+        for stat_name in ("current", "peak"):
+            m_path = self.cgroup_path / f"memory.{stat_name}"
+            if m_path.exists():
+                try:
+                    with open(m_path, "r", encoding="utf-8") as f:
+                        val = int(f.read().strip())
+                        evidence[f"memory_{stat_name}_bytes"] = val
+                        if stat_name == "current":
+                            prev_peak = evidence.get("memory_peak_bytes", 0)
+                            evidence["memory_peak_bytes"] = max(prev_peak, val)
+                except Exception:
+                    pass
+
+        # 3. pids.events (max)
+        pids_events_path = self.cgroup_path / "pids.events"
+        if pids_events_path.exists():
+            try:
+                with open(pids_events_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) == 2:
+                            evidence[f"pids_events_{parts[0]}"] = int(parts[1])
+            except Exception:
+                pass
+
+        # 4. pids.current
+        pids_curr_path = self.cgroup_path / "pids.current"
+        if pids_curr_path.exists():
+            try:
+                with open(pids_curr_path, "r", encoding="utf-8") as f:
+                    evidence["pids_current"] = int(f.read().strip())
+            except Exception:
+                pass
+
+        # 5. cpu.stat (usage_usec, nr_throttled, throttled_usec)
+        cpu_stat_path = self.cgroup_path / "cpu.stat"
+        if cpu_stat_path.exists():
+            try:
+                with open(cpu_stat_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) == 2:
+                            evidence[f"cpu_stat_{parts[0]}"] = int(parts[1])
+                    if "cpu_stat_usage_usec" in evidence:
+                        evidence["cpu_time_seconds"] = round(
+                            evidence["cpu_stat_usage_usec"] / 1_000_000, 4
+                        )
+            except Exception:
+                pass
+
+        self.latest_events = evidence
+        return evidence
+
+    def check_cumulative_cpu_exceeded(self) -> bool:
+        """Check if cumulative sandbox CPU usage has exceeded max_cpu_time_seconds (Section 1)."""
+        if not self._discovered or self.policy.max_cpu_time_seconds is None:
+            return False
+        cpu_sec = self.latest_events.get("cpu_time_seconds", 0.0)
+        return cpu_sec >= self.policy.max_cpu_time_seconds
+
+    def has_oom_occurred(self) -> bool:
+        """Factual check whether kernel cgroup memory controller triggered OOM (Section 2)."""
+        oom_kill = self.latest_events.get("memory_events_oom_kill", 0)
+        oom = self.latest_events.get("memory_events_oom", 0)
+        return oom_kill > 0 or oom > 0
+
+    def has_pids_max_occurred(self) -> bool:
+        """Factual check whether kernel cgroup pids controller blocked tasks (Section 2)."""
+        pids_max = self.latest_events.get("pids_events_max", 0)
+        return pids_max > 0
+
+    def read_final_evidence(self) -> Dict[str, Any]:
+        """Capture final kernel evidence before cgroup destruction (Section 19)."""
+        self.sample_evidence()
+
+        # Query systemd unit properties for durable post-termination evidence
+        if self.cgroup_enabled and self.unit_name:
+            try:
+                out = subprocess.check_output(
+                    [
+                        "systemctl",
+                        "--user",
+                        "show",
+                        self.unit_name,
+                        "-p",
+                        "LoadState",
+                        "-p",
+                        "Result",
+                        "-p",
+                        "OOMKills",
+                        "-p",
+                        "MemoryPeak",
+                        "-p",
+                        "CPUUsageNSec",
+                    ],
+                    stderr=subprocess.DEVNULL,
+                    timeout=2.0,
+                ).decode("utf-8", errors="replace")
+
+                lines = dict(item.split("=", 1) for item in out.strip().splitlines() if "=" in item)
+
+                if lines.get("LoadState") == "loaded":
+                    if lines.get("Result") == "oom-kill":
+                        self.latest_events["memory_events_oom_kill"] = max(
+                            self.latest_events.get("memory_events_oom_kill", 0), 1
+                        )
+                        self.latest_events["memory_events_oom"] = max(
+                            self.latest_events.get("memory_events_oom", 0), 1
+                        )
+
+                    oom_kills = lines.get("OOMKills", "0")
+                    if (
+                        oom_kills
+                        and oom_kills.isdigit()
+                        and 0 < int(oom_kills) < 18446744073709551615
+                    ):
+                        self.latest_events["memory_events_oom_kill"] = max(
+                            self.latest_events.get("memory_events_oom_kill", 0), int(oom_kills)
+                        )
+                        self.latest_events["memory_events_oom"] = max(
+                            self.latest_events.get("memory_events_oom", 0), 1
+                        )
+
+                    peak = lines.get("MemoryPeak")
+                    if peak and peak.isdigit() and int(peak) < 18446744073709551615:
+                        self.latest_events["memory_peak_bytes"] = max(
+                            self.latest_events.get("memory_peak_bytes", 0), int(peak)
+                        )
+
+                    cpu_nsec = lines.get("CPUUsageNSec")
+                    if cpu_nsec and cpu_nsec.isdigit() and int(cpu_nsec) < 18446744073709551615:
+                        usec = int(cpu_nsec) // 1000
+                        self.latest_events["cpu_stat_usage_usec"] = max(
+                            self.latest_events.get("cpu_stat_usage_usec", 0), usec
+                        )
+                        self.latest_events["cpu_time_seconds"] = round(
+                            self.latest_events["cpu_stat_usage_usec"] / 1_000_000, 4
+                        )
+
+                    subprocess.run(
+                        ["systemctl", "--user", "reset-failed", self.unit_name],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=1.0,
+                    )
+            except Exception as e:
+                logger.debug(f"Failed to query systemd unit {self.unit_name}: {e}")
+
+        return self.latest_events
+
+    def get_audit_safe_metrics(self) -> Dict[str, Any]:
+        """Return audit-safe sanitized resource usage metrics without host paths (Section 15)."""
+        return {
+            "cpu_time_seconds": self.latest_events.get("cpu_time_seconds", 0.0),
+            "peak_memory_bytes": self.latest_events.get("memory_peak_bytes", 0),
+            "pids_max_events": self.latest_events.get("pids_events_max", 0),
+            "oom_events": self.latest_events.get("memory_events_oom", 0),
+            "oom_kill_events": self.latest_events.get("memory_events_oom_kill", 0),
+            "nr_throttled": self.latest_events.get("cpu_stat_nr_throttled", 0),
+            "throttled_usec": self.latest_events.get("cpu_stat_throttled_usec", 0),
+        }
 
 
 class SandboxBackend(abc.ABC):
@@ -144,6 +396,7 @@ class LinuxBubblewrapBackend(SandboxBackend):
 
         self._available: Optional[bool] = None
         self._cgroup_available: Optional[bool] = None
+        self._controller_capabilities: Optional[Dict[str, bool]] = None
 
     def is_available(self) -> bool:
         if self._available is not None:
@@ -186,23 +439,139 @@ class LinuxBubblewrapBackend(SandboxBackend):
 
         return self._available
 
-    def is_cgroup_available(self) -> bool:
-        """Check whether systemd user scope cgroup v2 is operational."""
-        if self._cgroup_available is not None:
-            return self._cgroup_available
+    def probe_controllers(self, force_refresh: bool = False) -> Dict[str, bool]:
+        """Probe actual required cgroup v2 controllers and capabilities (CTO Review Section 3).
+
+        Probes:
+        - user_scope: transient unit creation via systemd-run --user --scope
+        - memory: MemoryMax controller property application
+        - swap: MemorySwapMax property application
+        - cpu: CPUQuota controller property application
+        - pids: TasksMax controller property application
+        """
+        if self._controller_capabilities is not None and not force_refresh:
+            return self._controller_capabilities
 
         if not sys.platform.startswith("linux"):
-            self._cgroup_available = False
-            return False
+            self._controller_capabilities = {
+                "user_scope": False,
+                "memory": False,
+                "swap": False,
+                "cpu": False,
+                "pids": False,
+            }
+            return self._controller_capabilities
 
+        caps: Dict[str, bool] = {
+            "user_scope": False,
+            "memory": False,
+            "swap": False,
+            "cpu": False,
+            "pids": False,
+        }
+
+        # 1. Probe user scope transient unit creation
         try:
-            probe_cmd = ["systemd-run", "--user", "--scope", "-q", "--", "/usr/bin/true"]
-            res = subprocess.run(probe_cmd, capture_output=True, timeout=5.0)
-            self._cgroup_available = res.returncode == 0
+            res = subprocess.run(
+                ["systemd-run", "--user", "--scope", "-q", "--", "/usr/bin/true"],
+                capture_output=True,
+                timeout=3.0,
+            )
+            caps["user_scope"] = res.returncode == 0
         except Exception:
-            self._cgroup_available = False
+            pass
 
-        return self._cgroup_available
+        if not caps["user_scope"]:
+            self._controller_capabilities = caps
+            return caps
+
+        # 2. Probe memory controller
+        try:
+            res = subprocess.run(
+                [
+                    "systemd-run",
+                    "--user",
+                    "--scope",
+                    "-p",
+                    "MemoryMax=1G",
+                    "-q",
+                    "--",
+                    "/usr/bin/true",
+                ],
+                capture_output=True,
+                timeout=3.0,
+            )
+            caps["memory"] = res.returncode == 0
+        except Exception:
+            pass
+
+        # 3. Probe swap controller
+        try:
+            res = subprocess.run(
+                [
+                    "systemd-run",
+                    "--user",
+                    "--scope",
+                    "-p",
+                    "MemorySwapMax=0",
+                    "-q",
+                    "--",
+                    "/usr/bin/true",
+                ],
+                capture_output=True,
+                timeout=3.0,
+            )
+            caps["swap"] = res.returncode == 0
+        except Exception:
+            pass
+
+        # 4. Probe cpu controller
+        try:
+            res = subprocess.run(
+                [
+                    "systemd-run",
+                    "--user",
+                    "--scope",
+                    "-p",
+                    "CPUQuota=100%",
+                    "-q",
+                    "--",
+                    "/usr/bin/true",
+                ],
+                capture_output=True,
+                timeout=3.0,
+            )
+            caps["cpu"] = res.returncode == 0
+        except Exception:
+            pass
+
+        # 5. Probe pids controller
+        try:
+            res = subprocess.run(
+                [
+                    "systemd-run",
+                    "--user",
+                    "--scope",
+                    "-p",
+                    "TasksMax=100",
+                    "-q",
+                    "--",
+                    "/usr/bin/true",
+                ],
+                capture_output=True,
+                timeout=3.0,
+            )
+            caps["pids"] = res.returncode == 0
+        except Exception:
+            pass
+
+        self._controller_capabilities = caps
+        return caps
+
+    def is_cgroup_available(self) -> bool:
+        """Check whether systemd user scope cgroup v2 is operational."""
+        caps = self.probe_controllers()
+        return caps.get("user_scope", False)
 
     def _build_bwrap_argv(
         self,
@@ -372,18 +741,47 @@ class LinuxBubblewrapBackend(SandboxBackend):
         start_time = time.time()
         script_file: Optional[Path] = None
 
-        # Check if cgroup v2 resource limits are requested
+        # Check required controllers against actual capabilities (Section 3: No silent degradation)
+        caps = self.probe_controllers()
         cgroup_required = (
             spec.resource_policy.max_memory_bytes is not None
             or spec.resource_policy.cpu_quota_percent is not None
             or spec.resource_policy.max_processes is not None
+            or spec.resource_policy.max_cpu_time_seconds is not None
         )
 
-        if cgroup_required and not self.is_cgroup_available():
-            raise ResourceIsolationUnavailableError(
-                "Kernel cgroup v2 resource isolation via systemd-run is unavailable on this host. "
-                "Execution rejected fail-closed to enforce configured resource quotas (R2.9)."
-            )
+        if cgroup_required:
+            if not self.is_cgroup_available() or not caps.get("user_scope", False):
+                raise ResourceIsolationUnavailableError(
+                    "Systemd user scope cgroup v2 is unavailable on this host. "
+                    "Execution rejected fail-closed to enforce configured resource quotas (R2.9)."
+                )
+            if spec.resource_policy.max_memory_bytes is not None:
+                if not caps.get("memory", False):
+                    raise ResourceIsolationUnavailableError(
+                        "Required cgroup v2 controller 'memory' is unavailable on this host. "
+                        "Execution rejected fail-closed (R2.9 Section 3)."
+                    )
+                if spec.resource_policy.require_swap_disabled and not caps.get("swap", False):
+                    raise ResourceIsolationUnavailableError(
+                        "Required swap isolation (MemorySwapMax=0) is unavailable on this host. "
+                        "Execution rejected fail-closed (R2.9 Section 13)."
+                    )
+            if (
+                spec.resource_policy.cpu_quota_percent is not None
+                or spec.resource_policy.max_cpu_time_seconds is not None
+            ):
+                if not caps.get("cpu", False):
+                    raise ResourceIsolationUnavailableError(
+                        "Required cgroup v2 controller 'cpu' is unavailable on this host. "
+                        "Execution rejected fail-closed (R2.9 Section 3)."
+                    )
+            if spec.resource_policy.max_processes is not None:
+                if not caps.get("pids", False):
+                    raise ResourceIsolationUnavailableError(
+                        "Required cgroup v2 controller 'pids' is unavailable on this host. "
+                        "Execution rejected fail-closed (R2.9 Section 3)."
+                    )
 
         # Pre-execution cancellation check
         if spec.cancellation_token and spec.cancellation_token.is_cancelled:
@@ -417,19 +815,18 @@ class LinuxBubblewrapBackend(SandboxBackend):
                 spec, resolved_secrets, script_file_in_workspace=script_name
             )
 
-            # Assemble full command including systemd-run cgroup scope if needed
+            # Assemble full command including systemd-run cgroup scope if needed (Section 5)
+            sanitized_id = "".join(c if c.isalnum() else "_" for c in execution_id)
+            unit_name = f"ae-sbx-{sanitized_id}.scope"
             full_argv: List[str]
             if cgroup_required:
-                cgroup_prefix = ["systemd-run", "--user", "--scope", "-q"]
+                cgroup_prefix = ["systemd-run", "--user", "--scope", "-u", unit_name, "-q"]
                 if spec.resource_policy.max_memory_bytes is not None:
                     cgroup_prefix.extend(
-                        [
-                            "-p",
-                            f"MemoryMax={int(spec.resource_policy.max_memory_bytes)}",
-                            "-p",
-                            "MemorySwapMax=0",
-                        ]
+                        ["-p", f"MemoryMax={int(spec.resource_policy.max_memory_bytes)}"]
                     )
+                    if spec.resource_policy.require_swap_disabled and caps.get("swap", False):
+                        cgroup_prefix.extend(["-p", "MemorySwapMax=0"])
                 if spec.resource_policy.cpu_quota_percent is not None:
                     cgroup_prefix.extend(
                         ["-p", f"CPUQuota={int(spec.resource_policy.cpu_quota_percent)}%"]
@@ -443,16 +840,16 @@ class LinuxBubblewrapBackend(SandboxBackend):
             else:
                 full_argv = bwrap_argv
 
-            # Prepare preexec_fn for RLIMIT_CPU if requested
+            # Prepare preexec_fn for RLIMIT_CPU if requested (Section 1 & 7: per-process hardware trap)
             preexec_fn = None
-            cpu_seconds = spec.resource_policy.max_cpu_time_seconds
-            if cpu_seconds is not None:
+            rlimit_cpu = spec.resource_policy.rlimit_cpu_seconds
+            if rlimit_cpu is not None:
 
                 def _set_cpu_limit():
                     try:
                         import resource
 
-                        sec = max(1, int(cpu_seconds))
+                        sec = max(1, int(rlimit_cpu))
                         resource.setrlimit(resource.RLIMIT_CPU, (sec, sec + 1))
                     except Exception as ex:
                         logger.debug(f"Failed to set RLIMIT_CPU in child: {ex}")
@@ -468,7 +865,15 @@ class LinuxBubblewrapBackend(SandboxBackend):
                 close_fds=True,
             )
 
-            # Output buffers and bounded reader threads (R2.9 backpressure)
+            handle = ResourceControlHandle(
+                unit_name=unit_name,
+                policy=spec.resource_policy,
+                cgroup_enabled=cgroup_required,
+            )
+            time.sleep(0.01)
+            handle.discover_cgroup_path(proc.pid)
+
+            # Output buffers and bounded reader threads (R2.9 backpressure, Section 8)
             stdout_chunks: List[bytes] = []
             stderr_chunks: List[bytes] = []
             stdout_truncated = [False]
@@ -507,8 +912,21 @@ class LinuxBubblewrapBackend(SandboxBackend):
             timed_out = False
             cancelled = False
             output_limit_breached = False
+            cpu_limit_breached = False
 
             while proc.poll() is None:
+                if not handle._discovered:
+                    handle.discover_cgroup_path(proc.pid)
+
+                # Sample cgroup evidence (Section 2)
+                handle.sample_evidence()
+
+                # Check cumulative CPU time limit (CTO Review Section 1)
+                if handle.check_cumulative_cpu_exceeded():
+                    cpu_limit_breached = True
+                    _kill_process_group(proc)
+                    break
+
                 if output_limit_event.is_set():
                     output_limit_breached = True
                     _kill_process_group(proc)
@@ -526,15 +944,23 @@ class LinuxBubblewrapBackend(SandboxBackend):
 
                 time.sleep(poll_interval)
 
-            # Ensure process group has terminated
+            # Cleanup order (CTO Review Section 19):
+            # 1. Stop/kill proc if still running
+            if proc.poll() is None:
+                _kill_process_group(proc)
+
             try:
                 proc.wait(timeout=1.0)
             except subprocess.TimeoutExpired:
                 _kill_process_group(proc)
                 proc.wait()
 
+            # 2. Drain/join reader threads safely
             t_stdout.join(timeout=1.0)
             t_stderr.join(timeout=1.0)
+
+            # 3. Capture final kernel/resource evidence while cgroup exists
+            handle.read_final_evidence()
 
             duration = time.time() - start_time
             stdout_bytes = b"".join(stdout_chunks)
@@ -543,14 +969,17 @@ class LinuxBubblewrapBackend(SandboxBackend):
             stderr_str = stderr_bytes.decode("utf-8", errors="replace")
             is_truncated = stdout_truncated[0] or stderr_truncated[0]
 
-            # Determine canonical status and terminal reason
+            # Determine canonical status and terminal reason based on FACTUAL evidence (CTO Review Section 2)
             status = SandboxStatus.COMPLETED
             terminal_reason = SandboxTerminalReason.NORMAL
             exit_code = proc.returncode if proc.returncode is not None else -1
 
-            if output_limit_breached:
+            if output_limit_breached or is_truncated:
                 status = SandboxStatus.FAILED
                 terminal_reason = SandboxTerminalReason.OUTPUT_LIMIT
+            elif cpu_limit_breached:
+                status = SandboxStatus.FAILED
+                terminal_reason = SandboxTerminalReason.CPU_LIMIT
             elif timed_out:
                 status = SandboxStatus.TIMED_OUT
                 terminal_reason = SandboxTerminalReason.WALL_TIME_LIMIT
@@ -559,36 +988,51 @@ class LinuxBubblewrapBackend(SandboxBackend):
                 terminal_reason = SandboxTerminalReason.USER_CANCELLED
             elif exit_code != 0:
                 status = SandboxStatus.FAILED
-                # Map exit codes to precise resource limits
-                if exit_code in (-9, 137) or "MemoryError" in stderr_str:
-                    # Kernel OOM killer via cgroup memory.max sends SIGKILL, or malloc failed under memory limit
-                    if spec.resource_policy.max_memory_bytes is not None:
-                        terminal_reason = SandboxTerminalReason.MEMORY_LIMIT
-                    else:
-                        terminal_reason = SandboxTerminalReason.BACKEND_ERROR
+                # Factual check using kernel evidence (Section 2)
+                if handle.has_oom_occurred():
+                    terminal_reason = SandboxTerminalReason.MEMORY_LIMIT
+                elif (
+                    "MemoryError" in stderr_str
+                    and spec.resource_policy.max_memory_bytes is not None
+                ):
+                    terminal_reason = SandboxTerminalReason.MEMORY_LIMIT
+                elif handle.has_pids_max_occurred():
+                    terminal_reason = SandboxTerminalReason.PROCESS_LIMIT
+                elif (
+                    any(
+                        msg in stderr_str
+                        for msg in (
+                            "can't start new thread",
+                            "BlockingIOError",
+                            "Resource temporarily unavailable",
+                        )
+                    )
+                    and spec.resource_policy.max_processes is not None
+                ):
+                    terminal_reason = SandboxTerminalReason.PROCESS_LIMIT
                 elif exit_code in (-24, 152):
                     # Kernel SIGXCPU via RLIMIT_CPU
                     terminal_reason = SandboxTerminalReason.CPU_LIMIT
-                elif any(
-                    msg in stderr_str
-                    for msg in (
-                        "can't start new thread",
-                        "BlockingIOError",
-                        "Resource temporarily unavailable",
-                    )
-                ):
-                    if spec.resource_policy.max_processes is not None:
-                        terminal_reason = SandboxTerminalReason.PROCESS_LIMIT
-                    else:
-                        terminal_reason = SandboxTerminalReason.BACKEND_ERROR
+                elif handle.check_cumulative_cpu_exceeded():
+                    terminal_reason = SandboxTerminalReason.CPU_LIMIT
+                elif exit_code in (-9, 137):
+                    # SIGKILL received, but NOT from OOM!
+                    # Honest reporting: do not manufacture MEMORY_LIMIT from signal alone
+                    terminal_reason = SandboxTerminalReason.BACKEND_ERROR
                 else:
                     terminal_reason = SandboxTerminalReason.BACKEND_ERROR
 
+            safe_metrics = handle.get_audit_safe_metrics()
             resource_usage = {
                 "wall_time_seconds": round(duration, 3),
+                "cpu_time_seconds": safe_metrics.get("cpu_time_seconds", round(duration, 3)),
+                "peak_memory_bytes": safe_metrics.get("peak_memory_bytes", 0),
                 "stdout_bytes": len(stdout_bytes),
                 "stderr_bytes": len(stderr_bytes),
                 "exit_code": exit_code,
+                "oom_events": safe_metrics.get("oom_events", 0),
+                "oom_kill_events": safe_metrics.get("oom_kill_events", 0),
+                "pids_max_events": safe_metrics.get("pids_max_events", 0),
             }
 
             return SandboxResult(

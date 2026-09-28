@@ -43,6 +43,7 @@ from core.sandbox.models import (
     SandboxFilesystemGrant,
     SandboxMountMode,
     SandboxNetworkGrant,
+    SandboxNetworkMode,
     SandboxResourcePolicy,
     SandboxResult,
     SandboxSecurityError,
@@ -149,6 +150,17 @@ class SandboxService:
         spec.resource_policy = spec.resource_policy.clamp_to_ceiling(self.max_resource_policy)
         spec.timeout_seconds = spec.resource_policy.max_wall_time_seconds
 
+        # Validate mandatory bounds for untrusted profile (CTO Review Section 4)
+        if spec.resource_policy.profile_name == "untrusted_default":
+            spec.resource_policy.validate_for_untrusted()
+
+        # Network authorization verification (CTO Review Section 14)
+        if spec.network.allowed or spec.network.mode == SandboxNetworkMode.ALLOW_UNRESTRICTED:
+            if not spec.network.authorized_by_policy:
+                raise SandboxSecurityError(
+                    "Network access rejected: requires explicit PolicyEngine authorization (R2.9 Section 14)."
+                )
+
         # Concurrency & capacity accounting (R2.9)
         with self._lock:
             if len(self._active_sandboxes) >= self.max_concurrent_sandboxes:
@@ -234,6 +246,20 @@ class SandboxService:
             injected_secret_values: List[str] = []
 
             if spec.secret_grants:
+                # Raw secret injection into arbitrary unreviewed generated code is prohibited (CTO Review Section 10)
+                untrusted_capabilities = (
+                    None,
+                    "",
+                    "untrusted_code",
+                    "generic_script",
+                    "arbitrary_eval",
+                )
+                if spec.capability_id in untrusted_capabilities:
+                    raise SandboxSecurityError(
+                        "Raw secret injection into arbitrary untrusted code is prohibited (R2.9 Section 10). "
+                        "Secrets may only be granted to explicitly declared, security-reviewed capabilities (e.g. capability_id='provider_adapter')."
+                    )
+
                 if self.secrets_service is None:
                     raise SandboxSecurityError(
                         "SandboxSpec requested secret_grants, but SecretsService is not configured."
@@ -430,3 +456,27 @@ class SandboxService:
             cancellation_token=cancellation_token,
         )
         return self.execute(spec=spec, project_id=project_id, project_root=project_root)
+
+    async def execute_async(
+        self,
+        spec: SandboxSpec,
+        project_id: Optional[str] = None,
+        project_root: Optional[Path] = None,
+    ) -> SandboxResult:
+        """Asynchronously execute a workload in the sandbox off the event loop (CTO Review Section 9)."""
+        import anyio.to_thread
+
+        return await anyio.to_thread.run_sync(self.execute, spec, project_id, project_root)
+
+    async def run_code_async(
+        self,
+        code: str,
+        workspace_dir: Path,
+        **kwargs: Any,
+    ) -> SandboxResult:
+        """Asynchronously run a Python code snippet off the event loop (CTO Review Section 9)."""
+        import anyio.to_thread
+
+        return await anyio.to_thread.run_sync(
+            lambda: self.run_code(code, workspace_dir=workspace_dir, **kwargs)
+        )

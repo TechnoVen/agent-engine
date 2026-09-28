@@ -169,38 +169,110 @@ class SandboxFilesystemGrant:
             self.output_dir = Path(self.output_dir).resolve()
 
 
+class SandboxNetworkMode(str, Enum):
+    """Supported sandbox network modes (R2.9).
+
+    Invariant: Only DENY and ALLOW_UNRESTRICTED are supported at R2.9.
+    Domain filtering, egress proxying, and bandwidth shaping are not claimed or supported.
+    """
+
+    DENY = "deny"
+    ALLOW_UNRESTRICTED = "allow_unrestricted"
+
+
 @dataclass
 class SandboxNetworkGrant:
-    """Network boundary granted to the worker. Default is complete isolation."""
+    """Network boundary granted to the worker. Default is complete isolation.
+
+    Rule: Caller cannot turn DENY -> ALLOW merely by modifying SandboxSpec;
+    ALLOW_UNRESTRICTED requires explicit PolicyEngine authorization (R2.9).
+    """
 
     allowed: bool = False
+    mode: SandboxNetworkMode = SandboxNetworkMode.DENY
     allowed_hosts: List[str] = field(default_factory=list)
+    authorized_by_policy: bool = False
+
+    def __post_init__(self) -> None:
+        if self.mode == SandboxNetworkMode.ALLOW_UNRESTRICTED:
+            self.allowed = True
+        elif self.allowed and self.mode == SandboxNetworkMode.DENY:
+            self.mode = SandboxNetworkMode.ALLOW_UNRESTRICTED
 
 
 @dataclass
 class SandboxResourcePolicy:
     """Resource limits and quotas enforced on the sandbox worker (R2.9).
 
-    Rule: Effective limit is the most restrictive applicable trusted limit.
+    Distinct CPU Controls (CTO Review Section 1):
+    1. cpu_quota_percent: Rate limit (e.g. 50.0 for 50% CPU rate/share via cgroup CPUQuota).
+    2. rlimit_cpu_seconds: Per-process hardware limit trap via RLIMIT_CPU in preexec_fn.
+    3. max_cpu_time_seconds: Cumulative sandbox-wide CPU budget across all tasks measured
+       via cgroup cpu.stat usage_usec.
+    4. max_wall_time_seconds: Elapsed real wall-clock time limit.
     """
 
     max_wall_time_seconds: float = 30.0
-    max_cpu_time_seconds: Optional[float] = None
-    cpu_quota_percent: Optional[float] = None  # e.g. 50.0 for 50% CPU
-    max_memory_bytes: Optional[int] = None  # e.g. 50 * 1024 * 1024 (50 MB)
-    max_processes: Optional[int] = None  # e.g. 10 tasks
+    max_cpu_time_seconds: Optional[float] = 15.0
+    cpu_quota_percent: Optional[float] = 100.0  # Rate limit: 100% of 1 CPU core
+    rlimit_cpu_seconds: Optional[int] = None  # Defense-in-depth per-process CPU trap
+    max_memory_bytes: Optional[int] = 256 * 1024 * 1024  # 256 MB
+    max_processes: Optional[int] = 16  # Maximum sandbox resource-group tasks
     max_stdout_bytes: int = 5 * 1024 * 1024  # 5 MB output backpressure
     max_stderr_bytes: int = 5 * 1024 * 1024  # 5 MB output backpressure
+    require_swap_disabled: bool = True  # Enforce MemorySwapMax=0 where supported
+    profile_name: str = "untrusted_default"
+
+    @classmethod
+    def untrusted_default(cls) -> SandboxResourcePolicy:
+        """Canonical constructor for untrusted or generated code execution (R2.9 Section 4)."""
+        return cls(
+            max_wall_time_seconds=30.0,
+            max_cpu_time_seconds=15.0,
+            cpu_quota_percent=100.0,
+            rlimit_cpu_seconds=None,
+            max_memory_bytes=256 * 1024 * 1024,
+            max_processes=16,
+            max_stdout_bytes=5 * 1024 * 1024,
+            max_stderr_bytes=5 * 1024 * 1024,
+            require_swap_disabled=True,
+            profile_name="untrusted_default",
+        )
+
+    def validate_for_untrusted(self) -> None:
+        """Verify that all mandatory limits are explicitly bounded for untrusted execution."""
+        missing = []
+        if self.max_wall_time_seconds is None or self.max_wall_time_seconds <= 0:
+            missing.append("max_wall_time_seconds")
+        if self.max_memory_bytes is None or self.max_memory_bytes <= 0:
+            missing.append("max_memory_bytes")
+        if self.max_processes is None or self.max_processes <= 0:
+            missing.append("max_processes")
+        if self.max_stdout_bytes is None or self.max_stdout_bytes <= 0:
+            missing.append("max_stdout_bytes")
+        if self.max_stderr_bytes is None or self.max_stderr_bytes <= 0:
+            missing.append("max_stderr_bytes")
+        if self.max_cpu_time_seconds is None and self.cpu_quota_percent is None:
+            missing.append("max_cpu_time_seconds or cpu_quota_percent")
+        if missing:
+            raise ResourceLimitExceededError(
+                reason=SandboxTerminalReason.RESOURCE_ISOLATION_UNAVAILABLE,
+                message=f"Untrusted execution policy missing mandatory bounded limits: {', '.join(missing)}",
+                violating_dimension="mandatory_policy_fields",
+            )
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "max_wall_time_seconds": self.max_wall_time_seconds,
             "max_cpu_time_seconds": self.max_cpu_time_seconds,
             "cpu_quota_percent": self.cpu_quota_percent,
+            "rlimit_cpu_seconds": self.rlimit_cpu_seconds,
             "max_memory_bytes": self.max_memory_bytes,
             "max_processes": self.max_processes,
             "max_stdout_bytes": self.max_stdout_bytes,
             "max_stderr_bytes": self.max_stderr_bytes,
+            "require_swap_disabled": self.require_swap_disabled,
+            "profile_name": self.profile_name,
         }
 
     def clamp_to_ceiling(self, ceiling: SandboxResourcePolicy) -> SandboxResourcePolicy:
@@ -213,6 +285,9 @@ class SandboxResourcePolicy:
             cpu_quota_percent=min(self.cpu_quota_percent, ceiling.cpu_quota_percent)
             if (self.cpu_quota_percent is not None and ceiling.cpu_quota_percent is not None)
             else (self.cpu_quota_percent or ceiling.cpu_quota_percent),
+            rlimit_cpu_seconds=min(self.rlimit_cpu_seconds, ceiling.rlimit_cpu_seconds)
+            if (self.rlimit_cpu_seconds is not None and ceiling.rlimit_cpu_seconds is not None)
+            else (self.rlimit_cpu_seconds or ceiling.rlimit_cpu_seconds),
             max_memory_bytes=min(self.max_memory_bytes, ceiling.max_memory_bytes)
             if (self.max_memory_bytes is not None and ceiling.max_memory_bytes is not None)
             else (self.max_memory_bytes or ceiling.max_memory_bytes),
@@ -221,6 +296,8 @@ class SandboxResourcePolicy:
             else (self.max_processes or ceiling.max_processes),
             max_stdout_bytes=min(self.max_stdout_bytes, ceiling.max_stdout_bytes),
             max_stderr_bytes=min(self.max_stderr_bytes, ceiling.max_stderr_bytes),
+            require_swap_disabled=self.require_swap_disabled and ceiling.require_swap_disabled,
+            profile_name=self.profile_name,
         )
 
 

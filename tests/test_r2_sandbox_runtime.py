@@ -260,6 +260,7 @@ print('RESOLVED_KEY=' + str(key))
 """,
             filesystem=SandboxFilesystemGrant(workspace_dir=temp_workspace),
             secret_grants=[ref],
+            capability_id="provider_adapter",
         )
 
         res = sbx_svc.execute(spec, project_id="proj_alpha")
@@ -302,6 +303,7 @@ print('ANTHROPIC=' + str(os.environ.get('ANTHROPIC_API_KEY')))
 """,
             filesystem=SandboxFilesystemGrant(workspace_dir=temp_workspace),
             secret_grants=[ref_a],  # Only ref_a is granted
+            capability_id="provider_adapter",
         )
 
         res = sbx_svc.execute(spec, project_id="proj_1")
@@ -683,6 +685,7 @@ sys.stderr.write(f"STDERR_LEAK={k}\\n")
             script=code,
             filesystem=SandboxFilesystemGrant(workspace_dir=temp_workspace),
             secret_grants=[ref],
+            capability_id="provider_adapter",
         )
         res = sbx_svc.execute(spec, project_id="proj_redact")
         assert res.is_success

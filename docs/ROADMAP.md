@@ -744,7 +744,7 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
 - **Acceptance Criteria:**
   - [x] Limit violations terminate job and record reason.
 - **Required Evidence:**
-  - Resource-limit tests (`tests/test_r2_sandbox_resource_limits.py` — 22 comprehensive resource limit test scenarios covering memory, CPU, process count, wall-clock time, stdout/stderr byte limits, capacity admission, cgroup v2, and fail-closed isolation).
+  - Resource-limit tests (`tests/test_r2_sandbox_resource_limits.py` — 35 precision scenarios covering all CTO Review resource enforcement requirements: distinct CPUQuota/RLIMIT_CPU/budget semantics, factual cgroup evidence classification, controller capability probing, mandatory untrusted limits, unit-bound scope isolation, deadlock-free backpressure, and non-blocking async execution).
 
 ### [ ] R2.10 — Safe staged patch application
 
