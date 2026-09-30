@@ -539,30 +539,30 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/sandbox/service.py"
     - "core/sandbox/__init__.py"
     - "tests/test_r2_sandbox_resource_limits.py"
-  notes: "S1 — implemented and implementation-tested. Fully addressed all 20 CTO Review corrections: (1) Disentangled CPUQuota (rate throttling), RLIMIT_CPU (per-process hardware limit trap via rlimit_cpu_seconds), and max_cpu_time_seconds (cumulative sandbox-wide CPU budget across all tasks in scope sampled via cpu.stat usage_usec); wall timeout on busy loop accurately records WALL_TIME_LIMIT, never falsely claiming CPU_LIMIT. (2) Factual violation classification using real kernel cgroup evidence (memory.events for oom_kill/oom, pids.events for max, cpu.stat for usage_usec) and systemd unit properties (systemctl --user show for durable post-termination status); non-OOM SIGKILL honestly reports BACKEND_ERROR, never manufactured as MEMORY_LIMIT. (3) Active controller capability probing for user_scope, memory, swap, cpu, and pids with immediate fail-closed behavior on missing requested controllers (ResourceIsolationUnavailableError). (4) Mandatory bounded untrusted policy constructor untrusted_default() and strict validation validate_for_untrusted(). (5) Transient user scope isolation via ae-sbx-<sanitized_id>.scope with cgroup discovery strictly scoped to unit name, never parent cgroup. (6) Resource group overhead documented (TasksMax counts bwrap supervisor + worker tasks). (7) Process limit enforcement via cgroup TasksMax / pids.max as primary authority. (8) Stream output backpressure with byte-accurate multi-byte UTF-8 counting and non-deadlocking pipe draining upon truncation. (9) Non-blocking asynchronous execution (execute_async, run_code_async) via worker thread offloading. (10) Raw secret injection prohibited for arbitrary untrusted code (requires explicitly declared capability_id). (11) Memory swap isolation enforced via MemorySwapMax=0 with probe verification. (12) Network modes DENY (default) and ALLOW_UNRESTRICTED (requiring authorized_by_policy=True). (13) Audit-safe sanitized resource telemetry without raw host paths or user IDs. 35/35 dedicated resource limit precision tests passing, 718/718 full regression passing."
+  notes: "S1 — implemented and implementation-tested. Fully addressed all CTO Review corrections: (1) Bubblewrap genuine network isolation: default DENY unshares net namespace; ALLOW_UNRESTRICTED passes --share-net when authorized by policy (authorized_by_policy=True), verified by real TCP loopback canary. (2) Parent admission capacity (max_concurrent_sandboxes, max_total_memory_bytes) strictly separated from worker runtime limits, mapping to SandboxStatus.BLOCKED with typed reasons CONCURRENCY_CAPACITY_EXCEEDED and MEMORY_CAPACITY_EXCEEDED. (3) Eliminated unsafe Python preexec_fn; RLIMIT_CPU enforced via trusted prlimit wrapper in transient systemd scope. (4) Documented S1 test-evidence classification matrix (UNIT, CONTRACT, REAL_LINUX_INTEGRATION). (5) Async cancellation through to_thread reliably terminates child OS process group and transient scope without orphans. (6) Kernel resource evidence captured strictly before scope destruction; non-OOM SIGKILL classified as BACKEND_ERROR. (7) Default resource profile stable identifier untrusted_default_v1 with concrete values documented. 38/38 dedicated resource limit precision tests passing, 721/721 full regression passing."
 ```
 
 ---
 
 ## 6. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `718 passed, 3 warnings in 119.87s` (`uv run pytest`)
+- **Full Regression Suite:** `721 passed, 3 warnings in 102.65s` (`uv run pytest`)
 - **R2 IPC Authentication Suite:** `14 passed in 7.83s` (`uv run pytest tests/test_r2_ipc_authentication.py`)
 - **R2 Policy & Exact-Operation Approvals Suite:** `33 passed in 4.26s` (`uv run pytest tests/test_r2_policy_and_approvals.py`)
 - **R2 Canonical Workspace Paths Suite:** `24 passed in 2.90s` (`uv run pytest tests/test_r2_workspace_paths.py`)
 - **R2 Secrets Service & Runtime Injection Suite:** `30 passed in 4.50s` (`uv run pytest tests/test_r2_secrets_service.py`)
 - **R2 Prompt-Injection & Untrusted Content Suite:** `26 passed in 3.14s` (`uv run pytest tests/test_r2_prompt_injection.py`)
-- **R2 Sandbox Worker Runtime Suite:** `26 passed in 10.24s` (`uv run pytest tests/test_r2_sandbox_runtime.py`)
-- **R2 Sandbox Resource Limits Suite:** `35 passed in 13.90s` (`uv run pytest tests/test_r2_sandbox_resource_limits.py`)
+- **R2 Sandbox Worker Runtime Suite:** `26 passed in 9.54s` (`uv run pytest tests/test_r2_sandbox_runtime.py`)
+- **R2 Sandbox Resource Limits Suite:** `38 passed in 14.97s` (`uv run pytest tests/test_r2_sandbox_resource_limits.py`)
 - **Sandbox Baseline Integration Suite:** `4 passed in 0.85s` (`uv run pytest tests/test_sandbox.py`)
-- **Combined R2 Security Verification:** `192 passed in 31.50s` across 8 security suites
+- **Combined R2 Security Verification:** `195 passed in 33.50s` across 8 security suites
 - **Static Code Analysis & Formatting:**
   - `uv run ruff check`: passed (`All checks passed!`)
   - `uv run ruff format --check`: passed (`236 files already formatted`)
 - **Desktop Tauri & Frontend Workspace:**
-  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`1.58s`)
-  - `pnpm -r build`: passed (`13s`)
-- **Documented Upstream Warnings (Non-blocking):**
+  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.76s`)
+  - `pnpm -r build`: passed (`10.7s`)
+- **Documented Upstream Warnings (3 known upstream warnings, 0 new unexplained/project-owned warnings):**
   1. `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.` (Origin: `fastapi/testclient.py:1` — Upstream FastAPI/Starlette testclient deprecation notice; non-runtime).
   2. `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.` (Origin: `starlette/testclient.py:53` — Upstream Starlette/AnyIO import alias notice; non-runtime).
   3. `DeprecationWarning: 'asyncio.iscoroutinefunction' is deprecated and slated for removal in Python 3.16; use inspect.iscoroutinefunction() instead` (Origin: `chromadb/telemetry/opentelemetry/__init__.py:128` — Upstream ChromaDB telemetry compatibility notice for Python 3.16+; non-blocking on current Python 3.10–3.14).

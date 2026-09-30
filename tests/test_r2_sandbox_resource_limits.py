@@ -631,7 +631,8 @@ def test_25_concurrent_sandbox_process_limit(temp_workspace: Path):
     with pytest.raises(ResourceLimitExceededError) as exc_info:
         svc.execute(spec3)
 
-    assert exc_info.value.reason == SandboxTerminalReason.PROCESS_LIMIT
+    assert exc_info.value.reason == SandboxTerminalReason.CONCURRENCY_CAPACITY_EXCEEDED
+    assert exc_info.value.status == SandboxStatus.BLOCKED
     assert exc_info.value.violating_dimension == "concurrent_sandboxes"
 
 
@@ -657,7 +658,8 @@ def test_26_concurrent_sandbox_memory_limit(temp_workspace: Path):
     with pytest.raises(ResourceLimitExceededError) as exc_info:
         svc.execute(spec2)
 
-    assert exc_info.value.reason == SandboxTerminalReason.MEMORY_LIMIT
+    assert exc_info.value.reason == SandboxTerminalReason.MEMORY_CAPACITY_EXCEEDED
+    assert exc_info.value.status == SandboxStatus.BLOCKED
     assert exc_info.value.violating_dimension == "concurrent_memory_bytes"
 
 
@@ -842,3 +844,157 @@ async def test_35_event_loop_responsiveness_during_sandbox_execution(
 
     assert res.is_success
     assert ticks >= 3, f"Event loop ticks was starved! ticks={ticks}"
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Bubblewrap requires Linux")
+def test_36_network_deny_vs_allow_real_behavior(
+    sandbox_service: SandboxService, temp_workspace: Path
+):
+    """Scenario 36: Real network behavior test for DENY vs ALLOW_UNRESTRICTED with policy authorization (CTO Review Item 1)."""
+    if not sandbox_service.is_available():
+        pytest.skip("Bubblewrap backend is not available on this host")
+
+    import socket
+    import threading
+
+    # Start a real host loopback listener
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.bind(("127.0.0.1", 0))
+    port = srv.getsockname()[1]
+    srv.listen(5)
+    stop_server = threading.Event()
+
+    def server_loop():
+        srv.settimeout(0.5)
+        while not stop_server.is_set():
+            try:
+                conn, _ = srv.accept()
+                data = conn.recv(1024)
+                if data == b"PING":
+                    conn.sendall(b"PONG")
+                conn.close()
+            except socket.timeout:
+                continue
+            except Exception:
+                break
+        try:
+            srv.close()
+        except Exception:
+            pass
+
+    server_thread = threading.Thread(target=server_loop, daemon=True)
+    server_thread.start()
+
+    try:
+        # Part A: DENY (default) -> Network is completely isolated
+        deny_code = f"""
+import socket
+try:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(1.0)
+    s.connect(('127.0.0.1', {port}))
+    print('UNEXPECTED_CONNECTION_SUCCESS')
+except Exception as e:
+    print(f'NETWORK_DENIED_OK: {{type(e).__name__}}')
+"""
+        res_deny = sandbox_service.run_code(
+            deny_code,
+            workspace_dir=temp_workspace,
+            network_allowed=False,
+        )
+        assert res_deny.is_success
+        assert "UNEXPECTED_CONNECTION_SUCCESS" not in res_deny.stdout
+        assert "NETWORK_DENIED_OK" in res_deny.stdout
+
+        # Part B: ALLOW_UNRESTRICTED + authorized_by_policy=True -> Network accessible
+        allow_code = f"""
+import socket
+try:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(2.0)
+    s.connect(('127.0.0.1', {port}))
+    s.sendall(b'PING')
+    resp = s.recv(1024)
+    print(f'NETWORK_ALLOWED_OK: {{resp.decode()}}')
+    s.close()
+except Exception as e:
+    print(f'UNEXPECTED_FAILURE: {{type(e).__name__}}: {{e}}')
+"""
+        spec_allow = SandboxSpec(
+            command=["python3", "-c", allow_code],
+            filesystem=SandboxFilesystemGrant(workspace_dir=temp_workspace),
+            network=SandboxNetworkGrant(
+                mode=SandboxNetworkMode.ALLOW_UNRESTRICTED,
+                authorized_by_policy=True,
+            ),
+        )
+        res_allow = sandbox_service.execute(spec_allow)
+        assert res_allow.is_success
+        assert "NETWORK_ALLOWED_OK: PONG" in res_allow.stdout
+
+    finally:
+        stop_server.set()
+        server_thread.join(timeout=1.0)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Bubblewrap requires Linux")
+@pytest.mark.anyio
+async def test_37_async_cancellation_terminates_child_process(
+    sandbox_service: SandboxService, temp_workspace: Path
+):
+    """Scenario 37: Cancelling awaiting coroutine triggers cancellation token and terminates worker without orphan processes (CTO Review Item 5)."""
+    if not sandbox_service.is_available():
+        pytest.skip("Bubblewrap backend is not available on this host")
+
+    code = "import time; time.sleep(10)"
+    task = asyncio.create_task(
+        sandbox_service.run_code_async(
+            code,
+            workspace_dir=temp_workspace,
+            resource_policy=SandboxResourcePolicy(max_wall_time_seconds=15.0),
+        )
+    )
+
+    # Let worker spawn and start
+    await asyncio.sleep(0.15)
+
+    # Cancel the async caller task
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # Small wait to allow worker cleanup to complete
+    await asyncio.sleep(0.2)
+    assert sandbox_service.active_sandboxes_count == 0
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Bubblewrap requires Linux")
+@pytest.mark.anyio
+async def test_38_concurrent_spawns_without_preexec_deadlock(
+    sandbox_service: SandboxService, temp_workspace: Path
+):
+    """Scenario 38: Concurrent sandbox execution under multi-threaded Python parent does not deadlock on fork (CTO Review Item 3)."""
+    if not sandbox_service.is_available():
+        pytest.skip("Bubblewrap backend is not available on this host")
+
+    code = "import math; print(sum(math.sqrt(i) for i in range(5000)))"
+
+    # Concurrently spawn 4 sandboxes with RLIMIT_CPU specified
+    async def worker(idx: int):
+        sub_ws = temp_workspace / f"ws_{idx}"
+        sub_ws.mkdir(exist_ok=True)
+        policy = SandboxResourcePolicy(
+            max_wall_time_seconds=10.0,
+            rlimit_cpu_seconds=5,
+        )
+        return await sandbox_service.run_code_async(
+            code,
+            workspace_dir=sub_ws,
+            resource_policy=policy,
+        )
+
+    results = await asyncio.gather(*(worker(i) for i in range(4)))
+    for res in results:
+        assert res.is_success
+        assert float(res.stdout.strip()) > 0

@@ -338,54 +338,57 @@ class ApprovalRequest(BaseModel):
 ## 12. Sandbox Resource Limits & Cgroup Enforcement (R2.9)
 
 * **Canonical Resource Policy (`SandboxResourcePolicy`):**
-  * Governs all execution dimensions with mandatory untrusted defaults (`untrusted_default()`) and validation (`validate_for_untrusted()`):
-    1. `max_wall_time_seconds` (float, default 30.0s): Cumulative wall-clock lifetime. Exceeding records `WALL_TIME_LIMIT` and `timed_out = True`.
-    2. `max_cpu_time_seconds` (float, default 30.0s): Cumulative sandbox-wide CPU usage budget across all tasks in scope. Measured via cgroup `cpu.stat` (`usage_usec`). Breaches terminate the scope and record `CPU_LIMIT`.
-    3. `cpu_quota_percent` (float, default 100.0%): CPU bandwidth rate limit via cgroup `CPUQuota`. Throttles execution rate without killing. Distinct from budget kill.
-    4. `rlimit_cpu_seconds` (int, optional): Per-process hardware trap via POSIX `setrlimit(RLIMIT_CPU)`. Injected via `preexec_fn`; triggers `SIGXCPU` (exit code -24 / 152).
-    5. `max_memory_bytes` (int, default 512 MB): Physical memory limit via cgroup `MemoryMax`.
-    6. `require_swap_disabled` (bool, default True): Enforces `MemorySwapMax=0` to prevent swap-backed memory escape.
-    7. `max_processes` (int, default 32): Maximum tasks in scope via cgroup `TasksMax`. Note: accounts for bwrap supervisor and worker processes/threads (resource group overhead).
-    8. `max_stdout_bytes` / `max_stderr_bytes` (int, default 10 MB): Stream output backpressure.
+  * Governs all execution dimensions with mandatory untrusted defaults (`untrusted_default()`, stable identifier `untrusted_default_v1`) and validation (`validate_for_untrusted()`):
+    | Parameter | Type / Unit | Default Value (`untrusted_default_v1`) | Enforcement Mechanism |
+    | :--- | :--- | :--- | :--- |
+    | `max_wall_time_seconds` | `float` (seconds) | `30.0` | Wall-clock deadline check in supervisor poll loop |
+    | `max_cpu_time_seconds` | `float` (seconds) | `30.0` | Cumulative cgroup v2 `cpu.stat` (`usage_usec`) across all tasks |
+    | `cpu_quota_percent` | `float` (percent) | `100.0%` (1 core) | cgroup v2 `CPUQuota` bandwidth throttling |
+    | `rlimit_cpu_seconds` | `int` (seconds) | `None` (opt-in) | Per-process hardware trap via trusted `prlimit` wrapper |
+    | `max_memory_bytes` | `int` (bytes) | `536,870,912` (512 MiB) | cgroup v2 `MemoryMax` |
+    | `require_swap_disabled`| `bool` | `True` | cgroup v2 `MemorySwapMax=0` (verified via probe) |
+    | `max_processes` | `int` (count) | `32` | cgroup v2 `TasksMax` (counts bwrap supervisor + worker tasks) |
+    | `max_stdout_bytes` | `int` (bytes) | `10,485,760` (10 MiB) | Worker stream reader thread backpressure truncation |
+    | `max_stderr_bytes` | `int` (bytes) | `10,485,760` (10 MiB) | Worker stream reader thread backpressure truncation |
+    | `network.mode` | `enum` | `DENY` | Bubblewrap `--unshare-net` (no `--share-net`) |
+    | `max_concurrent_sandboxes`| `int` (host capacity) | `16` | Parent admission limit (`CONCURRENCY_CAPACITY_EXCEEDED` -> `BLOCKED`) |
+    | `max_total_memory_bytes` | `int` (host capacity) | `4,294,967,296` (4 GiB) | Parent aggregate memory limit (`MEMORY_CAPACITY_EXCEEDED` -> `BLOCKED`) |
 
-* **Disentangled CPU Controls (CTO Review Section 1):**
-  * Strict separation between rate limiting (`CPUQuota`), per-process hardware limit traps (`RLIMIT_CPU`), and cumulative sandbox-wide CPU budget (`max_cpu_time_seconds`).
-  * Invariant: A busy loop terminated by wall-clock timeout is accurately classified as `WALL_TIME_LIMIT` with `timed_out = True`, never conflated with `CPU_LIMIT`.
+* **Separation of Admission Capacity from Runtime Violations (CTO Review Item 2):**
+  * Parent-side admission decisions are strictly separated from worker runtime resource violations.
+  * Workload rejected prior to admission because concurrency or aggregate host memory is exhausted transitions to `SandboxStatus.BLOCKED` with typed reasons:
+    * `SandboxTerminalReason.CONCURRENCY_CAPACITY_EXCEEDED`
+    * `SandboxTerminalReason.MEMORY_CAPACITY_EXCEEDED`
+  * Workload admitted but subsequently violating kernel runtime quotas transitions to `FAILED` / `TIMED_OUT` with runtime reasons (`MEMORY_LIMIT`, `PROCESS_LIMIT`, `CPU_LIMIT`, `WALL_TIME_LIMIT`).
 
-* **Factual Violation Classification & Kernel Evidence (CTO Review Section 2):**
+* **Safe RLIMIT_CPU Enforcement Without `preexec_fn` (CTO Review Item 3):**
+  * Multi-threaded Python parents avoid `preexec_fn` in `subprocess.Popen` to prevent fork deadlocks.
+  * Per-process `RLIMIT_CPU` is enforced using the trusted external `prlimit --cpu=<sec>:<sec+1>` launcher prepended to the Bubblewrap command line within the transient systemd scope.
+
+* **Genuine Network Namespace Isolation (CTO Review Item 1):**
+  * `DENY`: Bubblewrap isolates the network namespace via `--unshare-all` and `--unshare-net`; loopback and external networks are unreachable (`[Errno 101] Network is unreachable`).
+  * `ALLOW_UNRESTRICTED`: When authorized by policy (`authorized_by_policy=True`), Bubblewrap passes `--share-net` after `--unshare-all`, retaining the parent network namespace with minimal audited DNS/CA certificate paths mounted. Verified with real localhost loopback socket canary tests.
+
+* **Async Cancellation & Process Tree Cleanup (CTO Review Item 5):**
+  * Asynchronous callers using `execute_async()` or `run_code_async()` propagate coroutine cancellation (`task.cancel()`) directly to the execution's `CancellationToken`.
+  * The supervisor thread immediately issues `_kill_process_group(proc)` via `os.killpg(proc.pid, signal.SIGTERM/SIGKILL)`, terminating all child/grandchild processes and transient systemd scopes without orphan processes.
+
+* **Factual Violation Classification & Kernel Evidence Capture (CTO Review Item 6):**
   * Violations are never inferred from signals alone (`SIGKILL` / -9 / 137).
-  * Kernel cgroup evidence is sampled continuously and captured before cgroup destruction:
+  * Kernel cgroup evidence is sampled continuously and captured before cgroup/scope destruction:
     * `memory.events` (`oom_kill`, `oom`) -> `MEMORY_LIMIT`
     * `pids.events` (`max`) -> `PROCESS_LIMIT`
     * `cpu.stat` (`usage_usec`) -> `CPU_LIMIT`
   * Durable post-termination metadata is captured via systemd unit inspection (`systemctl --user show`) before transient scope reset (`reset-failed`).
   * Honest reporting: An external or non-OOM `SIGKILL` is classified honestly as `BACKEND_ERROR`, NEVER manufactured as `MEMORY_LIMIT`.
 
-* **Controller Capability Probing (CTO Review Section 3):**
-  * Active capability probe checks for `user_scope`, `memory`, `swap`, `cpu`, and `pids`.
-  * If a policy requests a controller that is absent or unsupported, execution fails closed immediately with `ResourceIsolationUnavailableError`.
-  * Zero silent degradation: Incomplete resource isolation is never ignored.
-
-* **Resource Control Handle & Unit Isolation (CTO Review Section 5 & 6):**
-  * Transient systemd user scopes use dedicated unit names `ae-sbx-<sanitized_id>.scope`.
-  * Cgroup path resolution strictly binds to the scope unit (`ae-sbx-...`), completely preventing discovery of or leakage from the parent process cgroup.
-  * The scope encapsulates Bubblewrap and all descendants. Documented task counting accounts for runtime launcher overhead.
-
-* **Output Backpressure & Deadlock Prevention (CTO Review Section 8):**
-  * Reader threads drain stdout and stderr incrementally in binary chunks, counting actual UTF-8 bytes rather than characters.
-  * Upon limit breach, the stream is marked truncated, a cancellation event is signaled to terminate the process group, and reader threads continuously drain remaining pipe data without memory allocation to prevent child process deadlocks.
-  * Truncated output reliably transitions execution to `FAILED` with `OUTPUT_LIMIT`.
-
-* **Non-Blocking Async Execution (CTO Review Section 9):**
-  * `execute_async()` and `run_code_async()` offload synchronous subprocess execution to worker threads via `anyio.to_thread.run_sync()`, preserving full responsiveness of the asyncio event loop.
-
-* **Secret-Grant & Network Limitations (CTO Review Section 10 & 14):**
-  * Raw secret injection into arbitrary untrusted code is prohibited (`SandboxSecurityError`); secret grants require an explicitly declared, reviewed capability (e.g. `capability_id="provider_adapter"`).
-  * Output canary redaction provides defense-in-depth sanitization of leaked secrets.
-  * Network access is denied by default (`SandboxNetworkMode.DENY`); `ALLOW_UNRESTRICTED` requires explicit policy authorization (`authorized_by_policy=True`).
-
-* **Audit-Safe Telemetry (CTO Review Section 15):**
-  * Resource usage metrics reported in results and execution records are sanitized to exclude raw host paths (e.g. `/sys/fs/cgroup/...`) and host user identifiers.
+* **Test Evidence Classification Matrix (CTO Review Item 4):**
+  * Implemented Linux resource enforcement with documented S1 verification coverage across 38 dedicated precision tests:
+    | Test Category | Scenarios | OS Primitives Exercised | Environment Requirement | Verification Result |
+    | :--- | :--- | :--- | :--- | :--- |
+    | **UNIT** | Scenarios 18, 20, 21, 32 | Models, clamping, validation, audit serialization, safe metrics formatting | Any (Python 3.10+) | PASSED |
+    | **CONTRACT** | Scenarios 25, 26, 27, 28, 29, 30, 31, 33, 34 | Admission capacity limits, platform fail-closed stubs, policy authorization, missing controller fail-closed | Any / Platform Stubs | PASSED |
+    | **REAL_LINUX_INTEGRATION** | Scenarios 01-17, 19, 22-24, 35, 36, 37, 38 | Real Bubblewrap unprivileged namespaces, systemd user scopes (`systemd-run`), cgroup v2 controllers (`cpu`, `memory`, `pids`), `prlimit`, real TCP loopback canary, async cancellation | Linux (kernel cgroup v2, bwrap, systemd-run) | PASSED |
 
 
 

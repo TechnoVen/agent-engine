@@ -48,6 +48,7 @@ from core.sandbox.models import (
     SandboxResult,
     SandboxSecurityError,
     SandboxSpec,
+    SandboxStatus,
     SandboxTerminalReason,
     SandboxUnavailableError,
     generate_sandbox_id,
@@ -70,8 +71,8 @@ class SandboxService:
         artifact_service: Optional[ArtifactService] = None,
         storage: Optional[StorageBackend] = None,
         default_timeout_seconds: float = 30.0,
-        max_concurrent_sandboxes: int = 10,
-        max_total_memory_bytes: Optional[int] = 1024 * 1024 * 1024,  # 1 GB ceiling
+        max_concurrent_sandboxes: int = 16,
+        max_total_memory_bytes: Optional[int] = 4 * 1024 * 1024 * 1024,  # 4 GB ceiling
         max_resource_policy: Optional[SandboxResourcePolicy] = None,
     ):
         self.secrets_service = secrets_service
@@ -150,8 +151,8 @@ class SandboxService:
         spec.resource_policy = spec.resource_policy.clamp_to_ceiling(self.max_resource_policy)
         spec.timeout_seconds = spec.resource_policy.max_wall_time_seconds
 
-        # Validate mandatory bounds for untrusted profile (CTO Review Section 4)
-        if spec.resource_policy.profile_name == "untrusted_default":
+        # Validate mandatory bounds for untrusted profile (CTO Review Section 4 & Item 7)
+        if spec.resource_policy.profile_name in ("untrusted_default", "untrusted_default_v1"):
             spec.resource_policy.validate_for_untrusted()
 
         # Network authorization verification (CTO Review Section 14)
@@ -161,15 +162,16 @@ class SandboxService:
                     "Network access rejected: requires explicit PolicyEngine authorization (R2.9 Section 14)."
                 )
 
-        # Concurrency & capacity accounting (R2.9)
+        # Concurrency & capacity admission accounting (CTO Review Item 2: Parent-side admission)
         with self._lock:
             if len(self._active_sandboxes) >= self.max_concurrent_sandboxes:
                 raise ResourceLimitExceededError(
-                    reason=SandboxTerminalReason.PROCESS_LIMIT,
+                    reason=SandboxTerminalReason.CONCURRENCY_CAPACITY_EXCEEDED,
                     message=f"Maximum concurrent sandbox limit ({self.max_concurrent_sandboxes}) reached.",
                     violating_dimension="concurrent_sandboxes",
                     configured_limit=self.max_concurrent_sandboxes,
                     observed_value=len(self._active_sandboxes),
+                    status=SandboxStatus.BLOCKED,
                 )
             if self.max_total_memory_bytes and spec.resource_policy.max_memory_bytes:
                 current_mem = sum(
@@ -180,11 +182,12 @@ class SandboxService:
                     > self.max_total_memory_bytes
                 ):
                     raise ResourceLimitExceededError(
-                        reason=SandboxTerminalReason.MEMORY_LIMIT,
+                        reason=SandboxTerminalReason.MEMORY_CAPACITY_EXCEEDED,
                         message="Total concurrent sandbox memory allocation limit exceeded.",
                         violating_dimension="concurrent_memory_bytes",
                         configured_limit=self.max_total_memory_bytes,
                         observed_value=current_mem + spec.resource_policy.max_memory_bytes,
+                        status=SandboxStatus.BLOCKED,
                     )
             self._active_sandboxes[execution_id] = spec
 
@@ -463,10 +466,21 @@ class SandboxService:
         project_id: Optional[str] = None,
         project_root: Optional[Path] = None,
     ) -> SandboxResult:
-        """Asynchronously execute a workload in the sandbox off the event loop (CTO Review Section 9)."""
+        """Asynchronously execute a workload in the sandbox off the event loop (CTO Review Section 9 & Item 5)."""
         import anyio.to_thread
+        from core.execution.cancellation import CancellationToken
 
-        return await anyio.to_thread.run_sync(self.execute, spec, project_id, project_root)
+        if spec.cancellation_token is None:
+            spec.cancellation_token = CancellationToken(
+                execution_id=spec.execution_id or generate_sandbox_id()
+            )
+
+        try:
+            return await anyio.to_thread.run_sync(self.execute, spec, project_id, project_root)
+        except (anyio.get_cancelled_exc_class(), Exception):
+            if spec.cancellation_token and not spec.cancellation_token.is_cancelled:
+                spec.cancellation_token.cancel("Async task cancelled")
+            raise
 
     async def run_code_async(
         self,
@@ -474,9 +488,20 @@ class SandboxService:
         workspace_dir: Path,
         **kwargs: Any,
     ) -> SandboxResult:
-        """Asynchronously run a Python code snippet off the event loop (CTO Review Section 9)."""
+        """Asynchronously run a Python code snippet off the event loop (CTO Review Section 9 & Item 5)."""
         import anyio.to_thread
+        from core.execution.cancellation import CancellationToken
 
-        return await anyio.to_thread.run_sync(
-            lambda: self.run_code(code, workspace_dir=workspace_dir, **kwargs)
-        )
+        token = kwargs.get("cancellation_token")
+        if token is None:
+            token = CancellationToken(execution_id=generate_sandbox_id())
+            kwargs["cancellation_token"] = token
+
+        try:
+            return await anyio.to_thread.run_sync(
+                lambda: self.run_code(code, workspace_dir=workspace_dir, **kwargs)
+            )
+        except (anyio.get_cancelled_exc_class(), Exception):
+            if token and not token.is_cancelled:
+                token.cancel("Async task cancelled")
+            raise

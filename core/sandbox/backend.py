@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 import logging
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import sys
@@ -594,6 +595,7 @@ class LinuxBubblewrapBackend(SandboxBackend):
         if not spec.network.allowed:
             argv.append("--unshare-net")
         else:
+            argv.append("--share-net")
             # Network allowed: provide basic DNS and certificate paths only (audited, not host /etc root)
             for net_path in [
                 "/etc/resolv.conf",
@@ -840,28 +842,31 @@ class LinuxBubblewrapBackend(SandboxBackend):
             else:
                 full_argv = bwrap_argv
 
-            # Prepare preexec_fn for RLIMIT_CPU if requested (Section 1 & 7: per-process hardware trap)
-            preexec_fn = None
+            # Setup RLIMIT_CPU if requested using trusted prlimit wrapper (CTO Review Item 3)
+            # Avoids unsafe preexec_fn in multi-threaded Python parent
             rlimit_cpu = spec.resource_policy.rlimit_cpu_seconds
             if rlimit_cpu is not None:
-
-                def _set_cpu_limit():
-                    try:
-                        import resource
-
-                        sec = max(1, int(rlimit_cpu))
-                        resource.setrlimit(resource.RLIMIT_CPU, (sec, sec + 1))
-                    except Exception as ex:
-                        logger.debug(f"Failed to set RLIMIT_CPU in child: {ex}")
-
-                preexec_fn = _set_cpu_limit
+                sec = max(1, int(rlimit_cpu))
+                prlimit_path = shutil.which("prlimit")
+                if prlimit_path:
+                    if cgroup_required:
+                        full_argv = (
+                            cgroup_prefix
+                            + [prlimit_path, f"--cpu={sec}:{sec + 1}", "--"]
+                            + bwrap_argv
+                        )
+                    else:
+                        full_argv = [prlimit_path, f"--cpu={sec}:{sec + 1}", "--"] + bwrap_argv
+                else:
+                    logger.warning(
+                        "prlimit binary not found on host; cannot set RLIMIT_CPU without unsafe preexec_fn"
+                    )
 
             proc = subprocess.Popen(
                 full_argv,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 start_new_session=True,  # Process group isolation for robust tree cleanup
-                preexec_fn=preexec_fn,
                 close_fds=True,
             )
 

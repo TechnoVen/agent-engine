@@ -40,6 +40,7 @@ class SandboxStatus(str, Enum):
     TIMED_OUT = "timed_out"
     CANCELLED = "cancelled"
     UNAVAILABLE = "unavailable"
+    BLOCKED = "blocked"
 
 
 class SandboxMountMode(str, Enum):
@@ -64,6 +65,8 @@ class SandboxTerminalReason(str, Enum):
     RESOURCE_ISOLATION_UNAVAILABLE = "resource_isolation_unavailable"
     SECURITY_VIOLATION = "security_violation"
     BACKEND_ERROR = "backend_error"
+    CONCURRENCY_CAPACITY_EXCEEDED = "concurrency_capacity_exceeded"
+    MEMORY_CAPACITY_EXCEEDED = "memory_capacity_exceeded"
 
 
 class SandboxError(Exception):
@@ -109,12 +112,22 @@ class ResourceLimitExceededError(SandboxError):
         violating_dimension: Optional[str] = None,
         configured_limit: Any = None,
         observed_value: Any = None,
+        status: Optional[SandboxStatus] = None,
     ):
         super().__init__(message)
         self.reason = reason
         self.violating_dimension = violating_dimension
         self.configured_limit = configured_limit
         self.observed_value = observed_value
+        if status is not None:
+            self.status = status
+        elif reason in (
+            SandboxTerminalReason.CONCURRENCY_CAPACITY_EXCEEDED,
+            SandboxTerminalReason.MEMORY_CAPACITY_EXCEEDED,
+        ):
+            self.status = SandboxStatus.BLOCKED
+        else:
+            self.status = SandboxStatus.FAILED
 
 
 class ResourceIsolationUnavailableError(SandboxError):
@@ -206,37 +219,37 @@ class SandboxResourcePolicy:
 
     Distinct CPU Controls (CTO Review Section 1):
     1. cpu_quota_percent: Rate limit (e.g. 50.0 for 50% CPU rate/share via cgroup CPUQuota).
-    2. rlimit_cpu_seconds: Per-process hardware limit trap via RLIMIT_CPU in preexec_fn.
+    2. rlimit_cpu_seconds: Per-process hardware limit trap via RLIMIT_CPU.
     3. max_cpu_time_seconds: Cumulative sandbox-wide CPU budget across all tasks measured
        via cgroup cpu.stat usage_usec.
     4. max_wall_time_seconds: Elapsed real wall-clock time limit.
     """
 
     max_wall_time_seconds: float = 30.0
-    max_cpu_time_seconds: Optional[float] = 15.0
+    max_cpu_time_seconds: Optional[float] = 30.0
     cpu_quota_percent: Optional[float] = 100.0  # Rate limit: 100% of 1 CPU core
     rlimit_cpu_seconds: Optional[int] = None  # Defense-in-depth per-process CPU trap
-    max_memory_bytes: Optional[int] = 256 * 1024 * 1024  # 256 MB
-    max_processes: Optional[int] = 16  # Maximum sandbox resource-group tasks
-    max_stdout_bytes: int = 5 * 1024 * 1024  # 5 MB output backpressure
-    max_stderr_bytes: int = 5 * 1024 * 1024  # 5 MB output backpressure
+    max_memory_bytes: Optional[int] = 512 * 1024 * 1024  # 512 MB
+    max_processes: Optional[int] = 32  # Maximum sandbox resource-group tasks (TasksMax=32)
+    max_stdout_bytes: int = 10 * 1024 * 1024  # 10 MB output backpressure
+    max_stderr_bytes: int = 10 * 1024 * 1024  # 10 MB output backpressure
     require_swap_disabled: bool = True  # Enforce MemorySwapMax=0 where supported
-    profile_name: str = "untrusted_default"
+    profile_name: str = "untrusted_default_v1"
 
     @classmethod
     def untrusted_default(cls) -> SandboxResourcePolicy:
-        """Canonical constructor for untrusted or generated code execution (R2.9 Section 4)."""
+        """Canonical constructor for untrusted or generated code execution (R2.9 Section 4 & 7)."""
         return cls(
             max_wall_time_seconds=30.0,
-            max_cpu_time_seconds=15.0,
+            max_cpu_time_seconds=30.0,
             cpu_quota_percent=100.0,
             rlimit_cpu_seconds=None,
-            max_memory_bytes=256 * 1024 * 1024,
-            max_processes=16,
-            max_stdout_bytes=5 * 1024 * 1024,
-            max_stderr_bytes=5 * 1024 * 1024,
+            max_memory_bytes=512 * 1024 * 1024,
+            max_processes=32,
+            max_stdout_bytes=10 * 1024 * 1024,
+            max_stderr_bytes=10 * 1024 * 1024,
             require_swap_disabled=True,
-            profile_name="untrusted_default",
+            profile_name="untrusted_default_v1",
         )
 
     def validate_for_untrusted(self) -> None:
