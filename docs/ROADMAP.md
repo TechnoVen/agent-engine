@@ -746,7 +746,7 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
 - **Required Evidence:**
   - Resource-limit tests (`tests/test_r2_sandbox_resource_limits.py` — 35 precision scenarios covering all CTO Review resource enforcement requirements: distinct CPUQuota/RLIMIT_CPU/budget semantics, factual cgroup evidence classification, controller capability probing, mandatory untrusted limits, unit-bound scope isolation, deadlock-free backpressure, and non-blocking async execution).
 
-### [ ] R2.10 — Safe staged patch application
+### [x] R2.10 — Safe staged patch application
 
 - **Migration:** `REFACTOR`
 - **Target release:** `0.5`
@@ -758,10 +758,10 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
   - Atomic replacement.
   - Recoverable backup/journal.
 - **Acceptance Criteria:**
-  - [ ] Stale patch leaves current file untouched.
-  - [ ] Interrupted write is recoverable.
+  - [x] Stale patch leaves current file untouched.
+  - [x] Interrupted write is recoverable.
 - **Required Evidence:**
-  - Patch conflict tests.
+  - Patch conflict tests (`tests/test_r2_patch_service.py` — 20 precision scenarios covering canonical PatchOperation model, raw byte hashing without normalization, absence vs empty distinction, immediate pre-commit revalidation, exact approval digest binding, atomic replacement with POSIX directory fsync, durable backup and journal before mutation, idempotent crash recovery, target lock serialization, and hash-only audit ledger records).
 
 ### [ ] R2.11 — Checkpoint and rollback service
 

@@ -390,8 +390,60 @@ class ApprovalRequest(BaseModel):
     | **CONTRACT** | Scenarios 25, 26, 27, 28, 29, 30, 31, 33, 34 | Admission capacity limits, platform fail-closed stubs, policy authorization, missing controller fail-closed | Any / Platform Stubs | PASSED |
     | **REAL_LINUX_INTEGRATION** | Scenarios 01-17, 19, 22-24, 35, 36, 37, 38 | Real Bubblewrap unprivileged namespaces, systemd user scopes (`systemd-run`), cgroup v2 controllers (`cpu`, `memory`, `pids`), `prlimit`, real TCP loopback canary, async cancellation | Linux (kernel cgroup v2, bwrap, systemd-run) | PASSED |
 
+---
 
+## 13. Safe Staged Patch Application (R2.10)
 
+* **Core Invariant: Never Overwrite Newer Human Edits:**
+  * Agent Engine treats live human edits as authoritative. An older AI-proposed patch must never overwrite newer human modifications merely because the proposal was previously valid or approved. If target file state deviates from the patch's baseline, execution halts fail-closed with `STALE_PATCH`.
 
+* **Canonical `PatchOperation` Model (`core/patch/models.py`):**
+  * Explicitly defines atomic patch operations (`CREATE`, `UPDATE`, `DELETE`) with exact pre- and post-condition invariants:
+    * `operation_id`: Unique identifier (`patch-<uuid>`).
+    * `project_id`: Bound project identity.
+    * `canonical_relative_path`: Path relative to project root (strictly non-absolute, validated via `WorkspacePathResolver`).
+    * `expected_exists` & `expected_content_hash`: Declared pre-state.
+    * `proposed_content` / `proposed_content_artifact_id` & `proposed_content_hash`: Declared post-state.
+    * `approval_id` & `approval_digest`: Cryptographic approval binding.
+  * **Absence vs. Empty File Distinction:**
+    * Absence is strictly represented by `expected_exists = False` and `expected_content_hash = None`.
+    * An empty file is represented by `expected_exists = True` and `expected_content_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"`.
+    * A `CREATE` operation against an existing file (even if empty) conflicts fail-closed with `TARGET_EXISTS`.
 
+* **Cryptographic Byte Hashing:**
+  * Uses SHA-256 over exact on-disk bytes (`compute_content_hash`, `compute_file_hash`).
+  * Never normalizes line endings (LF vs. CRLF), never strips whitespace, and never alters Unicode encoding.
+  * Any byte discrepancy between declared hash and live file state results in immediate conflict rejection.
 
+* **Exact Approval Digest Binding (`compute_patch_approval_digest`):**
+  * Approval tokens bind:
+    $$\text{digest} = \text{SHA-256}\left(\text{"patch\_approval:"} + \text{project\_id} + ":" + \text{canonical\_relative\_path} + ":" + \text{operation\_type} + ":" + \text{expected\_hash} + ":" + \text{proposed\_hash}\right)$$
+  * Any alteration to path, target project, operation type, base content, or proposed payload invalidates the approval token fail-closed (`APPROVAL_MISMATCH`).
+
+* **Two-Phase Staged Atomic Replacement Protocol:**
+  1. **Path Containment:** Resolves target within `WorkspacePathResolver` to prevent directory traversal.
+  2. **Approval Verification:** Verifies approval digest matches all patch parameters.
+  3. **Payload Resolution & Verification:** Resolves proposed content bytes (direct or via `ArtifactService`) and verifies byte hash.
+  4. **Initial Pre-Check:** Compares live file state against expected pre-conditions.
+  5. **Pre-Mutation Durable Backup:** For `UPDATE` and `DELETE`, creates an immutable backup copy (`.ae_patch_recovery/backups/<id>.orig`) with `os.fsync()`.
+  6. **Journal Registration:** Persists `PatchJournalEntry` in state `PREPARED` (`.ae_patch_recovery/journals/<id>.json`) with `os.fsync()`.
+  7. **Staged Temporary File:** Writes proposed bytes to a hidden sibling temporary file (`.<name>.tmp.<id>`) on the same filesystem/mount point, flushed and fsynced.
+  8. **Immediate Pre-Commit Revalidation:** Re-reads live target state immediately prior to mutation. If any intermediate modification occurred, staged file is removed, journal transitions to `ABORTED`, and operation aborts with `STALE_PATCH` or `TARGET_EXISTS`/`TARGET_ABSENT`.
+  9. **Transition to APPLYING:** Journal transitions to `APPLYING` with `os.fsync()`.
+  10. **Atomic Rename (`os.replace`):** Performs atomic filesystem rename (`os.replace(staged, target)`) or `unlink()`. Preserves existing file mode/permissions.
+  11. **Directory Fsync:** Calls `os.fsync()` on the parent directory file descriptor, guaranteeing directory entry durability across sudden system crashes or power failure.
+  12. **Transition to COMMITTED:** Journal transitions to `COMMITTED` with `os.fsync()`.
+
+* **Idempotent Crash Recovery (`recover_interrupted_patches`):**
+  * Invoked at startup or during disaster recovery:
+    * **Target == Proposed Hash:** Atomic rename succeeded before crash. Reconciles journal to `COMMITTED` and unlinks residual staged files.
+    * **Target == Expected Original Hash (or absent):** Mutation did not occur or failed prior to rename. Safely aborts journal to `ABORTED` and cleans temporary files; original target remains intact.
+    * **Target == Unknown / Newer Hash:** Target file was edited by a human or external process during or after the interruption. Halts recovery fail-closed, transitions journal to `RECOVERY_REQUIRED`, and leaves live file untouched. Never blindly overwrites human work.
+
+* **Concurrency Serialization & Residual OS Race Limitations:**
+  * **In-Process Serialization:** `PatchLockManager` serializes Agent Engine's own concurrent patch tasks per `(project_id, relative_path)`.
+  * **Residual External Race Limitation:** While `os.replace` is atomic at the POSIX filesystem level, user-space pre-commit revalidation cannot eliminate the sub-millisecond race condition if an external program (e.g. human saving in VS Code / Vim) writes to the file in the exact microsecond window between `compute_file_hash` and `os.replace`. Full elimination of external races requires kernel-level mandatory locking or filesystem-level snapshot branches.
+
+* **Audit-Safe Telemetry Records (`PatchExecutionRecord`):**
+  * Records only non-sensitive metadata: `operation_id`, `project_id`, `canonical_relative_path`, `operation_type`, cryptographic hashes (`expected_content_hash`, `resulting_hash`), `approval_id`, execution duration, and journal state.
+  * Full source code contents and secrets are strictly excluded from audit ledgers.

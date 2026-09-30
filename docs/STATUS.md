@@ -540,13 +540,26 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/sandbox/__init__.py"
     - "tests/test_r2_sandbox_resource_limits.py"
   notes: "S1 — implemented and implementation-tested. Fully addressed all CTO Review corrections: (1) Bubblewrap genuine network isolation: default DENY unshares net namespace; ALLOW_UNRESTRICTED passes --share-net when authorized by policy (authorized_by_policy=True), verified by real TCP loopback canary. (2) Parent admission capacity (max_concurrent_sandboxes, max_total_memory_bytes) strictly separated from worker runtime limits, mapping to SandboxStatus.BLOCKED with typed reasons CONCURRENCY_CAPACITY_EXCEEDED and MEMORY_CAPACITY_EXCEEDED. (3) Eliminated unsafe Python preexec_fn; RLIMIT_CPU enforced via trusted prlimit wrapper in transient systemd scope. (4) Documented S1 test-evidence classification matrix (UNIT, CONTRACT, REAL_LINUX_INTEGRATION). (5) Async cancellation through to_thread reliably terminates child OS process group and transient scope without orphans. (6) Kernel resource evidence captured strictly before scope destruction; non-OOM SIGKILL classified as BACKEND_ERROR. (7) Default resource profile stable identifier untrusted_default_v1 with concrete values documented. 38/38 dedicated resource limit precision tests passing, 721/721 full regression passing."
+- id: R2.10
+  title: "Safe staged patch application"
+  task_status: done
+  capability_maturity: S1
+  migration: REFACTOR
+  owner: "Security & Control Plane Architecture"
+  depends_on: [R2.5]
+  evidence:
+    - "core/patch/models.py"
+    - "core/patch/service.py"
+    - "core/patch/__init__.py"
+    - "tests/test_r2_patch_service.py"
+  notes: "S1 — implemented and implementation-tested. Delivered Safe Staged Patch Application subsystem honoring core invariant: Agent Engine never overwrites newer human edits. (1) Canonical PatchOperation model supporting CREATE, UPDATE, DELETE with explicit expected-state (exists + content_hash) and proposed-state definitions. (2) Strict distinction between absent file (exists=False, hash=None) and empty file (exists=True, hash='e3b0c44...'). (3) Cryptographic byte hashing (SHA-256) over exact file bytes on disk without normalization (no whitespace, line ending, or encoding tampering). (4) Exact approval digest binding (compute_patch_approval_digest) covering project, path, op, expected hash, and proposed hash; invalidates token upon any parameter change (APPROVAL_MISMATCH). (5) Immediate pre-commit revalidation immediately before live mutation; stale proposals fail closed with STALE_PATCH conflict, leaving live human edits untouched. (6) Atomic replacement using temporary file on same filesystem/directory (.target.tmp.<id>), flush, fsync, hash-verification, os.replace, and POSIX parent directory fsync. (7) Durable crash recovery journal (PatchJournalEntry: PREPARED, APPLYING, COMMITTED, ABORTED, RECOVERY_REQUIRED) and original file backup persisted before mutation. (8) Idempotent startup crash recovery (recover_interrupted_patches); ambiguous crash states with unknown human edits are never overwritten (RECOVERY_REQUIRED). (9) In-process PatchLockManager serializing Agent Engine writers per (project_id, relative_path). (10) Audit-safe execution ledger (PatchExecutionRecord) containing hashes and references only, never full file bodies or secrets. 20/20 dedicated patch scenarios passing, 741/741 full regression passing."
 ```
 
 ---
 
 ## 6. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `721 passed, 3 warnings in 102.65s` (`uv run pytest`)
+- **Full Regression Suite:** `741 passed, 3 warnings in 103.30s` (`uv run pytest`)
 - **R2 IPC Authentication Suite:** `14 passed in 7.83s` (`uv run pytest tests/test_r2_ipc_authentication.py`)
 - **R2 Policy & Exact-Operation Approvals Suite:** `33 passed in 4.26s` (`uv run pytest tests/test_r2_policy_and_approvals.py`)
 - **R2 Canonical Workspace Paths Suite:** `24 passed in 2.90s` (`uv run pytest tests/test_r2_workspace_paths.py`)
@@ -554,8 +567,9 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
 - **R2 Prompt-Injection & Untrusted Content Suite:** `26 passed in 3.14s` (`uv run pytest tests/test_r2_prompt_injection.py`)
 - **R2 Sandbox Worker Runtime Suite:** `26 passed in 9.54s` (`uv run pytest tests/test_r2_sandbox_runtime.py`)
 - **R2 Sandbox Resource Limits Suite:** `38 passed in 14.97s` (`uv run pytest tests/test_r2_sandbox_resource_limits.py`)
+- **R2 Safe Staged Patch Application Suite:** `20 passed in 2.79s` (`uv run pytest tests/test_r2_patch_service.py`)
 - **Sandbox Baseline Integration Suite:** `4 passed in 0.85s` (`uv run pytest tests/test_sandbox.py`)
-- **Combined R2 Security Verification:** `195 passed in 33.50s` across 8 security suites
+- **Combined R2 Security Verification:** `215 passed in 36.20s` across 9 security suites
 - **Static Code Analysis & Formatting:**
   - `uv run ruff check`: passed (`All checks passed!`)
   - `uv run ruff format --check`: passed (`236 files already formatted`)
