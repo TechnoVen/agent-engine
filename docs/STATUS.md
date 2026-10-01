@@ -552,30 +552,48 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/patch/service.py"
     - "core/patch/__init__.py"
     - "tests/test_r2_patch_service.py"
-  notes: "S1 — implemented and implementation-tested. Delivered Safe Staged Patch Application subsystem honoring core invariant: Agent Engine never overwrites newer human edits. (1) Canonical PatchOperation model supporting CREATE, UPDATE, DELETE with explicit expected-state (exists + content_hash) and proposed-state definitions. (2) Strict distinction between absent file (exists=False, hash=None) and empty file (exists=True, hash='e3b0c44...'). (3) Cryptographic byte hashing (SHA-256) over exact file bytes on disk without normalization (no whitespace, line ending, or encoding tampering). (4) Exact approval digest binding (compute_patch_approval_digest) covering project, path, op, expected hash, and proposed hash; invalidates token upon any parameter change (APPROVAL_MISMATCH). (5) Immediate pre-commit revalidation immediately before live mutation; stale proposals fail closed with STALE_PATCH conflict, leaving live human edits untouched. (6) Atomic replacement using temporary file on same filesystem/directory (.target.tmp.<id>), flush, fsync, hash-verification, os.replace, and POSIX parent directory fsync. (7) Durable crash recovery journal (PatchJournalEntry: PREPARED, APPLYING, COMMITTED, ABORTED, RECOVERY_REQUIRED) and original file backup persisted before mutation. (8) Idempotent startup crash recovery (recover_interrupted_patches); ambiguous crash states with unknown human edits are never overwritten (RECOVERY_REQUIRED). (9) In-process PatchLockManager serializing Agent Engine writers per (project_id, relative_path). (10) Audit-safe execution ledger (PatchExecutionRecord) containing hashes and references only, never full file bodies or secrets. 20/20 dedicated patch scenarios passing, 741/741 full regression passing."
+  notes: "S1 — implemented and implementation-tested. Delivered Safe Staged Patch Application subsystem honoring core invariant: Agent Engine never overwrites newer human edits. (1) Canonical PatchOperation model supporting CREATE, UPDATE, DELETE with explicit expected-state (exists + content_hash) and proposed-state definitions. (2) Strict distinction between absent file (exists=False, hash=None) and empty file (exists=True, hash='e3b0c44...'). (3) Cryptographic byte hashing (SHA-256) over exact file bytes on disk without normalization. (4) Exact approval digest binding covering project, path, op, expected hash, and proposed hash. (5) Immediate pre-commit revalidation. (6) Linux renameat2(RENAME_NOREPLACE) for CREATE and atomic os.replace for UPDATE with POSIX directory fsync. (7) Durable crash recovery journal and operation-scoped backup (.ae_patch_recovery/backups/{project_id}/{op_id}.bak, 0o600). (8) Idempotent startup crash recovery. (9) In-process PatchLockManager serializing Agent Engine writers. (10) Audit-safe execution ledger (PatchExecutionRecord). 25/25 dedicated patch scenarios passing."
+- id: R2.11
+  title: "Checkpoint and rollback service"
+  task_status: done
+  capability_maturity: S1
+  migration: NEW
+  owner: "Security & Control Plane Architecture"
+  depends_on: [R1.10, R2.10]
+  evidence:
+    - "core/checkpoint/models.py"
+    - "core/checkpoint/backends/base.py"
+    - "core/checkpoint/backends/file.py"
+    - "core/checkpoint/backends/git.py"
+    - "core/checkpoint/backends/database.py"
+    - "core/checkpoint/backends/config.py"
+    - "core/checkpoint/service.py"
+    - "core/checkpoint/__init__.py"
+    - "tests/test_r2_checkpoint_service.py"
+  notes: "S1 — implemented and implementation-tested. Delivered Checkpoint and Rollback Service honoring core invariants: (1) Reversible consequential mutations must create a durable checkpoint before executing; failure blocks mutation fail-closed (CheckpointCreationError). (2) Safe rollback as a consequential operation requiring PolicyEngine authorization or approval token binding (compute_rollback_approval_digest) with single-use atomic consumption. (3) Never rollback over newer human state silently: pre-flight conflict inspection inspects all target resources before modifying any live file, halting with ROLLBACK_CONFLICT unless force=True. (4) Multi-resource backends: File (exact byte snapshot, raw SHA-256, staged atomic commit with renameat2/os.replace, permissions preservation, absence/deletion handling), Git (isolated safety ref refs/ae-checkpoints/<id> via temporary index GIT_INDEX_FILE without touching active branch, index, or remote), Database (SQLite Online Backup API consistency, PRAGMA integrity_check, UnsupportedDatabaseBackendError fail-closed for non-SQLite), Config (schema versioning, SecretReference preservation without plaintext leaks). (5) Hardened storage (.ae_checkpoints/{project_id}/{checkpoint_id}/, mode 0o700/0o600, ID sanitization, excluded from search/context/diagnostics). (6) Audit-safe ledger (CheckpointExecutionRecord) recording hashes/status/IDs only. 23/23 dedicated precision tests passing, 769/769 full regression passing."
 ```
 
 ---
 
 ## 6. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `741 passed, 3 warnings in 103.30s` (`uv run pytest`)
-- **R2 IPC Authentication Suite:** `14 passed in 7.83s` (`uv run pytest tests/test_r2_ipc_authentication.py`)
-- **R2 Policy & Exact-Operation Approvals Suite:** `33 passed in 4.26s` (`uv run pytest tests/test_r2_policy_and_approvals.py`)
-- **R2 Canonical Workspace Paths Suite:** `24 passed in 2.90s` (`uv run pytest tests/test_r2_workspace_paths.py`)
+- **Full Regression Suite:** `769 passed, 3 warnings in 115.28s` (`uv run pytest`)
+- **R2 Checkpoint and Rollback Suite:** `23 passed in 3.49s` (`uv run pytest tests/test_r2_checkpoint_service.py`)
+- **R2 Safe Staged Patch Application Suite:** `25 passed in 3.32s` (`uv run pytest tests/test_r2_patch_service.py`)
+- **R2 Sandbox Resource Limits Suite:** `38 passed in 15.35s` (`uv run pytest tests/test_r2_sandbox_resource_limits.py`)
+- **R2 Sandbox Worker Runtime Suite:** `26 passed in 9.54s` (`uv run pytest tests/test_r2_sandbox_runtime.py`)
 - **R2 Secrets Service & Runtime Injection Suite:** `30 passed in 4.50s` (`uv run pytest tests/test_r2_secrets_service.py`)
 - **R2 Prompt-Injection & Untrusted Content Suite:** `26 passed in 3.14s` (`uv run pytest tests/test_r2_prompt_injection.py`)
-- **R2 Sandbox Worker Runtime Suite:** `26 passed in 9.54s` (`uv run pytest tests/test_r2_sandbox_runtime.py`)
-- **R2 Sandbox Resource Limits Suite:** `38 passed in 14.97s` (`uv run pytest tests/test_r2_sandbox_resource_limits.py`)
-- **R2 Safe Staged Patch Application Suite:** `20 passed in 2.79s` (`uv run pytest tests/test_r2_patch_service.py`)
-- **Sandbox Baseline Integration Suite:** `4 passed in 0.85s` (`uv run pytest tests/test_sandbox.py`)
-- **Combined R2 Security Verification:** `215 passed in 36.20s` across 9 security suites
+- **R2 Canonical Workspace Paths Suite:** `24 passed in 2.90s` (`uv run pytest tests/test_r2_workspace_paths.py`)
+- **R2 Policy & Exact-Operation Approvals Suite:** `33 passed in 4.26s` (`uv run pytest tests/test_r2_policy_and_approvals.py`)
+- **R2 IPC Authentication Suite:** `14 passed in 7.83s` (`uv run pytest tests/test_r2_ipc_authentication.py`)
+- **Combined R2 Security Verification:** `239 passed in 54.33s` across 10 security suites
 - **Static Code Analysis & Formatting:**
   - `uv run ruff check`: passed (`All checks passed!`)
-  - `uv run ruff format --check`: passed (`236 files already formatted`)
+  - `uv run ruff format --check`: passed (`250 files already formatted`)
 - **Desktop Tauri & Frontend Workspace:**
-  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.76s`)
-  - `pnpm -r build`: passed (`10.7s`)
+  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.73s`)
+  - `pnpm -r build`: passed (`12.8s`)
 - **Documented Upstream Warnings (3 known upstream warnings, 0 new unexplained/project-owned warnings):**
   1. `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.` (Origin: `fastapi/testclient.py:1` — Upstream FastAPI/Starlette testclient deprecation notice; non-runtime).
   2. `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.` (Origin: `starlette/testclient.py:53` — Upstream Starlette/AnyIO import alias notice; non-runtime).

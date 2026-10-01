@@ -457,3 +457,51 @@ class ApprovalRequest(BaseModel):
 * **Audit-Safe Telemetry Records (`PatchExecutionRecord` — Closure Item 7):**
   * Public ledger records: `operation_id`, `project_id`, `canonical_relative_path`, `operation_type`, cryptographic hashes (`expected_content_hash`, `resulting_hash`), `approval_id`, execution duration, and journal state.
   * Complete source code contents, backup bytes, and secrets are strictly excluded from audit ledgers.
+
+---
+
+## 14. Checkpoint and Rollback Service (R2.11)
+
+* **Mandatory Pre-Mutation Checkpoint Invariant:**
+  * Reversible consequential mutations must create a durable checkpoint before executing side-effects.
+  * If checkpoint creation encounters any failure, mutation halts fail-closed (`CheckpointCreationError`), leaving the environment untouched.
+
+* **Safe Rollback Invariant & Approval Binding:**
+  * Rollback is itself a consequential operation requiring PolicyEngine authorization or approval token binding.
+  * Rollback approval tokens bind exact parameters via cryptographic digest:
+    $$\text{digest} = \text{SHA-256}\left(\text{"rollback\_approval:"} + \text{project\_id} + ":" + \text{checkpoint\_id} + ":" + \text{restore\_id} + ":" + \text{sorted\_resource\_ids}\right)$$
+  * Any alteration to project, checkpoint, restore, or resource identifiers invalidates the approval token.
+  * Single-use atomic consumption prevents replaying rollback tokens.
+
+* **Never Rollback Over Newer Human State Silently (`ROLLBACK_CONFLICT`):**
+  * Rollback defaults to `force = False`.
+  * Pre-flight conflict inspection verifies that live resources match their expected post-execution state.
+  * If an external human or process modified a resource (divergent hash or external deletion), rollback halts immediately with `ROLLBACK_CONFLICT` before any live files are touched.
+  * Explicit `force = True` overrides human divergence only when expressly authorized.
+
+* **Multi-Resource Checkpoint Backends:**
+  * **File Backend:**
+    * Captures raw byte SHA-256 hash, canonical relative path, and POSIX permissions (`st_mode & 0o777`).
+    * Backs up pre-mutation bytes to private storage (`0o600`).
+    * Restore uses staged sibling write, atomic rename (`atomic_commit_create` for absent pre-states or `os.replace`), directory `fsync`, and post-restore SHA-256 verification.
+    * Correctly handles file absence (undoing CREATE by unlinking) and deletion (restoring deleted files).
+  * **Git Backend:**
+    * Captures working tree into Git object database using an isolated temporary index (`GIT_INDEX_FILE`).
+    * Stores safety commit in hidden ref: `refs/ae-checkpoints/<id>`.
+    * Invariant: Never alters the user's active branch, never alters HEAD, never touches `.git/index`, and never pushes to remote.
+    * Restore inspects uncommitted human changes, checking out checkpoint tree files and verifying post-restore diff.
+  * **Database Backend:**
+    * Local SQLite databases snapshot via SQLite Online Backup API (`sqlite3.Connection.backup`) to avoid file-locking corruption.
+    * Post-restore verification runs `PRAGMA integrity_check` to guarantee database consistency.
+    * Unsupported remote or enterprise databases (PostgreSQL, MySQL) fail explicitly with `UnsupportedDatabaseBackendError` fail-closed.
+  * **Config Backend:**
+    * Serializes JSON application configurations with schema version tracking.
+    * Preserves `SecretReference` identifiers (`{"secret_id": "...", "provider": "..."}`) while rejecting plaintext tokens.
+
+* **Hardened Storage & Audit Ledger:**
+  * Private storage directory: `.ae_checkpoints/{sanitized_project_id}/{sanitized_checkpoint_id}/`.
+  * Directory permissions restricted to `0o700`; files restricted to `0o600`.
+  * Excluded from search indexers, prompt retrieval, model context, and diagnostics exports.
+  * Audit ledger (`CheckpointExecutionRecord`): Records IDs, action (`create` / `restore`), status, resource count, resource types, approval token, and duration.
+  * Raw file contents, database records, and secrets are strictly excluded from audit records.
+

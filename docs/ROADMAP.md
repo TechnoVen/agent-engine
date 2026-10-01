@@ -763,21 +763,26 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
 - **Required Evidence:**
   - Patch conflict tests (`tests/test_r2_patch_service.py` — 20 precision scenarios covering canonical PatchOperation model, raw byte hashing without normalization, absence vs empty distinction, immediate pre-commit revalidation, exact approval digest binding, atomic replacement with POSIX directory fsync, durable backup and journal before mutation, idempotent crash recovery, target lock serialization, and hash-only audit ledger records).
 
-### [ ] R2.11 — Checkpoint and rollback service
+### [x] R2.11 — Checkpoint and rollback service (S1)
 
 - **Migration:** `NEW`
 - **Target release:** `0.5`
-- **Initial maturity:** `S0` unless `docs/STATUS.md` verifies a higher level from legacy work.
+- **Initial maturity:** `S1` (Implemented and verified per R2 security baseline)
 - **Dependencies:** R1.10, R2.10
 - **User Story:** As Nadir, I want reversible operations to create real checkpoints so “undo” means a technically valid restore.
 - **Deliverables:**
-  - Git worktree/commit checkpoints.
-  - File backup abstraction.
-  - DB transaction/config snapshot interfaces.
+  - Multi-resource CheckpointService (`core/checkpoint/service.py`).
+  - File checkpoint backend with staged atomic replacement and conflict detection (`core/checkpoint/backends/file.py`).
+  - Git repository checkpoint backend using isolated safety refs `refs/ae-checkpoints/<id>` without altering active branch or index (`core/checkpoint/backends/git.py`).
+  - SQLite database backup backend using SQLite Online Backup API and integrity verification (`core/checkpoint/backends/database.py`).
+  - Application configuration snapshot backend preserving SecretReferences (`core/checkpoint/backends/config.py`).
+  - Consequential rollback approval binding and single-use consumption.
 - **Acceptance Criteria:**
-  - [ ] Rollback restores pre-execution state for supported resource types.
+  - [x] Rollback restores pre-execution state for supported resource types (File, Git, SQLite, Config).
+  - [x] Pre-flight conflict check halts with ROLLBACK_CONFLICT rather than silently overwriting newer human edits.
+  - [x] Checkpoint failure blocks consequential mutation fail-closed.
 - **Required Evidence:**
-  - Rollback E2E tests.
+  - `tests/test_r2_checkpoint_service.py` (23 dedicated precision test scenarios covering lifecycle, fail-closed creation, exact byte restore, conflict detection, git safety refs, database integrity, config secret preservation, approval binding, single-use token consumption, multi-resource preflight, partial failure reporting, and hash-only audit ledger records).
 
 ### [ ] R2.12 — Diagnostics redaction
 
