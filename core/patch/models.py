@@ -3,9 +3,11 @@
 Data models, enums, hashing primitives, and audit records for Safe Staged Patch Application.
 Part of Milestone R2 Task R2.10.
 
-Invariants (CTO Review Sections 10-22):
-1. Never overwrite newer human edits: Agent Engine must never overwrite a newer human edit
-   merely because an older AI-generated patch was previously valid.
+Invariants (CTO Review Sections 10-22 & Closure Item 2):
+1. Precise S1 Guarantee: Agent Engine rejects patches whose expected source state
+   no longer matches at the final pre-commit validation boundary. Agent Engine writers
+   are serialized. A residual external-process race remains where the host filesystem
+   does not offer an atomic content-compare-and-swap primitive.
 2. Canonical PatchOperation: Explicitly captures expected state (exists + content_hash) and
    proposed state (content_hash + content reference) with exact approval digest binding.
 3. Cryptographic byte hashing: SHA-256 over exact file bytes on disk without normalization
@@ -43,6 +45,8 @@ class PatchConflictReason(str, Enum):
     TARGET_EXISTS = "target_exists"
     TARGET_ABSENT = "target_absent"
     APPROVAL_MISMATCH = "approval_mismatch"
+    APPROVAL_ALREADY_CONSUMED = "approval_already_consumed"
+    CREATE_ATOMICITY_UNAVAILABLE = "create_atomicity_unavailable"
     CONTAINMENT_VIOLATION = "containment_violation"
     HASH_VERIFICATION_FAILED = "hash_verification_failed"
     RECOVERY_REQUIRED = "recovery_required"
@@ -88,19 +92,21 @@ def compute_patch_approval_digest(
     project_id: str,
     canonical_relative_path: str,
     operation_type: PatchOperationType,
+    expected_exists: bool,
     expected_content_hash: Optional[str],
     proposed_content_hash: Optional[str],
 ) -> str:
     """Compute exact cryptographic approval digest binding patch parameters.
 
-    Invariants (CTO Review Section 13):
-    An approval token binds project, target path, operation type, expected original
-    hash, and proposed content hash. Changing any parameter invalidates the approval.
+    Invariants (CTO Review Section 13 & Closure Item 3):
+    An approval token binds project, target path, operation type, expected exists/absent state,
+    expected original hash, and proposed content hash. Changing any parameter invalidates the approval.
     """
     raw = (
         f"patch_approval:{project_id}:"
         f"{canonical_relative_path}:"
         f"{operation_type.value}:"
+        f"{'EXISTS' if expected_exists else 'ABSENT'}:"
         f"{expected_content_hash or 'ABSENT'}:"
         f"{proposed_content_hash or 'ABSENT'}"
     )

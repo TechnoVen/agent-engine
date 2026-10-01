@@ -17,9 +17,15 @@ from core.patch.models import (
     compute_patch_approval_digest,
     generate_patch_operation_id,
 )
-from core.patch.service import PatchLockManager, PatchService
+from core.patch.service import (
+    CreateAtomicityUnavailableError,
+    PatchLockManager,
+    PatchService,
+    atomic_commit_create,
+)
 
 __all__ = [
+    "CreateAtomicityUnavailableError",
     "PatchConflictReason",
     "PatchExecutionRecord",
     "PatchJournalEntry",
@@ -29,6 +35,7 @@ __all__ = [
     "PatchOperationType",
     "PatchResult",
     "PatchService",
+    "atomic_commit_create",
     "compute_content_hash",
     "compute_file_hash",
     "compute_patch_approval_digest",

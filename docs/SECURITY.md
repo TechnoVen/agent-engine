@@ -382,68 +382,78 @@ class ApprovalRequest(BaseModel):
   * Durable post-termination metadata is captured via systemd unit inspection (`systemctl --user show`) before transient scope reset (`reset-failed`).
   * Honest reporting: An external or non-OOM `SIGKILL` is classified honestly as `BACKEND_ERROR`, NEVER manufactured as `MEMORY_LIMIT`.
 
-* **Test Evidence Classification Matrix (CTO Review Item 4):**
-  * Implemented Linux resource enforcement with documented S1 verification coverage across 38 dedicated precision tests:
-    | Test Category | Scenarios | OS Primitives Exercised | Environment Requirement | Verification Result |
-    | :--- | :--- | :--- | :--- | :--- |
-    | **UNIT** | Scenarios 18, 20, 21, 32 | Models, clamping, validation, audit serialization, safe metrics formatting | Any (Python 3.10+) | PASSED |
-    | **CONTRACT** | Scenarios 25, 26, 27, 28, 29, 30, 31, 33, 34 | Admission capacity limits, platform fail-closed stubs, policy authorization, missing controller fail-closed | Any / Platform Stubs | PASSED |
-    | **REAL_LINUX_INTEGRATION** | Scenarios 01-17, 19, 22-24, 35, 36, 37, 38 | Real Bubblewrap unprivileged namespaces, systemd user scopes (`systemd-run`), cgroup v2 controllers (`cpu`, `memory`, `pids`), `prlimit`, real TCP loopback canary, async cancellation | Linux (kernel cgroup v2, bwrap, systemd-run) | PASSED |
+* **Test Evidence Classification Matrix (CTO Review Item 4 & Closure Item 8):**
+  * Concrete canonical defaults for `untrusted_default_v1`:
+    * `max_wall_time_seconds`: `30.0`
+    * `max_cpu_time_seconds`: `30.0`
+    * `cpu_quota_percent`: `100.0%` (1 core)
+    * `rlimit_cpu_seconds`: `None` (opt-in per-process trap)
+    * `max_memory_bytes`: `536,870,912` (512 MiB)
+    * `require_swap_disabled`: `True` (`MemorySwapMax=0`)
+    * `max_processes`: `32` (`TasksMax` counting supervisor + worker)
+    * `max_stdout_bytes`: `10,485,760` (10 MiB)
+    * `max_stderr_bytes`: `10,485,760` (10 MiB)
+    * `network.mode`: `DENY`
+    * `max_concurrent_sandboxes`: `16`
+    * `max_total_memory_bytes`: `4,294,967,296` (4 GiB)
+
+  * Hard-Exit Evidence Matrix for all 10 controls:
+    | Control Dimension | Classification | OS / Kernel Primitive Exercised | Concrete Evidence & Verification |
+    | :--- | :--- | :--- | :--- |
+    | **Wall Time** | `REAL_LINUX_INTEGRATION` | Wall-clock deadline poll loop | Monitored in supervisor poll loop; terminates worker promptly and records `WALL_TIME_LIMIT` |
+    | **CPUQuota** | `REAL_LINUX_INTEGRATION` | cgroup v2 `cpu.max` bandwidth throttling | Throttles CPU rate without killing process; verified succeeds with `NORMAL` |
+    | **Cumulative CPU** | `REAL_LINUX_INTEGRATION` | cgroup v2 `cpu.stat` (`usage_usec`) | Cumulative CPU consumption across all scope tasks exceeds budget; records `CPU_LIMIT` |
+    | **RLIMIT_CPU** | `REAL_LINUX_INTEGRATION` | `/usr/bin/prlimit --cpu=sec:sec+1` | Pre-exec hardware limit trap; triggers `SIGXCPU` and records `CPU_LIMIT` without `preexec_fn` |
+    | **MemoryMax** | `REAL_LINUX_INTEGRATION` | cgroup v2 `MemoryMax` + `memory.events` | Allocation exceeding 512 MiB triggers kernel OOM killer (`oom_kill > 0`); records `MEMORY_LIMIT` |
+    | **Process Count** | `REAL_LINUX_INTEGRATION` | cgroup v2 `TasksMax` + `pids.events` | Fork bomb blocked when tasks reach limit; records `PROCESS_LIMIT` |
+    | **Network DENY** | `REAL_LINUX_INTEGRATION` | Bubblewrap `--unshare-all` + `--unshare-net` | Detached network namespace; socket connect fails with `[Errno 101] Network is unreachable` |
+    | **Network ALLOW** | `REAL_LINUX_INTEGRATION` | Bubblewrap `--share-net` after `--unshare-all` | Policy-authorized retention of net namespace; localhost TCP canary connects successfully |
+    | **Output Limit** | `UNIT` & `REAL_LINUX_INTEGRATION` | Non-blocking stream reader backpressure loop | Binary stream draining truncated at 10 MiB without pipe deadlock; records `OUTPUT_LIMIT` |
+    | **Async Cancellation** | `REAL_LINUX_INTEGRATION` | `CancellationToken` + `os.killpg` | Propagates coroutine cancellation to process group and systemd user scope; 0 orphan processes |
 
 ---
 
 ## 13. Safe Staged Patch Application (R2.10)
 
-* **Core Invariant: Never Overwrite Newer Human Edits:**
-  * Agent Engine treats live human edits as authoritative. An older AI-proposed patch must never overwrite newer human modifications merely because the proposal was previously valid or approved. If target file state deviates from the patch's baseline, execution halts fail-closed with `STALE_PATCH`.
+* **Precise S1 Guarantee (Closure Item 2):**
+  * Agent Engine rejects patches whose expected source state no longer matches at the final pre-commit validation boundary.
+  * Agent Engine writers are serialized.
+  * A residual external-process race remains where the host filesystem does not offer an atomic content-compare-and-swap primitive.
 
-* **Canonical `PatchOperation` Model (`core/patch/models.py`):**
-  * Explicitly defines atomic patch operations (`CREATE`, `UPDATE`, `DELETE`) with exact pre- and post-condition invariants:
-    * `operation_id`: Unique identifier (`patch-<uuid>`).
-    * `project_id`: Bound project identity.
-    * `canonical_relative_path`: Path relative to project root (strictly non-absolute, validated via `WorkspacePathResolver`).
-    * `expected_exists` & `expected_content_hash`: Declared pre-state.
-    * `proposed_content` / `proposed_content_artifact_id` & `proposed_content_hash`: Declared post-state.
-    * `approval_id` & `approval_digest`: Cryptographic approval binding.
-  * **Absence vs. Empty File Distinction:**
-    * Absence is strictly represented by `expected_exists = False` and `expected_content_hash = None`.
-    * An empty file is represented by `expected_exists = True` and `expected_content_hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"`.
-    * A `CREATE` operation against an existing file (even if empty) conflicts fail-closed with `TARGET_EXISTS`.
+* **CREATE Atomicity via `renameat2(RENAME_NOREPLACE)` (Closure Item 1):**
+  * `expected state = ABSENT`.
+  * Commit atomically installs the staged file ONLY IF target does not exist using Linux `renameat2(AT_FDCWD, staged, AT_FDCWD, target, RENAME_NOREPLACE)`.
+  * If a concurrent external process creates the file during the pre-commit window, `renameat2` returns `EEXIST`, aborting the patch with `TARGET_EXISTS` and leaving the external content completely untouched and byte-identical.
+  * If `renameat2` is unavailable on non-Linux or unsupported filesystems, execution fails closed with `CREATE_ATOMICITY_UNAVAILABLE`.
 
-* **Cryptographic Byte Hashing:**
-  * Uses SHA-256 over exact on-disk bytes (`compute_content_hash`, `compute_file_hash`).
-  * Never normalizes line endings (LF vs. CRLF), never strips whitespace, and never alters Unicode encoding.
-  * Any byte discrepancy between declared hash and live file state results in immediate conflict rejection.
+* **Exact Approval Precedence & Consumption (Closure Item 3):**
+  * Canonical operation execution ordering:
+    1. Canonical path resolution
+    2. Current-state validation
+    3. Proposed bytes/hash validation (re-read artifact bytes from `ArtifactService`, verify hash)
+    4. Exact-operation approval verification (binds `project_id`, path, op, `expected_exists`, `expected_hash`, `proposed_hash`)
+    5. Approval single-use atomic consumption (`storage.atomic_consume_approval` + in-memory registry)
+    6. Durable pre-mutation backup & journal preparation
+    7. Staged-file write & fsync
+    8. Immediate final state validation (pre-commit revalidation)
+    9. Filesystem commit (`atomic_commit_create` / `os.replace` / `unlink`)
+    10. Directory fsync & journal finalization
+  * Replay protection: An approval token consumed once cannot authorize any subsequent patch.
 
-* **Exact Approval Digest Binding (`compute_patch_approval_digest`):**
-  * Approval tokens bind:
-    $$\text{digest} = \text{SHA-256}\left(\text{"patch\_approval:"} + \text{project\_id} + ":" + \text{canonical\_relative\_path} + ":" + \text{operation\_type} + ":" + \text{expected\_hash} + ":" + \text{proposed\_hash}\right)$$
-  * Any alteration to path, target project, operation type, base content, or proposed payload invalidates the approval token fail-closed (`APPROVAL_MISMATCH`).
+* **Hardened Operation-Scoped Recovery Backups (Closure Item 4):**
+  * Stored in private, project-scoped directory: `.ae_patch_recovery/backups/{sanitized_project_id}/{operation_id}.bak`.
+  * Created with exclusive creation mode (`"xb"` / `O_EXCL | O_CREAT`), preventing silent overwriting.
+  * Filesystem permissions restricted to directory `0o700` and files `0o600`.
+  * Audit ledger and public API expose only opaque reference `bak:{project_id}:{operation_id}`, never host machine paths.
 
-* **Two-Phase Staged Atomic Replacement Protocol:**
-  1. **Path Containment:** Resolves target within `WorkspacePathResolver` to prevent directory traversal.
-  2. **Approval Verification:** Verifies approval digest matches all patch parameters.
-  3. **Payload Resolution & Verification:** Resolves proposed content bytes (direct or via `ArtifactService`) and verifies byte hash.
-  4. **Initial Pre-Check:** Compares live file state against expected pre-conditions.
-  5. **Pre-Mutation Durable Backup:** For `UPDATE` and `DELETE`, creates an immutable backup copy (`.ae_patch_recovery/backups/<id>.orig`) with `os.fsync()`.
-  6. **Journal Registration:** Persists `PatchJournalEntry` in state `PREPARED` (`.ae_patch_recovery/journals/<id>.json`) with `os.fsync()`.
-  7. **Staged Temporary File:** Writes proposed bytes to a hidden sibling temporary file (`.<name>.tmp.<id>`) on the same filesystem/mount point, flushed and fsynced.
-  8. **Immediate Pre-Commit Revalidation:** Re-reads live target state immediately prior to mutation. If any intermediate modification occurred, staged file is removed, journal transitions to `ABORTED`, and operation aborts with `STALE_PATCH` or `TARGET_EXISTS`/`TARGET_ABSENT`.
-  9. **Transition to APPLYING:** Journal transitions to `APPLYING` with `os.fsync()`.
-  10. **Atomic Rename (`os.replace`):** Performs atomic filesystem rename (`os.replace(staged, target)`) or `unlink()`. Preserves existing file mode/permissions.
-  11. **Directory Fsync:** Calls `os.fsync()` on the parent directory file descriptor, guaranteeing directory entry durability across sudden system crashes or power failure.
-  12. **Transition to COMMITTED:** Journal transitions to `COMMITTED` with `os.fsync()`.
+* **DELETE Ordering & Recovery (Closure Item 6):**
+  * Durable backup and journal are persisted and fsynced before `target_path.unlink()`.
+  * Crash recovery reconciles interrupted deletes: if target is absent, marks `COMMITTED`; if target remains with original hash, aborts safely; if target was recreated by human, marks `RECOVERY_REQUIRED` and leaves human file untouched.
 
-* **Idempotent Crash Recovery (`recover_interrupted_patches`):**
-  * Invoked at startup or during disaster recovery:
-    * **Target == Proposed Hash:** Atomic rename succeeded before crash. Reconciles journal to `COMMITTED` and unlinks residual staged files.
-    * **Target == Expected Original Hash (or absent):** Mutation did not occur or failed prior to rename. Safely aborts journal to `ABORTED` and cleans temporary files; original target remains intact.
-    * **Target == Unknown / Newer Hash:** Target file was edited by a human or external process during or after the interruption. Halts recovery fail-closed, transitions journal to `RECOVERY_REQUIRED`, and leaves live file untouched. Never blindly overwrites human work.
+* **Deterministic Failure-Boundary Verification (Closure Item 5):**
+  * Verified across 8 failure boundaries: backup failure, prepared journal failure, staged write failure, staged fsync failure, precommit revalidation failure, commit failure, directory fsync failure, committed journal transition failure.
+  * Invariant holds: Failure before commit leaves original untouched; failure after commit reconciles to `COMMITTED` if proposed matches, or `RECOVERY_REQUIRED` if human modified.
 
-* **Concurrency Serialization & Residual OS Race Limitations:**
-  * **In-Process Serialization:** `PatchLockManager` serializes Agent Engine's own concurrent patch tasks per `(project_id, relative_path)`.
-  * **Residual External Race Limitation:** While `os.replace` is atomic at the POSIX filesystem level, user-space pre-commit revalidation cannot eliminate the sub-millisecond race condition if an external program (e.g. human saving in VS Code / Vim) writes to the file in the exact microsecond window between `compute_file_hash` and `os.replace`. Full elimination of external races requires kernel-level mandatory locking or filesystem-level snapshot branches.
-
-* **Audit-Safe Telemetry Records (`PatchExecutionRecord`):**
-  * Records only non-sensitive metadata: `operation_id`, `project_id`, `canonical_relative_path`, `operation_type`, cryptographic hashes (`expected_content_hash`, `resulting_hash`), `approval_id`, execution duration, and journal state.
-  * Full source code contents and secrets are strictly excluded from audit ledgers.
+* **Audit-Safe Telemetry Records (`PatchExecutionRecord` — Closure Item 7):**
+  * Public ledger records: `operation_id`, `project_id`, `canonical_relative_path`, `operation_type`, cryptographic hashes (`expected_content_hash`, `resulting_hash`), `approval_id`, execution duration, and journal state.
+  * Complete source code contents, backup bytes, and secrets are strictly excluded from audit ledgers.

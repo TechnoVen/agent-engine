@@ -3,30 +3,40 @@
 Safe Staged Patch Application Service.
 Part of Milestone R2 Task R2.10.
 
-Invariants (CTO Review Sections 10-22):
-1. Never overwrite newer human edits: Stale patch proposals are rejected fail-closed,
-   leaving live human edits untouched.
-2. Exact-approval digest binding: An approval token binds project, path, operation type,
-   expected hash, and proposed hash. Any modification invalidates approval.
-3. Pre-commit revalidation: Live file state is inspected immediately before mutation.
-4. Atomic replacement: Changes are written to a staged temporary file on the same
-   filesystem, fsynced, hash-verified, and atomically renamed (os.replace).
-5. Posix directory fsync: Parent directory fsync guarantees durability across crashes.
-6. Durable journal & backup: Journal and original backup are persisted before mutation.
-7. Idempotent crash recovery: Startup recovery inspects journal state against live disk hash;
+Invariants (CTO Review Sections 10-22 & Closure Items 1-7):
+1. Precise S1 Guarantee: Agent Engine rejects patches whose expected source state
+   no longer matches at the final pre-commit validation boundary. Agent Engine writers
+   are serialized. A residual external-process race remains where the host filesystem
+   does not offer an atomic content-compare-and-swap primitive.
+2. CREATE Atomicity: CREATE operations use Linux renameat2(..., RENAME_NOREPLACE)
+   to ensure atomic no-clobber semantics. If destination exists, commit raises
+   FileExistsError and rejects as TARGET_EXISTS without touching the existing file.
+3. Exact-approval digest binding: An approval token binds project, path, operation type,
+   expected exists/absent state, expected hash, and proposed hash.
+4. Approval Precedence & Consumption: Verification and single-use atomic consumption
+   precede the final pre-commit state validation and filesystem commit.
+5. Pre-commit revalidation: Live file state is inspected immediately before mutation.
+6. Atomic replacement: Changes are written to a staged temporary file on the same
+   filesystem, fsynced, hash-verified, and atomically installed.
+7. Posix directory fsync: Parent directory fsync guarantees durability across crashes.
+8. Durable journal & backup: Journal and project-scoped original backup are persisted before mutation.
+9. Idempotent crash recovery: Startup recovery inspects journal state against live disk hash;
    ambiguous states with newer human edits are never overwritten (RECOVERY_REQUIRED).
-8. Target serialization: Agent Engine's own writers are serialized per (project, path).
+10. Target serialization: Agent Engine's own writers are serialized per (project, path).
 """
 
 from __future__ import annotations
 
+import ctypes
+import errno
 import json
 import logging
 import os
 from pathlib import Path
+import sys
 import threading
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from core.artifacts.service import ArtifactService
 from core.patch.models import (
@@ -45,6 +55,52 @@ from core.skills.path import WorkspacePathResolver, WorkspacePathViolation
 from core.storage.base import StorageBackend
 
 logger = logging.getLogger("agent_engine.patch.service")
+
+AT_FDCWD = -100
+RENAME_NOREPLACE = 1
+
+
+class CreateAtomicityUnavailableError(RuntimeError):
+    """Raised when atomic no-clobber rename is not supported on host platform/filesystem."""
+
+    pass
+
+
+def atomic_commit_create(staged_path: Path, target_path: Path) -> None:
+    """Atomically install staged file to target ONLY IF target does not exist.
+
+    Uses Linux renameat2(..., RENAME_NOREPLACE).
+    Raises FileExistsError if target exists (preventing overwrite).
+    Raises CreateAtomicityUnavailableError if renameat2 is unavailable.
+    """
+    if sys.platform != "linux":
+        raise CreateAtomicityUnavailableError(
+            "CREATE_ATOMICITY_UNAVAILABLE: atomic no-clobber rename is only supported on Linux"
+        )
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    staged_bytes = os.fspath(staged_path).encode("utf-8")
+    target_bytes = os.fspath(target_path).encode("utf-8")
+
+    ret = -1
+    if hasattr(libc, "renameat2"):
+        ret = libc.renameat2(AT_FDCWD, staged_bytes, AT_FDCWD, target_bytes, RENAME_NOREPLACE)
+    else:
+        # x86_64 SYS_renameat2 = 316
+        ret = libc.syscall(316, AT_FDCWD, staged_bytes, AT_FDCWD, target_bytes, RENAME_NOREPLACE)
+
+    err = ctypes.get_errno()
+    if ret != 0:
+        if err == errno.EEXIST:
+            raise FileExistsError(
+                f"Target file already exists (atomic no-clobber prevented overwrite): {target_path}"
+            )
+        elif err in (errno.ENOSYS, errno.EINVAL):
+            raise CreateAtomicityUnavailableError(
+                f"CREATE_ATOMICITY_UNAVAILABLE: kernel or filesystem does not support renameat2 RENAME_NOREPLACE (errno={err})"
+            )
+        else:
+            raise OSError(err, os.strerror(err), str(target_path))
 
 
 class PatchLockManager:
@@ -75,14 +131,17 @@ class PatchService:
         self.storage = storage
         self._custom_recovery_dir = recovery_dir
         self.lock_manager = PatchLockManager()
+        self._consumed_approvals: Set[str] = set()
 
-        # Deterministic failure injection hooks for verification (CTO Review Section 23)
-        self._fail_before_backup: bool = False
-        self._fail_before_journal_fsync: bool = False
-        self._fail_before_staged_write: bool = False
-        self._fail_before_precommit_reval: bool = False
-        self._fail_before_replace: bool = False
-        self._fail_after_replace: bool = False
+        # Deterministic failure injection hooks for verification (CTO Review Closure Item 5)
+        self._fail_during_backup: bool = False
+        self._fail_during_prepared_journal: bool = False
+        self._fail_during_staged_write: bool = False
+        self._fail_during_staged_fsync: bool = False
+        self._fail_during_precommit_revalidation: bool = False
+        self._fail_during_commit: bool = False
+        self._fail_during_dir_fsync: bool = False
+        self._fail_during_committed_journal: bool = False
 
     def _get_recovery_dir(self, workspace_root: Path) -> Path:
         """Resolve persistent recovery directory for journals and backups."""
@@ -91,9 +150,27 @@ class PatchService:
         else:
             d = workspace_root / ".ae_patch_recovery"
         d.mkdir(parents=True, exist_ok=True)
+        try:
+            d.chmod(0o700)
+        except Exception:
+            pass
         (d / "journals").mkdir(parents=True, exist_ok=True)
         (d / "backups").mkdir(parents=True, exist_ok=True)
         return d
+
+    def _get_project_backup_dir(self, workspace_root: Path, project_id: str) -> Path:
+        """Resolve private, collision-safe, project-scoped backup storage (Closure Item 4)."""
+        recovery_dir = self._get_recovery_dir(workspace_root)
+        safe_project = "".join(c for c in project_id if c.isalnum() or c in ("-", "_"))
+        if not safe_project:
+            safe_project = "default"
+        proj_dir = recovery_dir / "backups" / safe_project
+        proj_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            proj_dir.chmod(0o700)
+        except Exception:
+            pass
+        return proj_dir
 
     def apply_patch(
         self,
@@ -102,20 +179,27 @@ class PatchService:
     ) -> PatchResult:
         """Atomically and safely apply an untrusted proposed patch operation to workspace.
 
-        Enforces containment, approval binding, pre-commit revalidation, backup,
-        journaling, atomic replacement, and directory fsync.
+        CTO Review Item 3 Canonical Sequence:
+        1. canonical path resolution
+        2. current-state validation
+        3. proposed bytes/hash validation
+        4. exact-operation approval verification
+        5. approval atomic consumption
+        6. pre-mutation durable backup & journal preparation
+        7. staged-file write & fsync
+        8. immediate final state validation (pre-commit revalidation)
+        9. filesystem commit
         """
         start_time = time.time()
         workspace_root = Path(workspace_root).resolve()
         recovery_dir = self._get_recovery_dir(workspace_root)
         journal_dir = recovery_dir / "journals"
-        backup_dir = recovery_dir / "backups"
 
         rel_str = str(operation.canonical_relative_path)
         file_lock = self.lock_manager.get_lock(operation.project_id, rel_str)
 
         with file_lock:
-            # 1. Path Containment & Canonical Resolution (R2.5)
+            # 1. Canonical Path Resolution (R2.5)
             resolver = WorkspacePathResolver(project_root=workspace_root)
             target_path: Path
             try:
@@ -131,71 +215,7 @@ class PatchService:
                     start_time=start_time,
                 )
 
-            # 2. Exact Approval Digest Verification (Section 13)
-            if operation.approval_digest is not None:
-                expected_digest = compute_patch_approval_digest(
-                    project_id=operation.project_id,
-                    canonical_relative_path=rel_str,
-                    operation_type=operation.operation_type,
-                    expected_content_hash=operation.expected_content_hash,
-                    proposed_content_hash=operation.proposed_content_hash,
-                )
-                if operation.approval_digest != expected_digest:
-                    logger.warning(
-                        f"Patch approval digest mismatch for {rel_str}. "
-                        f"Expected {expected_digest[:10]}, got {operation.approval_digest[:10]}"
-                    )
-                    return self._create_result(
-                        operation=operation,
-                        success=False,
-                        conflict_reason=PatchConflictReason.APPROVAL_MISMATCH,
-                        message="Approval digest mismatch: approval token does not bind proposed patch parameters.",
-                        start_time=start_time,
-                    )
-
-            # 3. Resolve Proposed Content Bytes
-            proposed_bytes: Optional[bytes] = None
-            if operation.operation_type in (PatchOperationType.CREATE, PatchOperationType.UPDATE):
-                if operation.proposed_content is not None:
-                    proposed_bytes = operation.proposed_content
-                elif operation.proposed_content_artifact_id is not None:
-                    if self.artifact_service is None:
-                        return self._create_result(
-                            operation=operation,
-                            success=False,
-                            conflict_reason=PatchConflictReason.INTERNAL_ERROR,
-                            message="ArtifactService required to resolve proposed_content_artifact_id.",
-                            start_time=start_time,
-                        )
-                    art = self.artifact_service.get_artifact(operation.proposed_content_artifact_id)
-                    if art is None:
-                        return self._create_result(
-                            operation=operation,
-                            success=False,
-                            conflict_reason=PatchConflictReason.INTERNAL_ERROR,
-                            message=f"Artifact {operation.proposed_content_artifact_id} not found.",
-                            start_time=start_time,
-                        )
-                    art_path = self.artifact_service.get_artifact_path(
-                        operation.proposed_content_artifact_id
-                    )
-                    proposed_bytes = art_path.read_bytes()
-
-                # Verify proposed content matches declared proposed_content_hash
-                actual_proposed_hash = compute_content_hash(proposed_bytes or b"")
-                if (
-                    operation.proposed_content_hash
-                    and actual_proposed_hash != operation.proposed_content_hash
-                ):
-                    return self._create_result(
-                        operation=operation,
-                        success=False,
-                        conflict_reason=PatchConflictReason.HASH_VERIFICATION_FAILED,
-                        message="Proposed content bytes do not match declared proposed_content_hash.",
-                        start_time=start_time,
-                    )
-
-            # 4. Inspect Live State & Initial Pre-check (Section 12)
+            # 2. Current-State Validation
             live_exists = target_path.exists()
             live_hash = compute_file_hash(target_path) if live_exists else None
 
@@ -232,24 +252,133 @@ class PatchService:
                         start_time=start_time,
                     )
 
-            # 5. Durable Backup Before Mutation (Section 17)
+            # 3. Proposed Bytes/Hash Validation (Closure Item 3)
+            proposed_bytes: Optional[bytes] = None
+            if operation.operation_type in (PatchOperationType.CREATE, PatchOperationType.UPDATE):
+                if operation.proposed_content is not None:
+                    proposed_bytes = operation.proposed_content
+                elif operation.proposed_content_artifact_id is not None:
+                    if self.artifact_service is None:
+                        return self._create_result(
+                            operation=operation,
+                            success=False,
+                            conflict_reason=PatchConflictReason.INTERNAL_ERROR,
+                            message="ArtifactService required to resolve proposed_content_artifact_id.",
+                            start_time=start_time,
+                        )
+                    try:
+                        proposed_bytes = self.artifact_service.get_artifact_payload(
+                            artifact_id=operation.proposed_content_artifact_id,
+                            project_id=operation.project_id,
+                        )
+                    except Exception as ex:
+                        return self._create_result(
+                            operation=operation,
+                            success=False,
+                            conflict_reason=PatchConflictReason.HASH_VERIFICATION_FAILED
+                            if "Integrity" in type(ex).__name__
+                            else PatchConflictReason.INTERNAL_ERROR,
+                            message=f"Failed to resolve artifact payload: {ex}",
+                            start_time=start_time,
+                        )
+
+                # Re-verify actual bytes against declared proposed_content_hash
+                actual_proposed_hash = compute_content_hash(proposed_bytes or b"")
+                if (
+                    operation.proposed_content_hash
+                    and actual_proposed_hash != operation.proposed_content_hash
+                ):
+                    return self._create_result(
+                        operation=operation,
+                        success=False,
+                        conflict_reason=PatchConflictReason.HASH_VERIFICATION_FAILED,
+                        message="Proposed content bytes do not match declared proposed_content_hash.",
+                        start_time=start_time,
+                    )
+
+            # 4. Exact-Operation Approval Verification (Closure Item 3)
+            if operation.approval_digest is not None:
+                expected_digest = compute_patch_approval_digest(
+                    project_id=operation.project_id,
+                    canonical_relative_path=rel_str,
+                    operation_type=operation.operation_type,
+                    expected_exists=operation.expected_exists,
+                    expected_content_hash=operation.expected_content_hash,
+                    proposed_content_hash=operation.proposed_content_hash,
+                )
+                if operation.approval_digest != expected_digest:
+                    logger.warning(
+                        f"Patch approval digest mismatch for {rel_str}. "
+                        f"Expected {expected_digest[:10]}, got {operation.approval_digest[:10]}"
+                    )
+                    return self._create_result(
+                        operation=operation,
+                        success=False,
+                        conflict_reason=PatchConflictReason.APPROVAL_MISMATCH,
+                        message="Approval digest mismatch: approval token does not bind proposed patch parameters.",
+                        start_time=start_time,
+                    )
+
+            # 5. Approval Atomic Consumption (Closure Item 3)
+            if operation.approval_id:
+                if operation.approval_id in self._consumed_approvals:
+                    return self._create_result(
+                        operation=operation,
+                        success=False,
+                        conflict_reason=PatchConflictReason.APPROVAL_ALREADY_CONSUMED,
+                        message="Approval token has already been consumed (replay attempt blocked).",
+                        start_time=start_time,
+                    )
+
+                if self.storage and hasattr(self.storage, "atomic_consume_approval"):
+                    now = time.time()
+                    verifier = operation.approval_digest or operation.approval_id
+                    consumed = self.storage.atomic_consume_approval(
+                        approval_id=operation.approval_id,
+                        token_verifier=verifier,
+                        now=now,
+                    )
+                    if not consumed:
+                        return self._create_result(
+                            operation=operation,
+                            success=False,
+                            conflict_reason=PatchConflictReason.APPROVAL_ALREADY_CONSUMED,
+                            message="Approval token has already been consumed in database (replay attempt blocked).",
+                            start_time=start_time,
+                        )
+
+                self._consumed_approvals.add(operation.approval_id)
+
+            # 6. Durable Recovery Backup & Journal Before Mutation (Closure Items 4, 5, 6)
             backup_file: Optional[Path] = None
             backup_id: Optional[str] = None
             if live_exists and operation.operation_type in (
                 PatchOperationType.UPDATE,
                 PatchOperationType.DELETE,
             ):
-                if self._fail_before_backup:
-                    raise RuntimeError("Injected failure before backup")
-                backup_file = backup_dir / f"{operation.operation_id}.orig"
+                if self._fail_during_backup:
+                    raise RuntimeError("Injected failure during backup persistence")
+
+                backup_dir = self._get_project_backup_dir(workspace_root, operation.project_id)
+                backup_file = backup_dir / f"{operation.operation_id}.bak"
+                if backup_file.exists():
+                    raise FileExistsError(
+                        f"Collision detected: backup file already exists: {backup_file}"
+                    )
+
                 orig_bytes = target_path.read_bytes()
-                with open(backup_file, "wb") as bf:
+                with open(backup_file, "xb") as bf:
                     bf.write(orig_bytes)
                     bf.flush()
                     os.fsync(bf.fileno())
-                backup_id = f"backup-{operation.operation_id}"
 
-            # 6. Journal Before Mutation (Section 16)
+                try:
+                    backup_file.chmod(0o600)
+                except Exception:
+                    pass
+
+                backup_id = f"bak:{operation.project_id}:{operation.operation_id}"
+
             journal_path = journal_dir / f"{operation.operation_id}.json"
             staged_path: Optional[Path] = None
             if operation.operation_type in (PatchOperationType.CREATE, PatchOperationType.UPDATE):
@@ -271,23 +400,26 @@ class PatchService:
                 target_path=str(target_path),
                 state=PatchJournalState.PREPARED,
             )
+            if self._fail_during_prepared_journal:
+                raise RuntimeError("Injected failure during PREPARED journal persistence")
             self._save_journal(journal_path, journal_entry)
 
-            # 7. Write and Verify Staged Temporary File (Section 14)
+            # 7. Write and Fsync Staged Temporary File
             if operation.operation_type in (PatchOperationType.CREATE, PatchOperationType.UPDATE):
-                if self._fail_before_staged_write:
-                    raise RuntimeError("Injected failure before staged write")
+                if self._fail_during_staged_write:
+                    raise RuntimeError("Injected failure during staged write")
 
                 assert proposed_bytes is not None
                 assert staged_path is not None
                 with open(staged_path, "wb") as sf:
                     sf.write(proposed_bytes)
                     sf.flush()
+                    if self._fail_during_staged_fsync:
+                        raise RuntimeError("Injected failure during staged fsync")
                     os.fsync(sf.fileno())
 
                 staged_hash = compute_file_hash(staged_path)
                 if staged_hash != operation.proposed_content_hash:
-                    # Clean staged file and abort
                     if staged_path.exists():
                         staged_path.unlink()
                     journal_entry.state = PatchJournalState.ABORTED
@@ -301,9 +433,9 @@ class PatchService:
                         start_time=start_time,
                     )
 
-            # 8. Immediate Pre-Commit Revalidation (Section 12)
-            if self._fail_before_precommit_reval:
-                raise RuntimeError("Injected failure before pre-commit revalidation")
+            # 8. Immediate Pre-Commit Revalidation (Final State Validation)
+            if self._fail_during_precommit_revalidation:
+                raise RuntimeError("Injected failure during pre-commit revalidation")
 
             recheck_exists = target_path.exists()
             recheck_hash = compute_file_hash(target_path) if recheck_exists else None
@@ -352,17 +484,47 @@ class PatchService:
                         start_time=start_time,
                     )
 
-            # Transition journal to APPLYING
+            # 9. Transition Journal to APPLYING
             journal_entry.state = PatchJournalState.APPLYING
             self._save_journal(journal_path, journal_entry)
 
-            if self._fail_before_replace:
-                raise RuntimeError("Injected failure before atomic replace")
+            # 10. Filesystem Commit (Closure Item 1: CREATE No-Clobber)
+            if self._fail_during_commit:
+                raise RuntimeError("Injected failure during filesystem commit")
 
-            # 9. Atomic Replacement & Directory Fsync (Section 14 & 15)
-            if operation.operation_type in (PatchOperationType.CREATE, PatchOperationType.UPDATE):
+            if operation.operation_type == PatchOperationType.CREATE:
                 assert staged_path is not None
-                # Preserve file permissions if updating
+                try:
+                    atomic_commit_create(staged_path, target_path)
+                except FileExistsError as ex:
+                    logger.warning(f"CREATE race conflict detected: {ex}")
+                    if staged_path.exists():
+                        staged_path.unlink()
+                    journal_entry.state = PatchJournalState.ABORTED
+                    self._save_journal(journal_path, journal_entry)
+                    return self._create_result(
+                        operation=operation,
+                        success=False,
+                        conflict_reason=PatchConflictReason.TARGET_EXISTS,
+                        message="Target file created by concurrent external process before commit; atomic no-clobber prevented overwrite.",
+                        initial_hash=compute_file_hash(target_path),
+                        start_time=start_time,
+                    )
+                except CreateAtomicityUnavailableError as ex:
+                    logger.error(f"CREATE atomicity unavailable: {ex}")
+                    if staged_path.exists():
+                        staged_path.unlink()
+                    journal_entry.state = PatchJournalState.ABORTED
+                    self._save_journal(journal_path, journal_entry)
+                    return self._create_result(
+                        operation=operation,
+                        success=False,
+                        conflict_reason=PatchConflictReason.CREATE_ATOMICITY_UNAVAILABLE,
+                        message=str(ex),
+                        start_time=start_time,
+                    )
+            elif operation.operation_type == PatchOperationType.UPDATE:
+                assert staged_path is not None
                 if live_exists:
                     try:
                         orig_stat = target_path.stat()
@@ -373,17 +535,50 @@ class PatchService:
             elif operation.operation_type == PatchOperationType.DELETE:
                 target_path.unlink()
 
-            # POSIX directory fsync
+            # 11. POSIX Directory Fsync
+            if self._fail_during_dir_fsync:
+                raise RuntimeError("Injected failure during directory fsync")
             self._fsync_directory(target_path.parent)
 
-            if self._fail_after_replace:
-                raise RuntimeError("Injected failure immediately after atomic replace")
+            # 12. Verify Resulting Hash (Closure Item 5)
+            resulting_hash = compute_file_hash(target_path) if target_path.exists() else None
+            if operation.operation_type in (PatchOperationType.CREATE, PatchOperationType.UPDATE):
+                if resulting_hash != operation.proposed_content_hash:
+                    journal_entry.state = PatchJournalState.RECOVERY_REQUIRED
+                    self._save_journal(journal_path, journal_entry)
+                    return self._create_result(
+                        operation=operation,
+                        success=False,
+                        conflict_reason=PatchConflictReason.HASH_VERIFICATION_FAILED,
+                        message="Resulting file hash does not match approved proposed_content_hash.",
+                        initial_hash=live_hash,
+                        resulting_hash=resulting_hash,
+                        backup_id=backup_id,
+                        journal_id=operation.operation_id,
+                        start_time=start_time,
+                    )
+            elif operation.operation_type == PatchOperationType.DELETE:
+                if resulting_hash is not None:
+                    journal_entry.state = PatchJournalState.RECOVERY_REQUIRED
+                    self._save_journal(journal_path, journal_entry)
+                    return self._create_result(
+                        operation=operation,
+                        success=False,
+                        conflict_reason=PatchConflictReason.INTERNAL_ERROR,
+                        message="DELETE commit did not remove target file.",
+                        initial_hash=live_hash,
+                        resulting_hash=resulting_hash,
+                        backup_id=backup_id,
+                        journal_id=operation.operation_id,
+                        start_time=start_time,
+                    )
 
-            # 10. Finalize Journal to COMMITTED
+            # 13. Finalize Journal to COMMITTED
+            if self._fail_during_committed_journal:
+                raise RuntimeError("Injected failure during COMMITTED journal persistence")
+
             journal_entry.state = PatchJournalState.COMMITTED
             self._save_journal(journal_path, journal_entry)
-
-            resulting_hash = compute_file_hash(target_path) if target_path.exists() else None
 
             result = self._create_result(
                 operation=operation,
@@ -429,8 +624,17 @@ class PatchService:
             current_hash = compute_file_hash(target) if current_exists else None
             staged = Path(entry.staged_path) if entry.staged_path else None
 
-            # Case 1: Target equals proposed hash -> Replace succeeded before crash!
-            if entry.proposed_content_hash and current_hash == entry.proposed_content_hash:
+            # Case 1: Target equals proposed hash (or is absent for DELETE) -> Replace succeeded before crash!
+            is_post_condition_met = False
+            if entry.operation_type == PatchOperationType.DELETE.value:
+                is_post_condition_met = not current_exists
+            else:
+                is_post_condition_met = (
+                    entry.proposed_content_hash is not None
+                    and current_hash == entry.proposed_content_hash
+                )
+
+            if is_post_condition_met:
                 if staged and staged.exists():
                     try:
                         staged.unlink()
@@ -448,15 +652,21 @@ class PatchService:
                         initial_hash=entry.expected_content_hash,
                         resulting_hash=current_hash,
                         journal_id=entry.operation_id,
-                        message="Reconciled successfully: atomic rename was complete on disk.",
+                        message="Reconciled successfully: atomic commit was complete on disk.",
                     )
                 )
                 continue
 
             # Case 2: Target equals expected original hash (or is absent for CREATE)
-            if (not entry.expected_exists and not current_exists) or (
-                entry.expected_exists and current_hash == entry.expected_content_hash
-            ):
+            is_pre_condition_met = False
+            if entry.operation_type == PatchOperationType.CREATE.value:
+                is_pre_condition_met = not current_exists
+            else:
+                is_pre_condition_met = (
+                    entry.expected_exists and current_hash == entry.expected_content_hash
+                )
+
+            if is_pre_condition_met:
                 # Safe abort/cleanup
                 if staged and staged.exists():
                     try:
@@ -515,8 +725,6 @@ class PatchService:
         with open(tmp_path, "wb") as f:
             f.write(content)
             f.flush()
-            if self._fail_before_journal_fsync:
-                raise RuntimeError("Injected failure before journal fsync")
             os.fsync(f.fileno())
         os.replace(tmp_path, path)
         self._fsync_directory(path.parent)
@@ -561,7 +769,7 @@ class PatchService:
             duration_seconds=round(duration, 4),
         )
 
-        # Record to audit ledger (CTO Review Section 22)
+        # Record to audit ledger (CTO Review Section 22 & Closure Item 7)
         if self.storage and hasattr(self.storage, "record_patch_execution"):
             record = PatchExecutionRecord(
                 operation_id=operation.operation_id,
