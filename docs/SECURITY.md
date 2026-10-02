@@ -466,42 +466,63 @@ class ApprovalRequest(BaseModel):
   * Reversible consequential mutations must create a durable checkpoint before executing side-effects.
   * If checkpoint creation encounters any failure, mutation halts fail-closed (`CheckpointCreationError`), leaving the environment untouched.
 
-* **Safe Rollback Invariant & Approval Binding:**
+* **Safe Rollback Invariant & Tightened Approval Binding:**
   * Rollback is itself a consequential operation requiring PolicyEngine authorization or approval token binding.
-  * Rollback approval tokens bind exact parameters via cryptographic digest:
-    $$\text{digest} = \text{SHA-256}\left(\text{"rollback\_approval:"} + \text{project\_id} + ":" + \text{checkpoint\_id} + ":" + \text{restore\_id} + ":" + \text{sorted\_resource\_ids}\right)$$
-  * Any alteration to project, checkpoint, restore, or resource identifiers invalidates the approval token.
+  * Rollback approval tokens bind exact parameters via cryptographic digest over all resource states:
+    $$\text{digest} = \text{SHA-256}\left(\text{"rollback\_approval:"} + \text{project\_id} + ":" + \text{checkpoint\_id} + ":" + \text{restore\_id} + ":" + \text{sorted\_resource\_tuples}\right)$$
+    where each tuple binds `resource_id:resource_type:canonical_relative_path:pre_state_hash:expected_post_state_hash`.
+  * Any alteration to project, checkpoint, restore, or resource identifiers/hashes invalidates the approval token.
   * Single-use atomic consumption prevents replaying rollback tokens.
 
 * **Never Rollback Over Newer Human State Silently (`ROLLBACK_CONFLICT`):**
-  * Rollback defaults to `force = False`.
+  * Public `force = True` rollback has been permanently removed to safeguard user edits.
   * Pre-flight conflict inspection verifies that live resources match their expected post-execution state.
   * If an external human or process modified a resource (divergent hash or external deletion), rollback halts immediately with `ROLLBACK_CONFLICT` before any live files are touched.
-  * Explicit `force = True` overrides human divergence only when expressly authorized.
+
+* **Private Storage Root & Sandbox Isolation:**
+  * Checkpoints and patch recovery materials are relocated to the private Agent Engine root:
+    `~/.agent_engine/checkpoints/{sanitized_project_id}/{sanitized_checkpoint_id}/` and `~/.agent_engine/patch_recovery/{sanitized_project_id}/`.
+  * Directory permissions are restricted to `0o700`; files are restricted to `0o600`.
+  * Invariant: Located strictly outside workspace trees, guaranteeing sandbox workers with project `READ_ONLY` access cannot inspect or modify historical snapshots, patch rollback backups, or restore metadata.
+  * Excluded from search indexers, prompt retrieval, model context, and diagnostics exports.
+
+* **Durable Restore Operation Journal & Restart Reconciliation:**
+  * State lifecycle: `PREPARED`, `RESTORING`, `COMPLETED`, `PARTIAL`, `CONFLICT`, `RECOVERY_REQUIRED`, `FAILED`.
+  * Journal records are persisted to disk with `fsync` before any live mutation begins.
+  * On engine restart, incomplete or ambiguous restores are reconciled safely into `RECOVERY_REQUIRED` or `COMPLETED`.
+
+* **Immediate Pre-Mutation Revalidation & Truthful Partial Reporting:**
+  * Resources are locked and revalidated against disk immediately prior to mutation to detect concurrent divergence.
+  * Multi-resource restore outcomes are truthfully reported: if any resource succeeds while another fails or conflicts, status is reported as `PARTIAL` rather than generic failure.
+
+* **Pre-Mutation Material Integrity Verification:**
+  * All checkpoint backup payloads (SHA-256 checksums and byte lengths) are verified before modifying live state.
+  * Tampered or corrupted backup files raise `CheckpointIntegrityError` fail-closed, leaving live files untouched.
 
 * **Multi-Resource Checkpoint Backends:**
   * **File Backend:**
-    * Captures raw byte SHA-256 hash, canonical relative path, and POSIX permissions (`st_mode & 0o777`).
+    * Captures raw byte SHA-256 hash, canonical relative path, and POSIX permissions via `stat.S_IMODE(st_mode)` (preserving exact modes such as 0600, 0644, 0755, never blanket chmod).
     * Backs up pre-mutation bytes to private storage (`0o600`).
-    * Restore uses staged sibling write, atomic rename (`atomic_commit_create` for absent pre-states or `os.replace`), directory `fsync`, and post-restore SHA-256 verification.
+    * Restore uses staged sibling write, kernel/filesystem-enforced atomic no-clobber commit (`atomic_commit_create` for absent pre-states or `os.replace`), directory `fsync`, and post-restore SHA-256 verification.
     * Correctly handles file absence (undoing CREATE by unlinking) and deletion (restoring deleted files).
   * **Git Backend:**
+    * Bounded Scope: Snapshot captures strictly declared tracked project files; never untracked sensitive files (`.env`, credentials) or external stores. Zero remote ops.
     * Captures working tree into Git object database using an isolated temporary index (`GIT_INDEX_FILE`).
     * Stores safety commit in hidden ref: `refs/ae-checkpoints/<id>`.
     * Invariant: Never alters the user's active branch, never alters HEAD, never touches `.git/index`, and never pushes to remote.
-    * Restore inspects uncommitted human changes, checking out checkpoint tree files and verifying post-restore diff.
+    * Restore inspects uncommitted human changes in declared paths, checking out checkpoint tree files and verifying post-restore diff.
   * **Database Backend:**
     * Local SQLite databases snapshot via SQLite Online Backup API (`sqlite3.Connection.backup`) to avoid file-locking corruption.
+    * Restore operates inside an exclusive maintenance boundary (connection quiescing and WAL checkpointing/removal).
     * Post-restore verification runs `PRAGMA integrity_check` to guarantee database consistency.
     * Unsupported remote or enterprise databases (PostgreSQL, MySQL) fail explicitly with `UnsupportedDatabaseBackendError` fail-closed.
   * **Config Backend:**
-    * Serializes JSON application configurations with schema version tracking.
-    * Preserves `SecretReference` identifiers (`{"secret_id": "...", "provider": "..."}`) while rejecting plaintext tokens.
+    * Serializes JSON application configurations with schema version tracking using typed serialization.
+    * Preserves `SecretReference` identifiers (`{"secret_id": "...", "provider": "..."}`) while rejecting plaintext tokens and `SecretValue` containers.
+    * Unknown objects fail-closed without calling `repr()`.
 
-* **Hardened Storage & Audit Ledger:**
-  * Private storage directory: `.ae_checkpoints/{sanitized_project_id}/{sanitized_checkpoint_id}/`.
-  * Directory permissions restricted to `0o700`; files restricted to `0o600`.
-  * Excluded from search indexers, prompt retrieval, model context, and diagnostics exports.
-  * Audit ledger (`CheckpointExecutionRecord`): Records IDs, action (`create` / `restore`), status, resource count, resource types, approval token, and duration.
+* **Audit Ledger:**
+  * Ledger (`CheckpointExecutionRecord`): Records IDs, action (`create` / `restore`), status, resource count, resource types, approval token, and duration.
   * Raw file contents, database records, and secrets are strictly excluded from audit records.
+
 

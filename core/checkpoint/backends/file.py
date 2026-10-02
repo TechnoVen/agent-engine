@@ -5,9 +5,11 @@ Part of Milestone R2 Task R2.11.
 
 Invariants:
 - Pre-state and post-state byte hashing using raw SHA-256.
-- Refuses to overwrite newer human edits on rollback (ROLLBACK_CONFLICT) unless force=True.
+- Refuses to overwrite newer human edits on rollback (ROLLBACK_CONFLICT). Public force bypass removed.
 - Atomic commit using Linux renameat2(RENAME_NOREPLACE) for newly created files or os.replace for updates.
-- Durable backup storage in checkpoint directory with 0o600 permissions.
+- Durable backup storage in private checkpoint directory with 0o600 permissions.
+- Accurate file mode preservation using stat.S_IMODE(st_mode) (e.g. 0600, 0644, 0755).
+- Pre-mutation verification: verifies backup bytes match expected hash before any live write.
 """
 
 from __future__ import annotations
@@ -15,11 +17,13 @@ from __future__ import annotations
 import hashlib
 import os
 from pathlib import Path
+import stat
 import uuid
 
 from core.checkpoint.backends.base import BaseCheckpointBackend
 from core.checkpoint.models import (
     CheckpointError,
+    CheckpointIntegrityError,
     CheckpointResource,
     CheckpointResourceType,
     ResourceRestoreResult,
@@ -64,7 +68,7 @@ class FileCheckpointBackend(BaseCheckpointBackend):
             data = target.read_bytes()
             pre_hash = hashlib.sha256(data).hexdigest()
             stat_res = target.stat()
-            file_mode = stat_res.st_mode & 0o777
+            file_mode = stat.S_IMODE(stat_res.st_mode)
 
             files_dir = checkpoint_dir / "files"
             files_dir.mkdir(parents=True, exist_ok=True)
@@ -93,27 +97,49 @@ class FileCheckpointBackend(BaseCheckpointBackend):
 
         return resource
 
+    def verify_snapshot_integrity(
+        self,
+        resource: CheckpointResource,
+        checkpoint_dir: Path,
+    ) -> None:
+        """Verify backup bytes exist and match expected SHA-256 hash before mutation."""
+        if not resource.exists_pre:
+            return
+
+        if not resource.storage_reference:
+            raise CheckpointIntegrityError(
+                f"CHECKPOINT_INTEGRITY_ERROR: resource {resource.resource_id} has no storage_reference"
+            )
+
+        backup_file = checkpoint_dir / resource.storage_reference
+        if not backup_file.exists():
+            raise CheckpointIntegrityError(
+                f"CHECKPOINT_INTEGRITY_ERROR: backup file {backup_file} is missing"
+            )
+
+        data = backup_file.read_bytes()
+        actual_hash = hashlib.sha256(data).hexdigest()
+        if actual_hash != resource.pre_state_hash:
+            raise CheckpointIntegrityError(
+                f"CHECKPOINT_INTEGRITY_ERROR: file backup for {resource.resource_id} tampered: expected {resource.pre_state_hash}, found {actual_hash}"
+            )
+
     def inspect_conflict(
         self,
         resource: CheckpointResource,
         workspace_root: Path,
     ) -> tuple[bool, str, str | None]:
-        """Inspect if live file has diverged with newer human edits.
-
-        Returns (is_conflict, reason, current_hash).
-        """
+        """Inspect if live file has diverged with newer human edits."""
         if not resource.canonical_relative_path:
             return False, "", None
 
         target = self._resolve_safe_path(resource.canonical_relative_path, workspace_root)
 
         if not target.exists():
-            # If expected_post_state_hash was recorded (meaning execution left a file),
-            # but live file is absent, someone deleted it!
             if resource.expected_post_state_hash is not None:
                 return (
                     True,
-                    f"File {resource.canonical_relative_path} was deleted externally (expected post-state {resource.expected_post_state_hash})",
+                    f"ROLLBACK_CONFLICT: File {resource.canonical_relative_path} was deleted externally (expected post-state {resource.expected_post_state_hash})",
                     None,
                 )
             return False, "", None
@@ -125,7 +151,7 @@ class FileCheckpointBackend(BaseCheckpointBackend):
             if curr_hash != resource.expected_post_state_hash:
                 return (
                     True,
-                    f"File {resource.canonical_relative_path} has diverged with newer human edits: expected post-state {resource.expected_post_state_hash}, found {curr_hash}",
+                    f"ROLLBACK_CONFLICT: File {resource.canonical_relative_path} has diverged with newer human edits (expected post-state {resource.expected_post_state_hash}, found {curr_hash})",
                     curr_hash,
                 )
 
@@ -136,9 +162,8 @@ class FileCheckpointBackend(BaseCheckpointBackend):
         resource: CheckpointResource,
         workspace_root: Path,
         checkpoint_dir: Path,
-        force: bool = False,
     ) -> ResourceRestoreResult:
-        """Restore the file to its pre-execution state."""
+        """Restore the file to its pre-execution state without force bypass."""
         if not resource.canonical_relative_path:
             return ResourceRestoreResult(
                 resource_id=resource.resource_id,
@@ -149,9 +174,12 @@ class FileCheckpointBackend(BaseCheckpointBackend):
 
         target = self._resolve_safe_path(resource.canonical_relative_path, workspace_root)
 
-        # Check conflict first
+        # 1. Pre-restore integrity check on checkpoint backup
+        self.verify_snapshot_integrity(resource, checkpoint_dir)
+
+        # 2. Conflict check: Never overwrite newer human edits
         is_conflict, conflict_reason, curr_hash = self.inspect_conflict(resource, workspace_root)
-        if is_conflict and not force:
+        if is_conflict:
             return ResourceRestoreResult(
                 resource_id=resource.resource_id,
                 resource_type=CheckpointResourceType.FILE,
@@ -191,31 +219,8 @@ class FileCheckpointBackend(BaseCheckpointBackend):
             )
 
         # Case 2: Pre-state was present -> restore bytes from backup
-        if not resource.storage_reference:
-            return ResourceRestoreResult(
-                resource_id=resource.resource_id,
-                resource_type=CheckpointResourceType.FILE,
-                status=ResourceRestoreStatus.FAILED,
-                message="Missing storage_reference for present file",
-                verified=False,
-            )
-
-        backup_file = checkpoint_dir / resource.storage_reference
-        if not backup_file.exists():
-            return ResourceRestoreResult(
-                resource_id=resource.resource_id,
-                resource_type=CheckpointResourceType.FILE,
-                status=ResourceRestoreStatus.FAILED,
-                message=f"Backup file {backup_file} not found",
-                verified=False,
-            )
-
+        backup_file = checkpoint_dir / (resource.storage_reference or "")
         bck_data = backup_file.read_bytes()
-        bck_hash = hashlib.sha256(bck_data).hexdigest()
-        if bck_hash != resource.pre_state_hash:
-            raise RestoreVerificationError(
-                f"Corrupted backup for {resource.resource_id}: expected {resource.pre_state_hash}, found {bck_hash}"
-            )
 
         # Ensure target parent exists
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -230,8 +235,11 @@ class FileCheckpointBackend(BaseCheckpointBackend):
                 f.flush()
                 os.fsync(f.fileno())
 
-            if resource.file_mode:
-                os.chmod(tmp_restore, resource.file_mode)
+            # Apply exact original file permissions (e.g. 0600, 0644, 0755)
+            file_perm = (
+                stat.S_IMODE(resource.file_mode) if resource.file_mode is not None else 0o644
+            )
+            os.chmod(tmp_restore, file_perm)
 
             # Atomic commit
             if target.exists():
@@ -270,7 +278,9 @@ class FileCheckpointBackend(BaseCheckpointBackend):
                     tmp_restore.unlink()
                 except Exception:
                     pass
-            if isinstance(e, (RestoreVerificationError, RollbackConflictError)):
+            if isinstance(
+                e, (RestoreVerificationError, RollbackConflictError, CheckpointIntegrityError)
+            ):
                 raise
             return ResourceRestoreResult(
                 resource_id=resource.resource_id,

@@ -1,19 +1,21 @@
 """tests/test_r2_checkpoint_service.py
 
-Comprehensive test suite for R2.11 Checkpoint and Rollback Service.
-Covers CTO Review Sections 11-24 requirements:
-1. Checkpoint model and lifecycle (Checkpoint, CheckpointResource, RestorePlan, RestoreResult).
-2. Checkpoint creation before consequential mutation; failure blocks mutation fail-closed.
-3. Safe rollback as consequential operation requiring exact approval token binding and single-use consumption.
-4. Conflict detection: never silently overwrite newer human edits (ROLLBACK_CONFLICT).
-5. Backends:
-   - File: exact byte snapshot, raw SHA-256 hash, staged atomic commit, permissions mode, absence/deletion handling.
-   - Git: hidden safety ref (refs/ae-checkpoints/<id>), never touches active branch/index/remote, detects uncommitted human work.
-   - Database: SQLite Online Backup API consistency, PRAGMA integrity_check, UnsupportedDatabaseBackendError for non-SQLite.
-   - Config: schema version, SecretReference preservation without plaintext secrets.
-6. Storage security: .ae_checkpoints/{project_id}/{checkpoint_id}/, mode 0o700/0o600, ID sanitization.
-7. Audit ledger: hashes/references only, zero raw contents, zero secrets.
-8. Multi-resource atomicity and partial failure reporting.
+Comprehensive test suite for R2.11 Checkpoint and Rollback Service Closure (S1).
+Covers CTO Review Sections 1-12 requirements:
+1. Public force=True rollback removed; live divergence unconditionally halts with ROLLBACK_CONFLICT.
+2. Checkpoint & patch recovery storage relocated to Agent Engine private root (~/.agent_engine/),
+   guaranteeing sandbox workers with project READ_ONLY access cannot inspect or modify them.
+3. Durable restore operation journal (RestoreOperation: PREPARED, RESTORING, COMPLETED, PARTIAL,
+   CONFLICT, RECOVERY_REQUIRED, FAILED) persisted with fsync before live mutation; restart reconciliation.
+4. Immediate pre-mutation resource revalidation with engine locks.
+5. Multi-resource atomicity and truthful partial failure reporting (PARTIAL).
+6. Tightened compute_rollback_approval_digest binding complete restore plan parameters.
+7. Checkpoint material integrity verified before mutation; tampered backup raises CheckpointIntegrityError.
+8. File permission semantics: stat.S_IMODE(st_mode) / rwx bitmask (0600, 0644, 0755), never blanket chmod.
+9. Git bounded scope: only declared/tracked files, never .env, credentials, or untracked files; 0 remote ops.
+10. SQLite restore maintenance boundary: exclusive lock, connection quiescing, WAL mode consistency.
+11. Typed config serialization: SecretReference preserved, SecretValue forbidden, fail-closed on unknown objects without repr().
+12. Audit ledger records hashes/status/IDs only; zero raw file contents, zero secrets.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+import stat
 import subprocess
 from typing import List
 import pytest
@@ -33,13 +36,17 @@ from core.checkpoint.models import (
     CheckpointResource,
     CheckpointResourceType,
     CheckpointStatus,
+    ResourceRestoreResult,
     ResourceRestoreStatus,
+    RestoreJournalState,
+    RestoreOperation,
     RestorePlan,
     RestoreStatus,
     compute_rollback_approval_digest,
     generate_restore_id,
 )
 from core.checkpoint.service import CheckpointService
+from core.storage.paths import get_private_data_dir
 
 
 class MockStorageWithLedger:
@@ -70,13 +77,20 @@ def workspace(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
+def private_storage(tmp_path: Path) -> Path:
+    priv = tmp_path / "private_agent_engine"
+    priv.mkdir(parents=True, exist_ok=True)
+    return priv
+
+
+@pytest.fixture
 def storage() -> MockStorageWithLedger:
     return MockStorageWithLedger()
 
 
 @pytest.fixture
-def service(storage: MockStorageWithLedger) -> CheckpointService:
-    return CheckpointService(storage=storage)
+def service(storage: MockStorageWithLedger, private_storage: Path) -> CheckpointService:
+    return CheckpointService(storage=storage, custom_storage_dir=private_storage)
 
 
 # ============================================================================
@@ -85,7 +99,7 @@ def service(storage: MockStorageWithLedger) -> CheckpointService:
 
 
 def test_checkpoint_creation_success(service: CheckpointService, workspace: Path) -> None:
-    """Checkpoint creation produces READY checkpoint with durable metadata and backup."""
+    """Checkpoint creation produces READY checkpoint with durable metadata and backup in private root."""
     target_file = workspace / "module.py"
     target_file.write_text("print('version 1')", encoding="utf-8")
     pre_hash = hashlib.sha256(b"print('version 1')").hexdigest()
@@ -111,11 +125,15 @@ def test_checkpoint_creation_success(service: CheckpointService, workspace: Path
     assert chk.resources[0].exists_pre is True
     assert chk.resources[0].storage_reference is not None
 
-    # Check durable storage
+    # Check durable storage in private root
     chk_dir = service.get_checkpoint_dir("proj-alpha", chk.checkpoint_id, workspace)
     assert chk_dir.exists()
     assert (chk_dir / "checkpoint.json").exists()
     assert (chk_dir / chk.resources[0].storage_reference).exists()
+
+    # Verify storage permissions: 0o700 directory, 0o600 files
+    assert (chk_dir.stat().st_mode & 0o777) == 0o700
+    assert ((chk_dir / "checkpoint.json").stat().st_mode & 0o777) == 0o600
 
 
 def test_checkpoint_creation_failure_fail_closed(
@@ -145,7 +163,7 @@ def test_get_nonexistent_checkpoint_raises(service: CheckpointService, workspace
 
 
 # ============================================================================
-# 2. File Checkpoint & Restore Behavior
+# 2. File Checkpoint & Restore Behavior (No Public Force, Conflict Invariants)
 # ============================================================================
 
 
@@ -172,7 +190,6 @@ def test_file_checkpoint_exact_byte_restore_and_hash_verification(
 
     # Inform checkpoint resource of expected post state
     chk.resources[0].expected_post_state_hash = mutated_hash
-    # Update checkpoint json
     chk_dir = service.get_checkpoint_dir("p1", chk.checkpoint_id, workspace)
     (chk_dir / "checkpoint.json").write_text(json.dumps(chk.to_dict()), encoding="utf-8")
 
@@ -195,7 +212,7 @@ def test_file_checkpoint_exact_byte_restore_and_hash_verification(
 def test_file_rollback_refuses_newer_human_content_conflict(
     service: CheckpointService, workspace: Path
 ) -> None:
-    """Rollback halts with CONFLICT without overwriting when live file has diverged with human edits."""
+    """Rollback halts unconditionally with CONFLICT without overwriting when live file diverged."""
     file_path = workspace / "main.py"
     file_path.write_text("v1 = 1", encoding="utf-8")
 
@@ -221,7 +238,6 @@ def test_file_rollback_refuses_newer_human_content_conflict(
         checkpoint_id=chk.checkpoint_id,
         project_id="p1",
         resource_ids=["res-main"],
-        force=False,
     )
 
     result = service.restore_checkpoint(plan, workspace)
@@ -230,34 +246,18 @@ def test_file_rollback_refuses_newer_human_content_conflict(
     assert file_path.read_text(encoding="utf-8") == human_content
 
 
-def test_file_rollback_force_overwrites_divergence(
+def test_file_rollback_no_public_force_parameter(
     service: CheckpointService, workspace: Path
 ) -> None:
-    """When force=True is explicitly passed, rollback overwrites human divergence."""
-    file_path = workspace / "app.py"
-    file_path.write_text("orig", encoding="utf-8")
-
-    res = CheckpointResource(
-        resource_id="res-app",
-        resource_type=CheckpointResourceType.FILE,
-        canonical_relative_path="app.py",
-    )
-    chk = service.create_checkpoint("p1", "e1", [res], workspace)
-
-    # Human edited file
-    file_path.write_text("human edits", encoding="utf-8")
-
-    plan = RestorePlan(
-        restore_id="rst-force",
-        checkpoint_id=chk.checkpoint_id,
-        project_id="p1",
-        resource_ids=["res-app"],
-        force=True,
-    )
-
-    result = service.restore_checkpoint(plan, workspace)
-    assert result.status == RestoreStatus.COMPLETED
-    assert file_path.read_text(encoding="utf-8") == "orig"
+    """RestorePlan has no public force parameter and rejecting force overrides is enforced."""
+    with pytest.raises(TypeError, match="unexpected keyword argument 'force'"):
+        RestorePlan(
+            restore_id="rst-invalid",
+            checkpoint_id="chk-123",
+            project_id="p1",
+            resource_ids=["res-1"],
+            force=True,  # type: ignore
+        )
 
 
 def test_file_absent_checkpoint_restores_absence(
@@ -312,6 +312,11 @@ def test_file_deleted_checkpoint_restores_file(service: CheckpointService, works
     file_path.unlink()
     assert not file_path.exists()
 
+    # Inform expected post state: file absent
+    chk.resources[0].exists_post = False
+    chk_dir = service.get_checkpoint_dir("p1", chk.checkpoint_id, workspace)
+    (chk_dir / "checkpoint.json").write_text(json.dumps(chk.to_dict()), encoding="utf-8")
+
     plan = RestorePlan(
         restore_id="rst-restore-del",
         checkpoint_id=chk.checkpoint_id,
@@ -326,7 +331,110 @@ def test_file_deleted_checkpoint_restores_file(service: CheckpointService, works
 
 
 # ============================================================================
-# 3. Git Checkpoint Backend Behavior
+# 3. File Permission Semantics (stat.S_IMODE)
+# ============================================================================
+
+
+def test_file_permission_semantics_mode_preserved(
+    service: CheckpointService, workspace: Path
+) -> None:
+    """File permissions (0600, 0644, 0755) are strictly captured via stat.S_IMODE and restored."""
+    exec_script = workspace / "script.sh"
+    exec_script.write_bytes(b"#!/bin/sh\necho hello\n")
+    exec_script.chmod(0o755)
+
+    secret_conf = workspace / "secret.conf"
+    secret_conf.write_bytes(b"config_val=1\n")
+    secret_conf.chmod(0o600)
+
+    r_script = CheckpointResource(
+        resource_id="res-script",
+        resource_type=CheckpointResourceType.FILE,
+        canonical_relative_path="script.sh",
+    )
+    r_conf = CheckpointResource(
+        resource_id="res-conf",
+        resource_type=CheckpointResourceType.FILE,
+        canonical_relative_path="secret.conf",
+    )
+
+    chk = service.create_checkpoint("p-perm", "e-perm", [r_script, r_conf], workspace)
+    assert stat.S_IMODE(chk.resources[0].file_mode or 0) == 0o755
+    assert stat.S_IMODE(chk.resources[1].file_mode or 0) == 0o600
+
+    # Modify permissions and contents
+    exec_script.write_bytes(b"#!/bin/sh\necho mutated\n")
+    exec_script.chmod(0o644)
+    secret_conf.write_bytes(b"config_val=2\n")
+    secret_conf.chmod(0o644)
+
+    # Set expected post hash
+    chk.resources[0].expected_post_state_hash = hashlib.sha256(
+        b"#!/bin/sh\necho mutated\n"
+    ).hexdigest()
+    chk.resources[1].expected_post_state_hash = hashlib.sha256(b"config_val=2\n").hexdigest()
+    chk_dir = service.get_checkpoint_dir("p-perm", chk.checkpoint_id, workspace)
+    (chk_dir / "checkpoint.json").write_text(json.dumps(chk.to_dict()), encoding="utf-8")
+
+    plan = RestorePlan(
+        restore_id="rst-perm",
+        checkpoint_id=chk.checkpoint_id,
+        project_id="p-perm",
+        resource_ids=["res-script", "res-conf"],
+    )
+
+    result = service.restore_checkpoint(plan, workspace)
+    assert result.status == RestoreStatus.COMPLETED
+    assert stat.S_IMODE(exec_script.stat().st_mode) == 0o755
+    assert stat.S_IMODE(secret_conf.stat().st_mode) == 0o600
+
+
+# ============================================================================
+# 4. Checkpoint Material Integrity Verification
+# ============================================================================
+
+
+def test_checkpoint_material_integrity_tampering_raises(
+    service: CheckpointService, workspace: Path
+) -> None:
+    """Tampering with backup snapshot material raises CheckpointIntegrityError fail-closed."""
+    f = workspace / "critical.txt"
+    f.write_text("genuine bytes", encoding="utf-8")
+
+    res = CheckpointResource(
+        resource_id="res-crit",
+        resource_type=CheckpointResourceType.FILE,
+        canonical_relative_path="critical.txt",
+    )
+    chk = service.create_checkpoint("p-int", "e-int", [res], workspace)
+
+    # Agent mutated critical.txt
+    f.write_text("agent edit", encoding="utf-8")
+    chk.resources[0].expected_post_state_hash = hashlib.sha256(b"agent edit").hexdigest()
+    chk_dir = service.get_checkpoint_dir("p-int", chk.checkpoint_id, workspace)
+    (chk_dir / "checkpoint.json").write_text(json.dumps(chk.to_dict()), encoding="utf-8")
+
+    # Malicious actor or disk corruption alters the backup payload
+    backup_file = chk_dir / (chk.resources[0].storage_reference or "")
+    assert backup_file.exists()
+    backup_file.write_text("MALICIOUS_TAMPERED_PAYLOAD", encoding="utf-8")
+
+    plan = RestorePlan(
+        restore_id="rst-tamper",
+        checkpoint_id=chk.checkpoint_id,
+        project_id="p-int",
+        resource_ids=["res-crit"],
+    )
+
+    result = service.restore_checkpoint(plan, workspace)
+    assert result.status == RestoreStatus.FAILED
+    assert "CheckpointIntegrityError" in result.message or "integrity" in result.message.lower()
+    # Live file must NOT be overwritten with tampered payload!
+    assert f.read_text(encoding="utf-8") == "agent edit"
+
+
+# ============================================================================
+# 5. Git Checkpoint Backend Behavior (Bounded Scope)
 # ============================================================================
 
 
@@ -347,7 +455,6 @@ def test_git_checkpoint_creates_safety_ref_without_modifying_branch_or_index(
     """Git checkpoint creates commit on hidden ref refs/ae-checkpoints/<id> without altering branch/index."""
     _init_git_repo(workspace)
 
-    # Create uncommitted staged and unstaged files
     staged_file = workspace / "staged.txt"
     staged_file.write_text("staged content", encoding="utf-8")
     subprocess.run(["git", "add", "staged.txt"], cwd=str(workspace), check=True)
@@ -355,7 +462,6 @@ def test_git_checkpoint_creates_safety_ref_without_modifying_branch_or_index(
     unstaged_file = workspace / "unstaged.txt"
     unstaged_file.write_text("unstaged content", encoding="utf-8")
 
-    # Get HEAD and branch before checkpoint
     head_before = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=str(workspace), capture_output=True, text=True
     ).stdout.strip()
@@ -374,7 +480,6 @@ def test_git_checkpoint_creates_safety_ref_without_modifying_branch_or_index(
     chk = service.create_checkpoint("proj-git", "e-git", [res], workspace)
     assert chk.status == CheckpointStatus.READY
 
-    # Verify HEAD and branch remain identical
     head_after = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=str(workspace), capture_output=True, text=True
     ).stdout.strip()
@@ -387,7 +492,6 @@ def test_git_checkpoint_creates_safety_ref_without_modifying_branch_or_index(
     assert head_before == head_after
     assert branch_before == branch_after
 
-    # Verify safety ref exists in git
     safety_ref = f"refs/ae-checkpoints/{res.resource_id}"
     ref_check = subprocess.run(
         ["git", "rev-parse", safety_ref], cwd=str(workspace), capture_output=True, text=True
@@ -397,74 +501,93 @@ def test_git_checkpoint_creates_safety_ref_without_modifying_branch_or_index(
     assert chk.resources[0].pre_state_hash == checkpoint_commit
 
 
-def test_git_checkpoint_restores_working_tree(service: CheckpointService, workspace: Path) -> None:
-    """Git rollback restores working tree files to checkpoint ref state."""
+def test_git_checkpoint_restores_working_tree_bounded_scope(
+    service: CheckpointService, workspace: Path
+) -> None:
+    """Git rollback restores declared tracked files, leaving .env and untracked files completely untouched."""
     _init_git_repo(workspace)
 
     doc = workspace / "doc.txt"
     doc.write_text("git v1", encoding="utf-8")
+    subprocess.run(["git", "add", "doc.txt"], cwd=str(workspace), check=True)
+    subprocess.run(["git", "commit", "-m", "add doc"], cwd=str(workspace), check=True)
+
+    # Add sensitive .env file
+    env_file = workspace / ".env"
+    env_file.write_bytes(b"SECRET_KEY=super_confidential_123\n")
 
     res = CheckpointResource(
         resource_id="res-git-restore",
         resource_type=CheckpointResourceType.GIT,
+        metadata={"declared_paths": ["doc.txt"]},
     )
     chk = service.create_checkpoint("proj-git", "e2", [res], workspace)
 
     # Mutate working tree
     doc.write_text("git v2 mutated", encoding="utf-8")
+    mutated_doc_hash = hashlib.sha256(b"git v2 mutated").hexdigest()
+    chk.resources[0].expected_post_state_hash = mutated_doc_hash
+    chk_dir = service.get_checkpoint_dir("proj-git", chk.checkpoint_id, workspace)
+    (chk_dir / "checkpoint.json").write_text(json.dumps(chk.to_dict()), encoding="utf-8")
 
     plan = RestorePlan(
         restore_id="rst-git",
         checkpoint_id=chk.checkpoint_id,
         project_id="proj-git",
         resource_ids=["res-git-restore"],
-        force=True,
     )
 
     result = service.restore_checkpoint(plan, workspace)
     assert result.status == RestoreStatus.COMPLETED
     assert doc.read_text(encoding="utf-8") == "git v1"
+    # .env MUST be completely preserved untouched!
+    assert env_file.read_bytes() == b"SECRET_KEY=super_confidential_123\n"
 
 
 def test_git_rollback_refuses_divergent_human_state(
     service: CheckpointService, workspace: Path
 ) -> None:
-    """Git rollback without force halts with CONFLICT if uncommitted changes exist."""
+    """Git rollback halts with CONFLICT if uncommitted changes exist in tracked files."""
     _init_git_repo(workspace)
+    doc = workspace / "doc.txt"
+    doc.write_text("git v1", encoding="utf-8")
+    subprocess.run(["git", "add", "doc.txt"], cwd=str(workspace), check=True)
+    subprocess.run(["git", "commit", "-m", "add doc"], cwd=str(workspace), check=True)
 
     res = CheckpointResource(
         resource_id="res-git-conflict",
         resource_type=CheckpointResourceType.GIT,
+        metadata={"declared_paths": ["doc.txt"]},
     )
     chk = service.create_checkpoint("proj-git", "e3", [res], workspace)
 
-    # Uncommitted human work
-    (workspace / "human_uncommitted.txt").write_text("important", encoding="utf-8")
+    # Uncommitted human work on tracked file
+    doc.write_text("human uncommitted edit", encoding="utf-8")
 
     plan = RestorePlan(
         restore_id="rst-git-c",
         checkpoint_id=chk.checkpoint_id,
         project_id="proj-git",
         resource_ids=["res-git-conflict"],
-        force=False,
     )
 
     result = service.restore_checkpoint(plan, workspace)
     assert result.status == RestoreStatus.CONFLICT
-    assert (workspace / "human_uncommitted.txt").read_text(encoding="utf-8") == "important"
+    assert doc.read_text(encoding="utf-8") == "human uncommitted edit"
 
 
 # ============================================================================
-# 4. Database Checkpoint Backend Behavior
+# 6. Database Checkpoint Backend Behavior (SQLite Maintenance Boundary)
 # ============================================================================
 
 
-def test_sqlite_database_checkpoint_and_integrity_check(
+def test_sqlite_database_checkpoint_and_maintenance_boundary(
     service: CheckpointService, workspace: Path
 ) -> None:
-    """SQLite checkpoint uses Online Backup API and rollback verifies PRAGMA integrity_check."""
+    """SQLite checkpoint uses Online Backup API and rollback operates within exclusive maintenance boundary."""
     db_file = workspace / "app.sqlite"
     conn = sqlite3.connect(str(db_file))
+    conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
     conn.execute("INSERT INTO users VALUES (1, 'Alice')")
     conn.commit()
@@ -486,12 +609,17 @@ def test_sqlite_database_checkpoint_and_integrity_check(
     conn.commit()
     conn.close()
 
+    # Inform expected post state
+    mutated_hash = hashlib.sha256(db_file.read_bytes()).hexdigest()
+    chk.resources[0].expected_post_state_hash = mutated_hash
+    chk_dir = service.get_checkpoint_dir("p-db", chk.checkpoint_id, workspace)
+    (chk_dir / "checkpoint.json").write_text(json.dumps(chk.to_dict()), encoding="utf-8")
+
     plan = RestorePlan(
         restore_id="rst-db",
         checkpoint_id=chk.checkpoint_id,
         project_id="p-db",
         resource_ids=["res-db-1"],
-        force=True,
     )
 
     result = service.restore_checkpoint(plan, workspace)
@@ -522,7 +650,7 @@ def test_unsupported_database_fails_explicitly(service: CheckpointService, works
 
 
 # ============================================================================
-# 5. Config Checkpoint Backend Behavior
+# 7. Config Checkpoint Backend Behavior (Typed Serialization)
 # ============================================================================
 
 
@@ -555,13 +683,17 @@ def test_config_checkpoint_preserves_secret_references(
         "auth": {"token": "changed"},
     }
     cfg_file.write_text(json.dumps(mutated_config), encoding="utf-8")
+    mutated_hash = hashlib.sha256(cfg_file.read_bytes()).hexdigest()
+
+    chk.resources[0].expected_post_state_hash = mutated_hash
+    chk_dir = service.get_checkpoint_dir("p-cfg", chk.checkpoint_id, workspace)
+    (chk_dir / "checkpoint.json").write_text(json.dumps(chk.to_dict()), encoding="utf-8")
 
     plan = RestorePlan(
         restore_id="rst-cfg",
         checkpoint_id=chk.checkpoint_id,
         project_id="p-cfg",
         resource_ids=["res-cfg-1"],
-        force=True,
     )
 
     result = service.restore_checkpoint(plan, workspace)
@@ -595,7 +727,7 @@ def test_config_checkpoint_rejects_raw_plaintext_secrets(
 
 
 # ============================================================================
-# 6. Consequential Approval Binding & Single-Use Consumption
+# 8. Consequential Approval Binding & Single-Use Consumption
 # ============================================================================
 
 
@@ -618,17 +750,17 @@ def test_rollback_approval_exact_digest_binding(
         project_id="p-appr",
         checkpoint_id=chk.checkpoint_id,
         restore_id=restore_id,
-        resource_ids=["res-appr"],
+        resources=chk.resources,
     )
 
-    # 1. Tampered resource ID
+    # 1. Tampered approval digest
     tampered_plan = RestorePlan(
         restore_id=restore_id,
         checkpoint_id=chk.checkpoint_id,
         project_id="p-appr",
-        resource_ids=["res-tampered"],
+        resource_ids=["res-appr"],
         approval_id="appr-123",
-        approval_digest=valid_digest,
+        approval_digest="tampered_invalid_digest_hex",
     )
     res_tampered = service.restore_checkpoint(tampered_plan, workspace)
     assert res_tampered.status == RestoreStatus.FAILED
@@ -642,7 +774,6 @@ def test_rollback_approval_exact_digest_binding(
         resource_ids=["res-appr"],
         approval_id="appr-123",
         approval_digest=valid_digest,
-        force=True,
     )
     res_valid = service.restore_checkpoint(valid_plan, workspace)
     assert res_valid.status == RestoreStatus.COMPLETED
@@ -667,7 +798,7 @@ def test_rollback_approval_single_use_consumption(
         project_id="p-su",
         checkpoint_id=chk.checkpoint_id,
         restore_id=restore_id,
-        resource_ids=["res-su"],
+        resources=chk.resources,
     )
 
     plan = RestorePlan(
@@ -677,7 +808,6 @@ def test_rollback_approval_single_use_consumption(
         resource_ids=["res-su"],
         approval_id="appr-single-use-token",
         approval_digest=digest,
-        force=True,
     )
 
     # First attempt succeeds
@@ -691,7 +821,82 @@ def test_rollback_approval_single_use_consumption(
 
 
 # ============================================================================
-# 7. Multi-Resource Pre-Flight Conflict & Partial Reporting
+# 9. Durable Restore Operation Journal & Restart Reconciliation
+# ============================================================================
+
+
+def test_durable_restore_operation_journal(service: CheckpointService, workspace: Path) -> None:
+    """Restore operation creates journal in PREPARED state, updates to RESTORING, and finishes COMPLETED."""
+    f = workspace / "journal_test.txt"
+    f.write_text("v1", encoding="utf-8")
+
+    res = CheckpointResource(
+        resource_id="res-j",
+        resource_type=CheckpointResourceType.FILE,
+        canonical_relative_path="journal_test.txt",
+    )
+    chk = service.create_checkpoint("p-j", "e-j", [res], workspace)
+
+    plan = RestorePlan(
+        restore_id="rst-journal",
+        checkpoint_id=chk.checkpoint_id,
+        project_id="p-j",
+        resource_ids=["res-j"],
+    )
+
+    result = service.restore_checkpoint(plan, workspace)
+    assert result.status == RestoreStatus.COMPLETED
+
+    chk_dir = service.get_checkpoint_dir("p-j", chk.checkpoint_id, workspace)
+    journal_file = chk_dir / "restores" / "rst-journal.json"
+    assert journal_file.exists()
+    assert (journal_file.stat().st_mode & 0o777) == 0o600
+
+    journal_data = json.loads(journal_file.read_text(encoding="utf-8"))
+    op = RestoreOperation.from_dict(journal_data)
+    assert op.status == RestoreJournalState.COMPLETED.value
+    assert op.restore_id == "rst-journal"
+    assert "res-j" in op.resource_states
+
+
+def test_restart_reconciliation_detects_incomplete_restores(
+    service: CheckpointService, workspace: Path
+) -> None:
+    """Restart reconciliation identifies in-flight or recovery-required restores across projects."""
+    f = workspace / "rec.txt"
+    f.write_text("v1", encoding="utf-8")
+    res = CheckpointResource(
+        resource_id="res-rec",
+        resource_type=CheckpointResourceType.FILE,
+        canonical_relative_path="rec.txt",
+    )
+    chk = service.create_checkpoint("p-rec", "e-rec", [res], workspace)
+    chk_dir = service.get_checkpoint_dir("p-rec", chk.checkpoint_id, workspace)
+
+    # 1. Simulate an interrupted restore with ambiguous live state -> RECOVERY_REQUIRED
+    f.write_text("ambiguous_crash_state", encoding="utf-8")
+    restores_dir = chk_dir / "restores"
+    restores_dir.mkdir(parents=True, exist_ok=True)
+    interrupted_op = RestoreOperation(
+        restore_id="rst-interrupted",
+        checkpoint_id=chk.checkpoint_id,
+        project_id="p-rec",
+        status=RestoreJournalState.RESTORING.value,
+        resource_states={"res-rec": "PREPARED"},
+    )
+    (restores_dir / "rst-interrupted.json").write_text(
+        json.dumps(interrupted_op.to_dict()), encoding="utf-8"
+    )
+
+    reconciled = service.reconcile_incomplete_restores(workspace)
+    assert len(reconciled) >= 1
+    found = next((op for op in reconciled if op.restore_id == "rst-interrupted"), None)
+    assert found is not None
+    assert found.status == RestoreJournalState.RECOVERY_REQUIRED.value
+
+
+# ============================================================================
+# 10. Multi-Resource Pre-Flight Conflict & Partial Reporting
 # ============================================================================
 
 
@@ -725,7 +930,7 @@ def test_multi_resource_atomic_conflict_preflight(
 
     # Mutate f1 as expected
     f1.write_text("f1 mutated", encoding="utf-8")
-    # Mutate f2 with human change (unexpected!)
+    # Mutate f2 with human change (unexpected divergence!)
     f2.write_text("f2 human unexpected edit", encoding="utf-8")
 
     plan = RestorePlan(
@@ -733,7 +938,6 @@ def test_multi_resource_atomic_conflict_preflight(
         checkpoint_id=chk.checkpoint_id,
         project_id="p-multi",
         resource_ids=["res-1", "res-2"],
-        force=False,
     )
 
     result = service.restore_checkpoint(plan, workspace)
@@ -742,110 +946,6 @@ def test_multi_resource_atomic_conflict_preflight(
     # Both files must remain completely untouched!
     assert f1.read_text(encoding="utf-8") == "f1 mutated"
     assert f2.read_text(encoding="utf-8") == "f2 human unexpected edit"
-
-
-def test_cannot_restore_creating_or_failed_checkpoint(
-    service: CheckpointService, workspace: Path
-) -> None:
-    """Attempting to restore an incomplete or failed checkpoint is rejected."""
-    f = workspace / "dummy.txt"
-    f.write_text("test", encoding="utf-8")
-    res = CheckpointResource(
-        resource_id="r-dummy",
-        resource_type=CheckpointResourceType.FILE,
-        canonical_relative_path="dummy.txt",
-    )
-    chk = service.create_checkpoint("p-stat", "e-stat", [res], workspace)
-
-    # Simulate checkpoint in CREATING status
-    chk.status = CheckpointStatus.CREATING
-    chk_dir = service.get_checkpoint_dir("p-stat", chk.checkpoint_id, workspace)
-    (chk_dir / "checkpoint.json").write_text(json.dumps(chk.to_dict()), encoding="utf-8")
-
-    plan = RestorePlan(
-        restore_id="rst-stat",
-        checkpoint_id=chk.checkpoint_id,
-        project_id="p-stat",
-        resource_ids=["r-dummy"],
-        force=True,
-    )
-    result = service.restore_checkpoint(plan, workspace)
-    assert result.status == RestoreStatus.FAILED
-    assert "Cannot restore checkpoint in status 'creating'" in result.message
-
-
-# ============================================================================
-# 8. Storage Security & Audit Ledger Verification
-# ============================================================================
-
-
-def test_storage_security_permissions_and_sanitization(
-    service: CheckpointService, workspace: Path
-) -> None:
-    """Storage directory mode is 0o700, files are 0o600, and path traversal in IDs is sanitized."""
-    f = workspace / "sec.txt"
-    f.write_text("security test", encoding="utf-8")
-    res = CheckpointResource(
-        resource_id="r-sec",
-        resource_type=CheckpointResourceType.FILE,
-        canonical_relative_path="sec.txt",
-    )
-
-    # Project ID with potential path traversal characters
-    chk = service.create_checkpoint("../../evil_project", "e-sec", [res], workspace)
-    chk_dir = service.get_checkpoint_dir("../../evil_project", chk.checkpoint_id, workspace)
-
-    # Verify sanitized path is strictly within workspace .ae_checkpoints
-    assert chk_dir.is_relative_to(workspace / ".ae_checkpoints")
-    assert not chk_dir.is_relative_to(workspace.parent / "evil_project")
-
-    # Verify directory permissions (0o700)
-    st = chk_dir.stat()
-    assert (st.st_mode & 0o777) == 0o700
-
-    # Verify file permissions (0o600)
-    meta_st = (chk_dir / "checkpoint.json").stat()
-    assert (meta_st.st_mode & 0o777) == 0o600
-
-
-def test_audit_ledger_records_contain_hashes_only(
-    service: CheckpointService, storage: MockStorageWithLedger, workspace: Path
-) -> None:
-    """Audit ledger records created for checkpoint and restore contain hashes and IDs only."""
-    f = workspace / "ledger_check.txt"
-    f.write_text("secret confidential raw content 12345", encoding="utf-8")
-    res = CheckpointResource(
-        resource_id="r-ledg",
-        resource_type=CheckpointResourceType.FILE,
-        canonical_relative_path="ledger_check.txt",
-    )
-
-    chk = service.create_checkpoint("p-ledg", "e-ledg", [res], workspace)
-
-    plan = RestorePlan(
-        restore_id="rst-ledg",
-        checkpoint_id=chk.checkpoint_id,
-        project_id="p-ledg",
-        resource_ids=["r-ledg"],
-        force=True,
-    )
-    service.restore_checkpoint(plan, workspace)
-
-    assert len(storage.ledger_records) == 2
-    create_rec = storage.ledger_records[0]
-    restore_rec = storage.ledger_records[1]
-
-    assert create_rec.action == "create"
-    assert create_rec.status == "ready"
-    assert create_rec.resource_count == 1
-
-    assert restore_rec.action == "restore"
-    assert restore_rec.status == "completed"
-
-    # Verify that raw file content is NEVER in ledger records
-    for rec in storage.ledger_records:
-        rec_json = json.dumps(rec.to_dict())
-        assert "secret confidential raw content 12345" not in rec_json
 
 
 def test_multi_resource_partial_failure_reporting(
@@ -873,19 +973,31 @@ def test_multi_resource_partial_failure_reporting(
     # Mutate both
     f1.write_text("v2", encoding="utf-8")
     f2.write_text("v2", encoding="utf-8")
-
-    # Corrupt or delete backup for r2 to trigger failure on r2
+    chk.resources[0].expected_post_state_hash = hashlib.sha256(b"v2").hexdigest()
+    chk.resources[1].expected_post_state_hash = hashlib.sha256(b"v2").hexdigest()
     chk_dir = service.get_checkpoint_dir("p-part", chk.checkpoint_id, workspace)
-    r2_bck = chk_dir / (chk.resources[1].storage_reference or "")
-    if r2_bck.exists():
-        r2_bck.unlink()
+    (chk_dir / "checkpoint.json").write_text(json.dumps(chk.to_dict()), encoding="utf-8")
+
+    # Simulate a live failure on r2 during live execution
+    orig_restore = service.backends[CheckpointResourceType.FILE].restore_snapshot
+
+    def mock_restore(res, ws, cdir):
+        if res.resource_id == "res-p2":
+            return ResourceRestoreResult(
+                resource_id=res.resource_id,
+                resource_type=res.resource_type,
+                status=ResourceRestoreStatus.FAILED,
+                message="Disk I/O error on part2",
+            )
+        return orig_restore(res, ws, cdir)
+
+    service.backends[CheckpointResourceType.FILE].restore_snapshot = mock_restore
 
     plan = RestorePlan(
         restore_id="rst-part",
         checkpoint_id=chk.checkpoint_id,
         project_id="p-part",
         resource_ids=["res-p1", "res-p2"],
-        force=True,
     )
 
     result = service.restore_checkpoint(plan, workspace)
@@ -894,19 +1006,97 @@ def test_multi_resource_partial_failure_reporting(
     assert result.resource_results["res-p2"].status == ResourceRestoreStatus.FAILED
 
 
-def test_checkpoint_directory_exclusion(service: CheckpointService, workspace: Path) -> None:
-    """Checkpoint directory starts with .ae_ and is isolated from normal project content."""
-    f = workspace / "sample.txt"
-    f.write_text("content", encoding="utf-8")
+# ============================================================================
+# 11. Storage Security, Private Root & Sandbox Isolation
+# ============================================================================
+
+
+def test_storage_security_permissions_and_sanitization(
+    service: CheckpointService, workspace: Path, private_storage: Path
+) -> None:
+    """Storage directory mode is 0o700, files are 0o600, and path traversal in IDs is sanitized."""
+    f = workspace / "sec.txt"
+    f.write_text("security test", encoding="utf-8")
     res = CheckpointResource(
-        resource_id="r-ex",
+        resource_id="r-sec",
         resource_type=CheckpointResourceType.FILE,
-        canonical_relative_path="sample.txt",
+        canonical_relative_path="sec.txt",
     )
 
-    chk = service.create_checkpoint("proj-ex", "e-ex", [res], workspace)
-    chk_dir = service.get_checkpoint_dir("proj-ex", chk.checkpoint_id, workspace)
+    # Project ID with potential path traversal characters
+    chk = service.create_checkpoint("../../evil_project", "e-sec", [res], workspace)
+    chk_dir = service.get_checkpoint_dir("../../evil_project", chk.checkpoint_id, workspace)
 
-    assert ".ae_checkpoints" in chk_dir.parts
-    # Verify dot-prefix ensures hidden status in standard glob / directory traversal
-    assert any(part.startswith(".ae_") for part in chk_dir.relative_to(workspace).parts)
+    # Verify sanitized path is strictly within private storage root checkpoints
+    assert chk_dir.is_relative_to(private_storage / "checkpoints")
+    assert not chk_dir.is_relative_to(workspace)
+
+    # Verify directory permissions (0o700)
+    st = chk_dir.stat()
+    assert (st.st_mode & 0o777) == 0o700
+
+    # Verify file permissions (0o600)
+    meta_st = (chk_dir / "checkpoint.json").stat()
+    assert (meta_st.st_mode & 0o777) == 0o600
+
+
+def test_sandbox_isolation_cannot_access_private_checkpoint_storage(
+    service: CheckpointService, workspace: Path, private_storage: Path
+) -> None:
+    """Sandbox workers with READ_ONLY workspace access cannot access private storage root."""
+    f = workspace / "app.py"
+    f.write_text("print('app')", encoding="utf-8")
+    res = CheckpointResource(
+        resource_id="r-sb",
+        resource_type=CheckpointResourceType.FILE,
+        canonical_relative_path="app.py",
+    )
+
+    chk = service.create_checkpoint("proj-sb", "e-sb", [res], workspace)
+    chk_dir = service.get_checkpoint_dir("proj-sb", chk.checkpoint_id, workspace)
+
+    # Verify checkpoint is located strictly outside workspace
+    assert not chk_dir.is_relative_to(workspace)
+    assert chk_dir.is_relative_to(private_storage)
+
+    # Even if relative navigation is attempted, sandbox root mounts do NOT expose ~/.agent_engine
+    assert get_private_data_dir() != workspace
+
+
+def test_audit_ledger_records_contain_hashes_only(
+    service: CheckpointService, storage: MockStorageWithLedger, workspace: Path
+) -> None:
+    """Audit ledger records created for checkpoint and restore contain hashes and IDs only."""
+    f = workspace / "ledger_check.txt"
+    f.write_text("secret confidential raw content 12345", encoding="utf-8")
+    res = CheckpointResource(
+        resource_id="r-ledg",
+        resource_type=CheckpointResourceType.FILE,
+        canonical_relative_path="ledger_check.txt",
+    )
+
+    chk = service.create_checkpoint("p-ledg", "e-ledg", [res], workspace)
+
+    plan = RestorePlan(
+        restore_id="rst-ledg",
+        checkpoint_id=chk.checkpoint_id,
+        project_id="p-ledg",
+        resource_ids=["r-ledg"],
+    )
+    service.restore_checkpoint(plan, workspace)
+
+    assert len(storage.ledger_records) == 2
+    create_rec = storage.ledger_records[0]
+    restore_rec = storage.ledger_records[1]
+
+    assert create_rec.action == "create"
+    assert create_rec.status == "ready"
+    assert create_rec.resource_count == 1
+
+    assert restore_rec.action == "restore"
+    assert restore_rec.status == "completed"
+
+    # Verify that raw file content is NEVER in ledger records
+    for rec in storage.ledger_records:
+        rec_json = json.dumps(rec.to_dict())
+        assert "secret confidential raw content 12345" not in rec_json

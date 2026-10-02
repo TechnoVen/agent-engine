@@ -3,14 +3,18 @@
 Data models, enums, exceptions, and audit records for the Checkpoint and Rollback Service.
 Part of Milestone R2 Task R2.11.
 
-Invariants (CTO Review Sections 11-24):
+Invariants (CTO Review Sections 11-24 & Final Closure Items 1-12):
 1. Immutable Checkpoint Evidence: A checkpoint records immutable pre-execution state,
    expected post-execution state where known, recovery references, and integrity hashes.
 2. Safe Rollback: Rollback is a consequential operation requiring authenticated actor,
    exact approval binding, and pre-restore conflict inspection.
 3. Never Rollback Over Newer Human State Silently: If current state has diverged from
    expected post-state, rollback halts with ROLLBACK_CONFLICT and does not overwrite.
-4. Audit-Safe Ledger: Stores references, status, and cryptographic hashes, never full
+4. Public Force Rollback Removed: In accordance with R2.11 canonical guarantees, force
+   bypass is not exposed; human divergence is never silently clobbered.
+5. Durable Restore Operation Journal: Every restore persists its intent and per-resource
+   states durably before live mutations; crash reconciliation handles interrupted restores.
+6. Audit-Safe Ledger: Stores references, status, and cryptographic hashes, never full
    file contents, database rows, or secrets.
 """
 
@@ -62,6 +66,18 @@ class ResourceRestoreStatus(str, Enum):
     SKIPPED = "skipped"
 
 
+class RestoreJournalState(str, Enum):
+    """Durable states of a restore operation journal."""
+
+    PREPARED = "PREPARED"
+    RESTORING = "RESTORING"
+    COMPLETED = "COMPLETED"
+    PARTIAL = "PARTIAL"
+    CONFLICT = "CONFLICT"
+    RECOVERY_REQUIRED = "RECOVERY_REQUIRED"
+    FAILED = "FAILED"
+
+
 class CheckpointError(Exception):
     """Base exception for checkpoint operations."""
 
@@ -86,6 +102,12 @@ class RollbackConflictError(CheckpointError):
     pass
 
 
+class CheckpointIntegrityError(CheckpointError):
+    """Raised when checkpoint snapshot or backup material fails integrity verification."""
+
+    pass
+
+
 class UnsupportedDatabaseBackendError(CheckpointError):
     """Raised when attempting checkpoint on an unsupported database type."""
 
@@ -106,18 +128,6 @@ def generate_checkpoint_id() -> str:
 def generate_restore_id() -> str:
     """Generate unique restore identifier."""
     return f"rst-{uuid.uuid4().hex[:12]}"
-
-
-def compute_rollback_approval_digest(
-    project_id: str,
-    checkpoint_id: str,
-    restore_id: str,
-    resource_ids: List[str],
-) -> str:
-    """Compute cryptographic digest binding exact rollback parameters."""
-    sorted_res = ",".join(sorted(resource_ids))
-    raw = f"rollback_approval:{project_id}:{checkpoint_id}:{restore_id}:{sorted_res}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 @dataclass
@@ -163,6 +173,26 @@ class CheckpointResource:
             file_mode=data.get("file_mode"),
             metadata=data.get("metadata", {}),
         )
+
+
+def compute_rollback_approval_digest(
+    project_id: str,
+    checkpoint_id: str,
+    restore_id: str,
+    resources: List[CheckpointResource],
+) -> str:
+    """Compute cryptographic digest binding the complete restore plan parameters.
+
+    Binds project_id, checkpoint_id, restore_id, and for every target resource:
+    resource_id, resource_type, canonical_relative_path, pre_state_hash, and expected_post_state_hash.
+    """
+    sorted_res = sorted(resources, key=lambda r: r.resource_id)
+    res_parts = [
+        f"{r.resource_id}:{r.resource_type.value}:{r.canonical_relative_path or ''}:{r.pre_state_hash or ''}:{r.expected_post_state_hash or ''}"
+        for r in sorted_res
+    ]
+    raw = f"rollback_approval:{project_id}:{checkpoint_id}:{restore_id}:{'|'.join(res_parts)}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 @dataclass
@@ -236,9 +266,47 @@ class RestorePlan:
     checkpoint_id: str
     project_id: str
     resource_ids: List[str] = field(default_factory=list)
-    force: bool = False
     approval_id: Optional[str] = None
     approval_digest: Optional[str] = None
+
+
+@dataclass
+class RestoreOperation:
+    """Durable journal record for an active or completed restore operation."""
+
+    restore_id: str
+    checkpoint_id: str
+    project_id: str
+    approval_reference: Optional[str] = None
+    status: str = RestoreJournalState.PREPARED.value
+    resource_states: Dict[str, str] = field(default_factory=dict)
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "restore_id": self.restore_id,
+            "checkpoint_id": self.checkpoint_id,
+            "project_id": self.project_id,
+            "approval_reference": self.approval_reference,
+            "status": self.status,
+            "resource_states": self.resource_states,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> RestoreOperation:
+        return cls(
+            restore_id=data["restore_id"],
+            checkpoint_id=data["checkpoint_id"],
+            project_id=data["project_id"],
+            approval_reference=data.get("approval_reference"),
+            status=data.get("status", RestoreJournalState.PREPARED.value),
+            resource_states=data.get("resource_states", {}),
+            created_at=data.get("created_at", time.time()),
+            updated_at=data.get("updated_at", time.time()),
+        )
 
 
 @dataclass

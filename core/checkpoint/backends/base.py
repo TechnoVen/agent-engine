@@ -22,15 +22,19 @@ class BaseCheckpointBackend(ABC):
         workspace_root: Path,
         checkpoint_dir: Path,
     ) -> CheckpointResource:
-        """Create a durable snapshot of the given resource in checkpoint_dir.
+        """Create a durable snapshot of the given resource in checkpoint_dir."""
+        pass
 
-        Args:
-            resource: The resource metadata to capture.
-            workspace_root: Root directory of the workspace/project.
-            checkpoint_dir: Directory where the checkpoint data is stored.
+    @abstractmethod
+    def verify_snapshot_integrity(
+        self,
+        resource: CheckpointResource,
+        checkpoint_dir: Path,
+    ) -> None:
+        """Verify the integrity of snapshot data before attempting any live mutation.
 
-        Returns:
-            The updated CheckpointResource with hashes, storage_reference, and metadata.
+        Raises CheckpointIntegrityError if backup bytes, database snapshot, or git
+        ref has been tampered with or corrupted.
         """
         pass
 
@@ -40,17 +44,10 @@ class BaseCheckpointBackend(ABC):
         resource: CheckpointResource,
         workspace_root: Path,
         checkpoint_dir: Path,
-        force: bool = False,
     ) -> ResourceRestoreResult:
         """Restore the resource from the snapshot in checkpoint_dir.
 
-        Args:
-            resource: The resource to restore.
-            workspace_root: Root directory of the workspace/project.
-            checkpoint_dir: Directory where the checkpoint data is stored.
-            force: If True, overwrite even if live state has diverged.
-
-        Returns:
-            ResourceRestoreResult describing outcome and verification.
+        If live state diverges from expected post state, returns status CONFLICT
+        (ROLLBACK_CONFLICT) without overwriting.
         """
         pass

@@ -38,6 +38,8 @@ import threading
 import time
 from typing import Dict, List, Optional, Set
 
+from core.storage.paths import get_private_data_dir
+
 from core.artifacts.service import ArtifactService
 from core.patch.models import (
     PatchConflictReason,
@@ -148,7 +150,7 @@ class PatchService:
         if self._custom_recovery_dir is not None:
             d = Path(self._custom_recovery_dir)
         else:
-            d = workspace_root / ".ae_patch_recovery"
+            d = get_private_data_dir() / "patch_recovery"
         d.mkdir(parents=True, exist_ok=True)
         try:
             d.chmod(0o700)

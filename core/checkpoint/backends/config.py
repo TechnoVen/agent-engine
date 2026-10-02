@@ -3,10 +3,10 @@
 Configuration checkpoint backend preserving schema versions and SecretReferences without plaintext.
 Part of Milestone R2 Task R2.11.
 
-Invariants:
-- Preserves SecretReference identifiers without leaking plaintext secrets into snapshots.
-- Serializes config dictionary and verifies schema version on restore.
-- Staged atomic write and hash verification.
+Invariants (CTO Review Closure Item 10):
+- Typed serialization: SecretReference preserved as safe dict; live SecretValue raises CheckpointError.
+- Unknown/unserializable sensitive objects fail closed rather than calling repr().
+- Preserves schema versions.
 """
 
 from __future__ import annotations
@@ -15,11 +15,13 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from typing import Any
 import uuid
 
 from core.checkpoint.backends.base import BaseCheckpointBackend
 from core.checkpoint.models import (
     CheckpointError,
+    CheckpointIntegrityError,
     CheckpointResource,
     CheckpointResourceType,
     ResourceRestoreResult,
@@ -27,6 +29,7 @@ from core.checkpoint.models import (
     RestoreVerificationError,
 )
 from core.patch.service import atomic_commit_create
+from core.security.secrets import SecretReference, SecretValue
 
 
 class ConfigCheckpointBackend(BaseCheckpointBackend):
@@ -43,23 +46,44 @@ class ConfigCheckpointBackend(BaseCheckpointBackend):
             )
         return target
 
-    def _sanitize_config_for_snapshot(self, data: dict) -> dict:
-        """Ensure secret references are preserved but no raw tokens are leaked."""
-        sanitized = {}
-        for k, v in data.items():
-            if isinstance(v, dict):
-                # Preserves SecretReference structure: {"secret_id": "...", "provider": "..."}
+    def _sanitize_config_for_snapshot(self, data: Any) -> Any:
+        """Typed serialization preserving SecretReference and rejecting SecretValue (Closure Item 10)."""
+        if isinstance(data, SecretValue):
+            raise CheckpointError(
+                "Cannot snapshot configuration containing live SecretValue; use SecretReference."
+            )
+
+        if isinstance(data, SecretReference):
+            return {
+                "secret_id": data.secret_id,
+                "provider": data.provider,
+                "description": getattr(data, "description", None),
+            }
+
+        if isinstance(data, dict):
+            sanitized = {}
+            for k, v in data.items():
+                if isinstance(v, SecretValue):
+                    raise CheckpointError(f"Config key '{k}' contains live SecretValue.")
                 sanitized[k] = self._sanitize_config_for_snapshot(v)
-            elif isinstance(v, str):
-                # Guard against accidental plaintext secret leakage
-                if any(v.startswith(prefix) for prefix in ("sk-", "ghp_", "xoxb-", "AIza")):
-                    raise CheckpointError(
-                        f"Config key '{k}' contains plaintext secret token. Use SecretReference instead."
-                    )
-                sanitized[k] = v
-            else:
-                sanitized[k] = v
-        return sanitized
+            return sanitized
+
+        if isinstance(data, list):
+            return [self._sanitize_config_for_snapshot(item) for item in data]
+
+        if isinstance(data, (str, int, float, bool, type(None))):
+            if isinstance(data, str) and any(
+                data.startswith(prefix) for prefix in ("sk-", "ghp_", "xoxb-", "AIza")
+            ):
+                raise CheckpointError(
+                    "Config string contains plaintext secret token. Use SecretReference instead."
+                )
+            return data
+
+        # Unknown object -> fail closed rather than calling repr()
+        raise CheckpointError(
+            f"Unsupported configuration value of type {type(data).__name__}; refusing unsafe serialization."
+        )
 
     def create_snapshot(
         self,
@@ -111,6 +135,33 @@ class ConfigCheckpointBackend(BaseCheckpointBackend):
 
         return resource
 
+    def verify_snapshot_integrity(
+        self,
+        resource: CheckpointResource,
+        checkpoint_dir: Path,
+    ) -> None:
+        """Verify config backup exists and hash matches before mutation."""
+        if not resource.exists_pre:
+            return
+
+        if not resource.storage_reference:
+            raise CheckpointIntegrityError(
+                "CHECKPOINT_INTEGRITY_ERROR: missing config storage_reference"
+            )
+
+        backup_file = checkpoint_dir / resource.storage_reference
+        if not backup_file.exists():
+            raise CheckpointIntegrityError(
+                f"CHECKPOINT_INTEGRITY_ERROR: config backup {backup_file} not found"
+            )
+
+        data = backup_file.read_bytes()
+        actual_hash = hashlib.sha256(data).hexdigest()
+        if actual_hash != resource.pre_state_hash:
+            raise CheckpointIntegrityError(
+                f"CHECKPOINT_INTEGRITY_ERROR: config backup for {resource.resource_id} tampered: expected {resource.pre_state_hash}, found {actual_hash}"
+            )
+
     def inspect_conflict(
         self,
         resource: CheckpointResource,
@@ -122,7 +173,11 @@ class ConfigCheckpointBackend(BaseCheckpointBackend):
         target = self._resolve_safe_path(resource.canonical_relative_path, workspace_root)
         if not target.exists():
             if resource.expected_post_state_hash is not None:
-                return True, f"Config {resource.canonical_relative_path} removed externally", None
+                return (
+                    True,
+                    f"ROLLBACK_CONFLICT: Config {resource.canonical_relative_path} removed externally",
+                    None,
+                )
             return False, "", None
 
         curr_bytes = target.read_bytes()
@@ -132,7 +187,7 @@ class ConfigCheckpointBackend(BaseCheckpointBackend):
             if curr_hash != resource.expected_post_state_hash:
                 return (
                     True,
-                    f"Config {resource.canonical_relative_path} diverged: expected {resource.expected_post_state_hash}, found {curr_hash}",
+                    f"ROLLBACK_CONFLICT: Config {resource.canonical_relative_path} diverged: expected {resource.expected_post_state_hash}, found {curr_hash}",
                     curr_hash,
                 )
 
@@ -143,7 +198,6 @@ class ConfigCheckpointBackend(BaseCheckpointBackend):
         resource: CheckpointResource,
         workspace_root: Path,
         checkpoint_dir: Path,
-        force: bool = False,
     ) -> ResourceRestoreResult:
         if not resource.canonical_relative_path:
             return ResourceRestoreResult(
@@ -155,8 +209,12 @@ class ConfigCheckpointBackend(BaseCheckpointBackend):
 
         target = self._resolve_safe_path(resource.canonical_relative_path, workspace_root)
 
+        # 1. Verify backup integrity
+        self.verify_snapshot_integrity(resource, checkpoint_dir)
+
+        # 2. Conflict check
         is_conflict, conflict_reason, curr_hash = self.inspect_conflict(resource, workspace_root)
-        if is_conflict and not force:
+        if is_conflict:
             return ResourceRestoreResult(
                 resource_id=resource.resource_id,
                 resource_type=CheckpointResourceType.CONFIG,
@@ -179,18 +237,7 @@ class ConfigCheckpointBackend(BaseCheckpointBackend):
             )
 
         backup_file = checkpoint_dir / (resource.storage_reference or "")
-        if not backup_file.exists():
-            return ResourceRestoreResult(
-                resource_id=resource.resource_id,
-                resource_type=CheckpointResourceType.CONFIG,
-                status=ResourceRestoreStatus.FAILED,
-                message=f"Config backup {backup_file} not found",
-            )
-
         bck_data = backup_file.read_bytes()
-        bck_hash = hashlib.sha256(bck_data).hexdigest()
-        if bck_hash != resource.pre_state_hash:
-            raise RestoreVerificationError("Corrupted config backup")
 
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp_restore = target.parent / f".tmp_cfg_{resource.resource_id}_{uuid.uuid4().hex[:8]}"

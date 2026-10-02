@@ -562,6 +562,9 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
   depends_on: [R1.10, R2.10]
   evidence:
     - "core/checkpoint/models.py"
+    - "core/storage/paths.py"
+    - "core/storage/__init__.py"
+    - "core/patch/service.py"
     - "core/checkpoint/backends/base.py"
     - "core/checkpoint/backends/file.py"
     - "core/checkpoint/backends/git.py"
@@ -570,16 +573,16 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/checkpoint/service.py"
     - "core/checkpoint/__init__.py"
     - "tests/test_r2_checkpoint_service.py"
-  notes: "S1 — implemented and implementation-tested. Delivered Checkpoint and Rollback Service honoring core invariants: (1) Reversible consequential mutations must create a durable checkpoint before executing; failure blocks mutation fail-closed (CheckpointCreationError). (2) Safe rollback as a consequential operation requiring PolicyEngine authorization or approval token binding (compute_rollback_approval_digest) with single-use atomic consumption. (3) Never rollback over newer human state silently: pre-flight conflict inspection inspects all target resources before modifying any live file, halting with ROLLBACK_CONFLICT unless force=True. (4) Multi-resource backends: File (exact byte snapshot, raw SHA-256, staged atomic commit with renameat2/os.replace, permissions preservation, absence/deletion handling), Git (isolated safety ref refs/ae-checkpoints/<id> via temporary index GIT_INDEX_FILE without touching active branch, index, or remote), Database (SQLite Online Backup API consistency, PRAGMA integrity_check, UnsupportedDatabaseBackendError fail-closed for non-SQLite), Config (schema versioning, SecretReference preservation without plaintext leaks). (5) Hardened storage (.ae_checkpoints/{project_id}/{checkpoint_id}/, mode 0o700/0o600, ID sanitization, excluded from search/context/diagnostics). (6) Audit-safe ledger (CheckpointExecutionRecord) recording hashes/status/IDs only. 23/23 dedicated precision tests passing, 769/769 full regression passing."
+  notes: "S1 — implemented and implementation-tested. Completed R2.11 Final Recovery Closure: (1) Permanently removed public force=True rollback; live divergence unconditionally halts with ROLLBACK_CONFLICT. (2) Relocated checkpoint & patch recovery storage to Agent Engine private root (~/.agent_engine/checkpoints/ and ~/.agent_engine/patch_recovery/, mode 0o700/0o600), guaranteeing sandbox workers with project READ_ONLY access cannot access them. (3) Durable restore operation journal (RestoreOperation: PREPARED, RESTORING, COMPLETED, PARTIAL, CONFLICT, RECOVERY_REQUIRED, FAILED) persisted with fsync before live mutation; restart reconciliation. (4) Immediate pre-mutation resource revalidation with engine locks; truthful partial multi-resource restore reporting (PARTIAL). (5) Tightened compute_rollback_approval_digest binding complete restore plan (project, checkpoint, restore ID, resource IDs, types, paths, pre-state hashes, expected post-state hashes). (6) Checkpoint material integrity verified before mutation; tampered backup raises CheckpointIntegrityError. (7) File permission semantics: stat.S_IMODE(st_mode) / rwx bitmask (0600, 0644, 0755), never blanket chmod; staged atomic commit uses kernel/filesystem-enforced atomic no-clobber. (8) Git bounded scope: only declared/tracked files, never .env, credentials, or untracked files; 0 remote ops. (9) SQLite restore maintenance boundary: exclusive lock, connection quiescing, WAL mode consistency. (10) Typed config serialization: SecretReference preserved, SecretValue forbidden, fail-closed on unknown objects without repr(). 26/26 dedicated precision tests passing, full regression passing."
 ```
 
 ---
 
 ## 6. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `769 passed, 3 warnings in 115.28s` (`uv run pytest`)
-- **R2 Checkpoint and Rollback Suite:** `23 passed in 3.49s` (`uv run pytest tests/test_r2_checkpoint_service.py`)
-- **R2 Safe Staged Patch Application Suite:** `25 passed in 3.32s` (`uv run pytest tests/test_r2_patch_service.py`)
+- **Full Regression Suite:** `772 passed, 3 warnings` (`uv run pytest`)
+- **R2 Checkpoint and Rollback Suite:** `26 passed in 3.35s` (`uv run pytest tests/test_r2_checkpoint_service.py`)
+- **R2 Safe Staged Patch Application Suite:** `25 passed in 2.95s` (`uv run pytest tests/test_r2_patch_service.py`)
 - **R2 Sandbox Resource Limits Suite:** `38 passed in 15.35s` (`uv run pytest tests/test_r2_sandbox_resource_limits.py`)
 - **R2 Sandbox Worker Runtime Suite:** `26 passed in 9.54s` (`uv run pytest tests/test_r2_sandbox_runtime.py`)
 - **R2 Secrets Service & Runtime Injection Suite:** `30 passed in 4.50s` (`uv run pytest tests/test_r2_secrets_service.py`)
