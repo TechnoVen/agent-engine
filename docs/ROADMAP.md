@@ -784,20 +784,27 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
 - **Required Evidence:**
   - `tests/test_r2_checkpoint_service.py` (23 dedicated precision test scenarios covering lifecycle, fail-closed creation, exact byte restore, conflict detection, git safety refs, database integrity, config secret preservation, approval binding, single-use token consumption, multi-resource preflight, partial failure reporting, and hash-only audit ledger records).
 
-### [ ] R2.12 — Diagnostics redaction
+### [x] R2.12 — Diagnostics redaction
 
 - **Migration:** `REFACTOR`
 - **Target release:** `0.5`
-- **Initial maturity:** `S0` unless `docs/STATUS.md` verifies a higher level from legacy work.
+- **Current maturity:** `S1 — Implemented and implementation-tested`
 - **Dependencies:** R2.6
 - **User Story:** As a user, I want diagnostics safe to share so troubleshooting exports never leak secrets or sensitive local paths unnecessarily.
 - **Deliverables:**
-  - Central redaction policy.
-  - Test fixtures for tokens, API keys, credentials and personal file paths.
+  - Central redaction policy in `core/diagnostics/policy.py`.
+  - Multi-layer redaction pipeline in `core/diagnostics/redactor.py`.
+  - Diagnostic bundle exporter in `core/diagnostics/exporter.py`.
+  - Test fixtures for tokens, API keys, credentials, and personal file paths.
 - **Acceptance Criteria:**
-  - [ ] No seeded secret appears in exported diagnostics.
+  - [x] No seeded secret appears in exported diagnostics (0 occurrences in final archive bytes).
+  - [x] Structural value objects isolated (`SecretValue` omitted, `SecretReference` preserved as safe identifier).
+  - [x] Sensitive keys, HTTP headers, and disallowed environment variables scrubbed.
+  - [x] Host paths minimized to `<HOME>`, `<PROJECT>`, `<DATA_DIR>`, `<TEMP>`.
+  - [x] Private storage payloads blocked by default.
+  - [x] Safe object serialization without `repr()`.
 - **Required Evidence:**
-  - Redaction test artifact.
+  - `tests/test_r2_diagnostics_redaction.py` (15/15 dedicated tests passing covering structural value objects, key/header scrubbing, env allowlist, regex heuristics, safe serialization without repr, path minimization, private payload blocking, seeded canary zero-leak verification across zip and tar.gz, unmutated internal storage, and cryptographic manifest verification).
 
 ### [ ] R2.13 — Release artifact trust
 

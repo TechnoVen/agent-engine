@@ -525,4 +525,53 @@ class ApprovalRequest(BaseModel):
   * Ledger (`CheckpointExecutionRecord`): Records IDs, action (`create` / `restore`), status, resource count, resource types, approval token, and duration.
   * Raw file contents, database records, and secrets are strictly excluded from audit records.
 
+---
+
+## 15. Central Diagnostics Redaction & Export Policy (R2.12)
+
+* **Architecture & Egress Boundary Principle:**
+  * Central implementation resides in `core/diagnostics/` (`models.py`, `policy.py`, `redactor.py`, `exporter.py`, `__init__.py`).
+  * Invariant: Internal storage, runtime memory, and persistent audit ledgers remain completely unmutated. Redaction is applied strictly at the egress boundary during diagnostic bundle generation.
+
+* **Multi-Layer Redaction Pipeline:**
+  * **Layer 1: Structural Value Objects:**
+    * `SecretValue` containers are strictly omitted and replaced with redaction placeholders (`[REDACTED_SECRET_VALUE]`), preventing plaintext leakage.
+    * `SecretReference` objects are preserved as safe, non-sensitive public metadata identifiers (`{"secret_reference": {"provider": ..., "name": ..., "scope": ..., "project_id": ...}}`).
+  * **Layer 2: Key-Based and HTTP Header Scrubbing:**
+    * Dictionary keys matching sensitive keywords (`password`, `secret`, `token`, `api_key`, `credential`, `auth_token`, `jwt`, `private_key`, `client_secret`, etc.) have their values redacted.
+    * Standard sensitive HTTP headers (`authorization`, `proxy-authorization`, `cookie`, `set-cookie`, `x-api-key`, `x-ipc-token`, `x-auth-token`) are unconditionally replaced with `***REDACTED***`.
+  * **Layer 3: Environment Variable Allowlist Filtering:**
+    * Environment dumps strictly filter against an explicit allowlist of non-sensitive system properties (`OS`, `PYTHON_VERSION`, `PLATFORM`, `LANG`, etc.).
+    * Any non-allowlisted variable is completely excluded from diagnostics bundles.
+  * **Layer 4: Path Minimization & Heuristic Pattern Scanning:**
+    * Absolute host filesystem paths are minimized into standardized portable placeholders: `<HOME>`, `<PROJECT>`, `<DATA_DIR>`, and `<TEMP>`.
+    * Free-text regex scanning scrubs common secret formats (OpenAI API keys, Anthropic keys, GitHub tokens, Bearer tokens, private key PEM blocks, and URL query parameters containing credentials).
+
+* **Safe Object Serialization (Closure Item 16):**
+    * Unknown or custom objects that do not define a safe serialization method are serialized safely as `{"<unserializable_type>": type(obj).__name__}`.
+    * Invariant: `repr()` or `str()` is never indiscriminately invoked on arbitrary objects, preventing accidental credential leakage from third-party client repr implementations.
+
+* **Default Exclusion of Private Storage Payloads (Closure Item 18):**
+    * Diagnostic exporters enforce a strict blocklist of sensitive internal files:
+      * Master vault encryption keys (`vault.key`, `vault/`)
+      * IPC authentication tokens (`ipc.token`)
+      * Checkpoint snapshots and restore journals (`checkpoints/`)
+      * Patch recovery backups (`patch_recovery/`, `.ae_patch_recovery/`)
+      * SQLite database files (`*.db`, `*.sqlite`, `*.sqlite3`)
+      * Environment configuration secrets (`.env*`)
+      * Private cryptographic keys and certificates (`id_rsa`, `*.pem`, `*.key`)
+    * Exporters reject blocked files fail-closed before bundle packaging.
+
+* **Seeded-Canary Verification:**
+    * Export verification guarantees that seeded canary tokens (`canary-token-*`, `sk-proj-*`) produce exactly 0 occurrences in final exported archive payload bytes across all formats (`.zip`, `.tar.gz`, `.json`).
+
+* **Cryptographic Export Manifest:**
+    * Every export bundle includes a signed `manifest.json` containing:
+      * Unique `bundle_id` and timestamp
+      * Complete sorted list of packaged files (including `manifest.json`)
+      * Total bundle payload byte count
+      * Overall bundle SHA-256 cryptographic digest
+      * Detailed `RedactionReport` summarizing redactions, minimized paths, preserved references, and canary scrub counts.
+
+
 
