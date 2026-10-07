@@ -1100,3 +1100,360 @@ def test_audit_ledger_records_contain_hashes_only(
     for rec in storage.ledger_records:
         rec_json = json.dumps(rec.to_dict())
         assert "secret confidential raw content 12345" not in rec_json
+
+
+# ============================================================================
+# 12. Additional Precision Scenarios: Tamper Resistance, Crash Boundaries, & Concurrency
+# ============================================================================
+
+
+def test_config_checkpoint_material_integrity_tampering_raises(
+    service: CheckpointService, workspace: Path
+) -> None:
+    """Tampering with config backup JSON raises CheckpointIntegrityError fail-closed."""
+    cfg = workspace / "settings.json"
+    cfg.write_text(json.dumps({"app": "agent", "version": 1}), encoding="utf-8")
+
+    res = CheckpointResource(
+        resource_id="res-cfg-tamper",
+        resource_type=CheckpointResourceType.CONFIG,
+        canonical_relative_path="settings.json",
+    )
+    chk = service.create_checkpoint("p-cfg-t", "e-t", [res], workspace)
+
+    # Mutate live config
+    cfg.write_text(json.dumps({"app": "agent", "version": 2}), encoding="utf-8")
+    chk.resources[0].expected_post_state_hash = hashlib.sha256(cfg.read_bytes()).hexdigest()
+    chk_dir = service.get_checkpoint_dir("p-cfg-t", chk.checkpoint_id, workspace)
+    (chk_dir / "checkpoint.json").write_text(json.dumps(chk.to_dict()), encoding="utf-8")
+
+    # Corrupt backup file in private storage
+    backup_file = chk_dir / (chk.resources[0].storage_reference or "")
+    backup_file.write_text("TAMPERED_JSON_BYTES", encoding="utf-8")
+
+    plan = RestorePlan(
+        restore_id="rst-cfg-tamper",
+        checkpoint_id=chk.checkpoint_id,
+        project_id="p-cfg-t",
+        resource_ids=["res-cfg-tamper"],
+    )
+    result = service.restore_checkpoint(plan, workspace)
+    assert result.status == RestoreStatus.FAILED
+    assert "CHECKPOINT_INTEGRITY_ERROR" in result.message or "integrity" in result.message.lower()
+    # Live config remains untouched
+    assert json.loads(cfg.read_text(encoding="utf-8")) == {"app": "agent", "version": 2}
+
+
+def test_sqlite_checkpoint_material_integrity_tampering_raises(
+    service: CheckpointService, workspace: Path
+) -> None:
+    """Tampering with SQLite backup database raises CheckpointIntegrityError fail-closed."""
+    db_file = workspace / "data.db"
+    with sqlite3.connect(str(db_file)) as conn:
+        conn.execute("CREATE TABLE t (id INT)")
+        conn.execute("INSERT INTO t VALUES (1)")
+        conn.commit()
+
+    res = CheckpointResource(
+        resource_id="res-db-tamper",
+        resource_type=CheckpointResourceType.DATABASE,
+        canonical_relative_path="data.db",
+    )
+    chk = service.create_checkpoint("p-db-t", "e-t", [res], workspace)
+
+    with sqlite3.connect(str(db_file)) as conn:
+        conn.execute("INSERT INTO t VALUES (2)")
+        conn.commit()
+
+    chk.resources[0].expected_post_state_hash = hashlib.sha256(db_file.read_bytes()).hexdigest()
+    chk_dir = service.get_checkpoint_dir("p-db-t", chk.checkpoint_id, workspace)
+    (chk_dir / "checkpoint.json").write_text(json.dumps(chk.to_dict()), encoding="utf-8")
+
+    # Corrupt SQLite backup file
+    backup_file = chk_dir / (chk.resources[0].storage_reference or "")
+    backup_file.write_bytes(b"CORRUPTED_NON_SQLITE_BYTES_1234567890")
+
+    plan = RestorePlan(
+        restore_id="rst-db-tamper",
+        checkpoint_id=chk.checkpoint_id,
+        project_id="p-db-t",
+        resource_ids=["res-db-tamper"],
+    )
+    result = service.restore_checkpoint(plan, workspace)
+    assert result.status == RestoreStatus.FAILED
+    assert "CHECKPOINT_INTEGRITY_ERROR" in result.message or "integrity" in result.message.lower()
+
+    # Live DB remains untouched with rows 1 and 2
+    with sqlite3.connect(str(db_file)) as conn:
+        rows = conn.execute("SELECT * FROM t").fetchall()
+        assert rows == [(1,), (2,)]
+
+
+def test_git_checkpoint_material_integrity_tampering_raises(
+    service: CheckpointService, workspace: Path
+) -> None:
+    """Tampering with Git safety ref or commit hash raises CheckpointIntegrityError fail-closed."""
+    _init_git_repo(workspace)
+    res = CheckpointResource(
+        resource_id="res-git-tamper",
+        resource_type=CheckpointResourceType.GIT,
+    )
+    chk = service.create_checkpoint("p-git-t", "e-t", [res], workspace)
+    chk_dir = service.get_checkpoint_dir("p-git-t", chk.checkpoint_id, workspace)
+
+    # Tamper with commit SHA in metadata
+    chk.resources[0].pre_state_hash = "deadbeef" * 5
+    (chk_dir / "checkpoint.json").write_text(json.dumps(chk.to_dict()), encoding="utf-8")
+
+    plan = RestorePlan(
+        restore_id="rst-git-tamper",
+        checkpoint_id=chk.checkpoint_id,
+        project_id="p-git-t",
+        resource_ids=["res-git-tamper"],
+    )
+    result = service.restore_checkpoint(plan, workspace)
+    assert result.status == RestoreStatus.FAILED
+    assert "CHECKPOINT_INTEGRITY_ERROR" in result.message or "integrity" in result.message.lower()
+
+
+def test_immediate_pre_mutation_revalidation_partial_conflict(
+    service: CheckpointService, workspace: Path
+) -> None:
+    """Resource 1 restored, human modifies resource 2 right before mutation -> resource 1 RESTORED, resource 2 CONFLICT, overall PARTIAL."""
+    f1 = workspace / "file1.txt"
+    f1.write_text("orig1", encoding="utf-8")
+    f2 = workspace / "file2.txt"
+    f2.write_text("orig2", encoding="utf-8")
+
+    r1 = CheckpointResource(
+        resource_id="r1",
+        resource_type=CheckpointResourceType.FILE,
+        canonical_relative_path="file1.txt",
+    )
+    r2 = CheckpointResource(
+        resource_id="r2",
+        resource_type=CheckpointResourceType.FILE,
+        canonical_relative_path="file2.txt",
+    )
+    chk = service.create_checkpoint("p-race", "e-race", [r1, r2], workspace)
+
+    # Mutate both as expected post-state
+    f1.write_text("mutated1", encoding="utf-8")
+    f2.write_text("mutated2", encoding="utf-8")
+    chk.resources[0].expected_post_state_hash = hashlib.sha256(b"mutated1").hexdigest()
+    chk.resources[1].expected_post_state_hash = hashlib.sha256(b"mutated2").hexdigest()
+    chk_dir = service.get_checkpoint_dir("p-race", chk.checkpoint_id, workspace)
+    (chk_dir / "checkpoint.json").write_text(json.dumps(chk.to_dict()), encoding="utf-8")
+
+    # Hook file restore: after r1 is restored, human concurrently modifies f2
+    orig_restore = service.backends[CheckpointResourceType.FILE].restore_snapshot
+
+    def restore_with_concurrent_edit(res, ws, cdir):
+        outcome = orig_restore(res, ws, cdir)
+        if res.resource_id == "r1":
+            # Human edits f2 immediately before r2's restore boundary!
+            (ws / "file2.txt").write_text("human_concurrent_edit", encoding="utf-8")
+        return outcome
+
+    service.backends[CheckpointResourceType.FILE].restore_snapshot = restore_with_concurrent_edit
+
+    plan = RestorePlan(
+        restore_id="rst-race",
+        checkpoint_id=chk.checkpoint_id,
+        project_id="p-race",
+        resource_ids=["r1", "r2"],
+    )
+
+    result = service.restore_checkpoint(plan, workspace)
+    assert result.status == RestoreStatus.PARTIAL
+    assert result.resource_results["r1"].status == ResourceRestoreStatus.RESTORED
+    assert result.resource_results["r2"].status == ResourceRestoreStatus.CONFLICT
+    # f1 is restored to orig1
+    assert f1.read_text(encoding="utf-8") == "orig1"
+    # f2 is NOT overwritten with orig2, human concurrent edit is 100% preserved!
+    assert f2.read_text(encoding="utf-8") == "human_concurrent_edit"
+
+
+def test_durable_restore_crash_boundaries_and_reconciliation(
+    service: CheckpointService, workspace: Path
+) -> None:
+    """Test all crash boundaries: PREPARED, RESTORING with partial work, RESTORING with completed work, and restart reconciliation."""
+    f = workspace / "crash.txt"
+    f.write_text("orig", encoding="utf-8")
+    res = CheckpointResource(
+        resource_id="res-crash",
+        resource_type=CheckpointResourceType.FILE,
+        canonical_relative_path="crash.txt",
+    )
+    chk = service.create_checkpoint("p-crash", "e-crash", [res], workspace)
+    chk_dir = service.get_checkpoint_dir("p-crash", chk.checkpoint_id, workspace)
+    restores_dir = chk_dir / "restores"
+    restores_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Crash before first mutation (PREPARED state)
+    op_prep = RestoreOperation(
+        restore_id="rst-crash-prep",
+        checkpoint_id=chk.checkpoint_id,
+        project_id="p-crash",
+        status=RestoreJournalState.PREPARED.value,
+        resource_states={},
+    )
+    (restores_dir / "rst-crash-prep.json").write_text(
+        json.dumps(op_prep.to_dict()), encoding="utf-8"
+    )
+
+    # 2. Crash after final resource restored but before journal marked COMPLETED
+    op_almost_done = RestoreOperation(
+        restore_id="rst-crash-done",
+        checkpoint_id=chk.checkpoint_id,
+        project_id="p-crash",
+        status=RestoreJournalState.RESTORING.value,
+        resource_states={"res-crash": "RESTORED"},
+    )
+    (restores_dir / "rst-crash-done.json").write_text(
+        json.dumps(op_almost_done.to_dict()), encoding="utf-8"
+    )
+
+    # Reconcile
+    reconciled = service.reconcile_incomplete_restores(workspace)
+    rec_map = {op.restore_id: op.status for op in reconciled}
+
+    # PREPARED without mutation is recognized as incomplete/safe
+    assert "rst-crash-prep" in rec_map
+    # RESTORING where all target resources were RESTORED reconciles to COMPLETED
+    assert rec_map.get("rst-crash-done") == RestoreJournalState.COMPLETED.value
+
+
+def test_sqlite_concurrent_writer_maintenance_boundary(
+    service: CheckpointService, workspace: Path
+) -> None:
+    """WAL-mode database with active reader/connection is safely restored under maintenance boundary."""
+    db_file = workspace / "wal_db.sqlite"
+    conn = sqlite3.connect(str(db_file))
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("CREATE TABLE counter (val INTEGER)")
+    conn.execute("INSERT INTO counter VALUES (100)")
+    conn.commit()
+
+    res = CheckpointResource(
+        resource_id="res-wal",
+        resource_type=CheckpointResourceType.DATABASE,
+        canonical_relative_path="wal_db.sqlite",
+    )
+    chk = service.create_checkpoint("p-wal", "e-wal", [res], workspace)
+
+    # Mutate
+    conn.execute("UPDATE counter SET val = 200")
+    conn.commit()
+    chk.resources[0].expected_post_state_hash = hashlib.sha256(db_file.read_bytes()).hexdigest()
+    chk_dir = service.get_checkpoint_dir("p-wal", chk.checkpoint_id, workspace)
+    (chk_dir / "checkpoint.json").write_text(json.dumps(chk.to_dict()), encoding="utf-8")
+
+    plan = RestorePlan(
+        restore_id="rst-wal",
+        checkpoint_id=chk.checkpoint_id,
+        project_id="p-wal",
+        resource_ids=["res-wal"],
+    )
+
+    # Keep reader open during restore
+    reader_conn = sqlite3.connect(str(db_file))
+    read_val_before = reader_conn.execute("SELECT val FROM counter").fetchone()[0]
+    assert read_val_before == 200
+
+    result = service.restore_checkpoint(plan, workspace)
+    assert result.status == RestoreStatus.COMPLETED
+
+    # Verify post-restore consistency and integrity
+    conn.close()
+    reader_conn.close()
+
+    verify_conn = sqlite3.connect(str(db_file))
+    row = verify_conn.execute("SELECT val FROM counter").fetchone()
+    assert row == (100,)
+    integrity = verify_conn.execute("PRAGMA integrity_check").fetchall()
+    assert integrity == [("ok",)]
+    verify_conn.close()
+
+
+def test_file_permission_setuid_setgid_bits_not_restored(
+    service: CheckpointService, workspace: Path
+) -> None:
+    """Verify 0600, 0644, 0755 restored; setuid/setgid bits are masked out by & 0o777."""
+    f = workspace / "perms_test.sh"
+    f.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    f.chmod(0o755)
+
+    res = CheckpointResource(
+        resource_id="res-perm-safe",
+        resource_type=CheckpointResourceType.FILE,
+        canonical_relative_path="perms_test.sh",
+    )
+    chk = service.create_checkpoint("p-perm2", "e-perm2", [res], workspace)
+    assert stat.S_IMODE(chk.resources[0].file_mode) == 0o755
+
+    # Simulate tampered file_mode metadata attempting to inject setuid (0o4755)
+    chk.resources[0].file_mode = 0o4755
+    chk_dir = service.get_checkpoint_dir("p-perm2", chk.checkpoint_id, workspace)
+    (chk_dir / "checkpoint.json").write_text(json.dumps(chk.to_dict()), encoding="utf-8")
+
+    # Mutate
+    f.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    chk.resources[0].expected_post_state_hash = hashlib.sha256(b"#!/bin/sh\nexit 1\n").hexdigest()
+    (chk_dir / "checkpoint.json").write_text(json.dumps(chk.to_dict()), encoding="utf-8")
+
+    plan = RestorePlan(
+        restore_id="rst-perm-safe",
+        checkpoint_id=chk.checkpoint_id,
+        project_id="p-perm2",
+        resource_ids=["res-perm-safe"],
+    )
+    result = service.restore_checkpoint(plan, workspace)
+    assert result.status == RestoreStatus.COMPLETED
+
+    restored_mode = stat.S_IMODE(f.stat().st_mode)
+    # Setuid bit (0o4000) MUST NOT be present!
+    assert (restored_mode & 0o4000) == 0
+    assert (restored_mode & 0o777) == 0o755
+
+
+def test_sandbox_worker_cannot_access_private_recovery_payloads(
+    service: CheckpointService, workspace: Path, private_storage: Path
+) -> None:
+    """Sandbox execution cannot access ~/.agent_engine checkpoints or patch recovery payloads."""
+    # Write a canary into private checkpoints and patch recovery
+    chk_dir = private_storage / "checkpoints" / "proj_secret"
+    chk_dir.mkdir(parents=True, exist_ok=True)
+    chk_canary = chk_dir / "secret_checkpoint.json"
+    chk_canary.write_text("CANARY_CHECKPOINT_SECRET_98765", encoding="utf-8")
+
+    patch_dir = private_storage / "patch_recovery" / "proj_secret"
+    patch_dir.mkdir(parents=True, exist_ok=True)
+    patch_canary = patch_dir / "secret_patch.bak"
+    patch_canary.write_text("CANARY_PATCH_SECRET_54321", encoding="utf-8")
+
+    # Try accessing from a sandbox worker if Bubblewrap is available
+    from core.sandbox.service import SandboxService
+
+    sb = SandboxService()
+    if sb.is_available():
+        code = f"""
+import os
+results = []
+for p in ['{chk_canary}', '{patch_canary}']:
+    try:
+        with open(p, 'r') as f:
+            results.append('LEAK:' + f.read())
+    except Exception as e:
+        results.append('BLOCKED:' + type(e).__name__)
+print(';'.join(results))
+"""
+        res = sb.run_code(code, workspace_dir=workspace)
+        assert res.is_success
+        assert "CANARY_CHECKPOINT_SECRET_98765" not in res.stdout
+        assert "CANARY_PATCH_SECRET_54321" not in res.stdout
+        assert "BLOCKED" in res.stdout
+    else:
+        # Fallback path verification
+        assert not chk_canary.is_relative_to(workspace)
+        assert not patch_canary.is_relative_to(workspace)

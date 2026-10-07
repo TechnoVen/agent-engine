@@ -441,7 +441,7 @@ class ApprovalRequest(BaseModel):
   * Replay protection: An approval token consumed once cannot authorize any subsequent patch.
 
 * **Hardened Operation-Scoped Recovery Backups (Closure Item 4):**
-  * Stored in private, project-scoped directory: `.ae_patch_recovery/backups/{sanitized_project_id}/{operation_id}.bak`.
+  * Stored in private, project-scoped directory: `~/.agent_engine/patch_recovery/backups/{sanitized_project_id}/{operation_id}.bak`.
   * Created with exclusive creation mode (`"xb"` / `O_EXCL | O_CREAT`), preventing silent overwriting.
   * Filesystem permissions restricted to directory `0o700` and files `0o600`.
   * Audit ledger and public API expose only opaque reference `bak:{project_id}:{operation_id}`, never host machine paths.

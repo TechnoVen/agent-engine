@@ -235,9 +235,11 @@ class FileCheckpointBackend(BaseCheckpointBackend):
                 f.flush()
                 os.fsync(f.fileno())
 
-            # Apply exact original file permissions (e.g. 0600, 0644, 0755)
+            # Apply exact original file permissions (e.g. 0600, 0644, 0755), masking out privileged bits
             file_perm = (
-                stat.S_IMODE(resource.file_mode) if resource.file_mode is not None else 0o644
+                (stat.S_IMODE(resource.file_mode) & 0o777)
+                if resource.file_mode is not None
+                else 0o644
             )
             os.chmod(tmp_restore, file_perm)
 

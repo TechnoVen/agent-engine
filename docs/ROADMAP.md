@@ -782,13 +782,13 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
   - [x] Pre-flight conflict check halts with ROLLBACK_CONFLICT rather than silently overwriting newer human edits.
   - [x] Checkpoint failure blocks consequential mutation fail-closed.
 - **Required Evidence:**
-  - `tests/test_r2_checkpoint_service.py` (23 dedicated precision test scenarios covering lifecycle, fail-closed creation, exact byte restore, conflict detection, git safety refs, database integrity, config secret preservation, approval binding, single-use token consumption, multi-resource preflight, partial failure reporting, and hash-only audit ledger records).
+  - `tests/test_r2_checkpoint_service.py` (34 dedicated precision test scenarios covering lifecycle, fail-closed creation, exact byte restore, conflict detection, git safety refs and bounded scope, database integrity and WAL maintenance boundary, config secret preservation and typed serialization, approval binding, single-use token consumption, multi-resource preflight, immediate pre-mutation revalidation, partial failure reporting, permission masking, crash recovery reconciliation, sandbox isolation, and hash-only audit ledger records).
 
-### [x] R2.12 — Diagnostics redaction
+### [ ] R2.12 — Diagnostics redaction (Provisional / Frozen)
 
 - **Migration:** `REFACTOR`
 - **Target release:** `0.5`
-- **Current maturity:** `S1 — Implemented and implementation-tested`
+- **Current maturity:** `S0 (Provisional implementation preserved; frozen pending R2.11 sign-off)`
 - **Dependencies:** R2.6
 - **User Story:** As a user, I want diagnostics safe to share so troubleshooting exports never leak secrets or sensitive local paths unnecessarily.
 - **Deliverables:**
@@ -797,14 +797,14 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
   - Diagnostic bundle exporter in `core/diagnostics/exporter.py`.
   - Test fixtures for tokens, API keys, credentials, and personal file paths.
 - **Acceptance Criteria:**
-  - [x] No seeded secret appears in exported diagnostics (0 occurrences in final archive bytes).
-  - [x] Structural value objects isolated (`SecretValue` omitted, `SecretReference` preserved as safe identifier).
-  - [x] Sensitive keys, HTTP headers, and disallowed environment variables scrubbed.
-  - [x] Host paths minimized to `<HOME>`, `<PROJECT>`, `<DATA_DIR>`, `<TEMP>`.
-  - [x] Private storage payloads blocked by default.
-  - [x] Safe object serialization without `repr()`.
+  - [ ] No seeded secret appears in exported diagnostics (0 occurrences in final archive bytes).
+  - [ ] Structural value objects isolated (`SecretValue` omitted, `SecretReference` preserved as safe identifier).
+  - [ ] Sensitive keys, HTTP headers, and disallowed environment variables scrubbed.
+  - [ ] Host paths minimized to `<HOME>`, `<PROJECT>`, `<DATA_DIR>`, `<TEMP>`.
+  - [ ] Private storage payloads blocked by default.
+  - [ ] Safe object serialization without `repr()`.
 - **Required Evidence:**
-  - `tests/test_r2_diagnostics_redaction.py` (15/15 dedicated tests passing covering structural value objects, key/header scrubbing, env allowlist, regex heuristics, safe serialization without repr, path minimization, private payload blocking, seeded canary zero-leak verification across zip and tar.gz, unmutated internal storage, and cryptographic manifest verification).
+  - `tests/test_r2_diagnostics_redaction.py` (15/15 tests passing; code preserved and frozen per CTO directive).
 
 ### [ ] R2.13 — Release artifact trust
 

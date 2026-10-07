@@ -123,6 +123,7 @@ class GitCheckpointBackend(BaseCheckpointBackend):
                 "branch": active_branch,
                 "tree_sha": tree_sha,
                 "ref": ref_name,
+                "commit_sha": commit_sha,
                 "declared_paths": declared_paths,
             }
 
@@ -146,6 +147,16 @@ class GitCheckpointBackend(BaseCheckpointBackend):
         if not commit_sha or not ref_name:
             raise CheckpointIntegrityError(
                 "CHECKPOINT_INTEGRITY_ERROR: missing git commit sha or ref"
+            )
+        expected_sha = resource.metadata.get("commit_sha")
+        if expected_sha and expected_sha != commit_sha:
+            raise CheckpointIntegrityError(
+                f"CHECKPOINT_INTEGRITY_ERROR: git commit SHA tampered: expected {expected_sha}, found {commit_sha}"
+            )
+        expected_ref = resource.metadata.get("ref")
+        if expected_ref and expected_ref != ref_name:
+            raise CheckpointIntegrityError(
+                f"CHECKPOINT_INTEGRITY_ERROR: git ref name tampered: expected {expected_ref}, found {ref_name}"
             )
 
     def inspect_conflict(

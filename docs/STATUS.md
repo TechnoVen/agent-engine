@@ -573,11 +573,11 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/checkpoint/service.py"
     - "core/checkpoint/__init__.py"
     - "tests/test_r2_checkpoint_service.py"
-  notes: "S1 — implemented and implementation-tested. Completed R2.11 Final Recovery Closure: (1) Permanently removed public force=True rollback; live divergence unconditionally halts with ROLLBACK_CONFLICT. (2) Relocated checkpoint & patch recovery storage to Agent Engine private root (~/.agent_engine/checkpoints/ and ~/.agent_engine/patch_recovery/, mode 0o700/0o600), guaranteeing sandbox workers with project READ_ONLY access cannot access them. (3) Durable restore operation journal (RestoreOperation: PREPARED, RESTORING, COMPLETED, PARTIAL, CONFLICT, RECOVERY_REQUIRED, FAILED) persisted with fsync before live mutation; restart reconciliation. (4) Immediate pre-mutation resource revalidation with engine locks; truthful partial multi-resource restore reporting (PARTIAL). (5) Tightened compute_rollback_approval_digest binding complete restore plan (project, checkpoint, restore ID, resource IDs, types, paths, pre-state hashes, expected post-state hashes). (6) Checkpoint material integrity verified before mutation; tampered backup raises CheckpointIntegrityError. (7) File permission semantics: stat.S_IMODE(st_mode) / rwx bitmask (0600, 0644, 0755), never blanket chmod; staged atomic commit uses kernel/filesystem-enforced atomic no-clobber. (8) Git bounded scope: only declared/tracked files, never .env, credentials, or untracked files; 0 remote ops. (9) SQLite restore maintenance boundary: exclusive lock, connection quiescing, WAL mode consistency. (10) Typed config serialization: SecretReference preserved, SecretValue forbidden, fail-closed on unknown objects without repr(). 26/26 dedicated precision tests passing, full regression passing."
+  notes: "S1 — implemented and implementation-tested. Completed R2.11 Final Recovery Closure: (1) Permanently removed public force=True rollback; live divergence unconditionally halts with ROLLBACK_CONFLICT. (2) Relocated checkpoint & patch recovery storage to Agent Engine private root (~/.agent_engine/checkpoints/ and ~/.agent_engine/patch_recovery/, mode 0o700/0o600), guaranteeing sandbox workers with project READ_ONLY access cannot access them. (3) Durable restore operation journal (RestoreOperation: PREPARED, RESTORING, COMPLETED, PARTIAL, CONFLICT, RECOVERY_REQUIRED, FAILED) persisted with fsync before live mutation; restart reconciliation. (4) Immediate pre-mutation resource revalidation with engine locks; truthful partial multi-resource restore reporting (PARTIAL). (5) Tightened compute_rollback_approval_digest binding complete restore plan (project, checkpoint, restore ID, resource IDs, types, paths, pre-state hashes, expected post-state hashes). (6) Checkpoint material integrity verified before mutation; tampered backup raises CheckpointIntegrityError (tested across file, config, SQLite, and Git). (7) File permission semantics: stat.S_IMODE(st_mode) & 0o777 bitmask (0600, 0644, 0755), never blanket chmod; privileged setuid/setgid bits strictly masked out; staged atomic commit uses kernel/filesystem-enforced atomic no-clobber. (8) Git bounded scope: only declared/tracked files, never .env, credentials, or untracked files; 0 remote ops. (9) SQLite restore maintenance boundary: exclusive lock, connection quiescing, WAL mode consistency. (10) Typed config serialization: SecretReference preserved, SecretValue forbidden, fail-closed on unknown objects without repr(). 34/34 dedicated precision tests passing, full regression passing."
 - id: R2.12
   title: "Diagnostics redaction"
-  task_status: done
-  capability_maturity: S1
+  task_status: in_progress
+  capability_maturity: S0 (provisional code frozen pending R2.11 sign-off)
   migration: REFACTOR
   owner: "Security & Control Plane Architecture"
   depends_on: [R2.6]
@@ -588,25 +588,25 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/diagnostics/exporter.py"
     - "core/diagnostics/__init__.py"
     - "tests/test_r2_diagnostics_redaction.py"
-  notes: "S1 — implemented and implementation-tested. Delivered Central Diagnostics Redaction & Export Policy subsystem: (1) Invariant: internal raw storage and persistent audit ledger unmutated; redaction applied strictly at egress boundary. (2) Layer 1 Structural Value Objects: SecretValue omitted without revealing plaintext; SecretReference preserved as safe structured public metadata identifier. (3) Layer 2 Key-Based & Header Scrubbing: sensitive keys (password, token, secret, api_key, credential, auth_token, jwt, etc.) and headers (authorization, cookie, x-api-key, x-ipc-token) replaced with ***REDACTED***. (4) Layer 3 Environment Variable Allowlist: only explicit allowlisted system properties exported; disallowed variables scrubbed. (5) Layer 4 Path Minimization & Heuristic Regex Patterns: host paths minimized to <HOME>, <PROJECT>, <DATA_DIR>, <TEMP>; regex scanning for provider API keys, Bearer tokens, PEM blocks, and URL query tokens. (6) Safe object serialization: unknown objects serialized without calling repr() to prevent third-party credential leakage. (7) Default exclusion of private storage payloads (vault.key, ipc.token, checkpoints, patch recovery backups, databases, .env files). (8) Seeded-canary verification: guaranteed 0 occurrences of canary secrets in exported zip, tar.gz, and json payloads. (9) Cryptographic export manifest (ExportManifest with bundle SHA-256, files list, total bytes, and RedactionReport). 15/15 dedicated tests passing, 787/787 full suite passing."
+  notes: "Provisional implementation preserved and frozen per CTO directive. 15/15 tests passing, but task remains unclosed until R2.11 is formally approved."
 ```
 
 ---
 
 ## 6. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `787 passed, 3 warnings in 106.95s` (`uv run pytest`)
-- **R2 Diagnostics Redaction Suite:** `15 passed in 3.29s` (`uv run pytest tests/test_r2_diagnostics_redaction.py`)
-- **R2 Checkpoint and Rollback Suite:** `26 passed in 3.35s` (`uv run pytest tests/test_r2_checkpoint_service.py`)
-- **R2 Safe Staged Patch Application Suite:** `25 passed in 2.95s` (`uv run pytest tests/test_r2_patch_service.py`)
-- **R2 Sandbox Resource Limits Suite:** `38 passed in 15.35s` (`uv run pytest tests/test_r2_sandbox_resource_limits.py`)
+- **Full Regression Suite:** `795 passed, 3 warnings in 130.17s` (`uv run pytest`)
+- **R2 Checkpoint and Rollback Suite:** `34 passed in 3.50s` (`uv run pytest tests/test_r2_checkpoint_service.py`)
+- **R2 Diagnostics Redaction Suite:** `15 passed in 2.84s` (`uv run pytest tests/test_r2_diagnostics_redaction.py` — *provisional / frozen*)
+- **R2 Safe Staged Patch Application Suite:** `25 passed in 2.85s` (`uv run pytest tests/test_r2_patch_service.py`)
+- **R2 Sandbox Resource Limits Suite:** `38 passed in 14.69s` (`uv run pytest tests/test_r2_sandbox_resource_limits.py`)
 - **R2 Sandbox Worker Runtime Suite:** `26 passed in 9.54s` (`uv run pytest tests/test_r2_sandbox_runtime.py`)
 - **R2 Secrets Service & Runtime Injection Suite:** `30 passed in 4.50s` (`uv run pytest tests/test_r2_secrets_service.py`)
 - **R2 Prompt-Injection & Untrusted Content Suite:** `26 passed in 3.14s` (`uv run pytest tests/test_r2_prompt_injection.py`)
 - **R2 Canonical Workspace Paths Suite:** `24 passed in 2.90s` (`uv run pytest tests/test_r2_workspace_paths.py`)
 - **R2 Policy & Exact-Operation Approvals Suite:** `33 passed in 4.26s` (`uv run pytest tests/test_r2_policy_and_approvals.py`)
 - **R2 IPC Authentication Suite:** `14 passed in 7.83s` (`uv run pytest tests/test_r2_ipc_authentication.py`)
-- **Combined R2 Security Verification:** `254 passed in 57.62s` across 11 security suites
+- **Combined R2 Security Verification:** `262 passed in 58.12s` across 11 security suites
 - **Static Code Analysis & Formatting:**
   - `uv run ruff check`: passed (`All checks passed!`)
   - `uv run ruff format --check`: passed (`256 files already formatted`)
