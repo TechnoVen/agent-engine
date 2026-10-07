@@ -4,36 +4,34 @@ Canonical Model Data Structures and Capability Schemas for Agent Engine.
 Part of Milestone R3 Task R3.2 (Model Capability Registry).
 
 Design Invariants:
-1. Scoped Canonical Identity: Exactly formatted as 'provider_id:model_id'.
-2. 3-Valued Logic: Capabilities use TriStateBool (TRUE, FALSE, UNKNOWN).
-   CRITICAL: UNKNOWN cannot satisfy hard requirements.
-3. Decoupled from Provider Transport: Model capabilities describe intelligence properties,
-   context windows, pricing, latency, and hardware constraints, strictly separated from
-   underlying HTTP/network adapter lifecycle.
-4. Comprehensive Dimensions: Reasoning, coding, vision, tools, structured output,
-   embeddings, streaming, input/output/total context tokens, price, latency, privacy, hardware.
-5. Explainable Eligibility: ModelCandidate records deterministic rejection reasons when filtered.
+1. Structured Model Identity: ModelIdentity(provider_id, model_id) avoids delimiter parsing ambiguities.
+   Versioned serialization (v1:provider:model) supports colons, slashes, spaces, and Unicode.
+2. 3-Valued Logic: Capabilities and privacy facts use TriStateBool (TRUE, FALSE, UNKNOWN).
+   UNKNOWN cannot satisfy hard requirements.
+3. Provenance Precedence: USER_OVERRIDE (4) > LOCAL_INSPECTED (3) > REMOTE_DISCOVERY (2) > BUILTIN (1).
+   Field-level provenance is preserved and never converted to provider-certified truth.
+4. Latency Separation: Catalog baseline classification is strictly preserved separately from live telemetry.
+5. Pricing Discipline: Unit-explicit (PER_1M_TOKENS) and time-aware; missing pricing is UNKNOWN, never zero.
+6. Non-Routing Candidate Evaluation: Eligibility + explainable rejection reasons without premature ranking.
 """
 
 from __future__ import annotations
 
 from enum import Enum
-import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
+import urllib.parse
 
 from pydantic import BaseModel, Field, field_validator
 
-_SCOPED_ID_PATTERN = re.compile(r"^[a-z0-9_\-]+:[a-zA-Z0-9_\.\-:/]+$")
-
 
 class TriStateBool(str, Enum):
-    """3-Valued logic for model capabilities.
+    """3-Valued logic for model capabilities and privacy facts.
 
     Invariants:
-    - TRUE: Capability is confirmed supported.
-    - FALSE: Capability is confirmed unsupported.
-    - UNKNOWN: Capability status is unverified; CANNOT satisfy hard requirements.
+    - TRUE: Confirmed supported / true.
+    - FALSE: Confirmed unsupported / false.
+    - UNKNOWN: Unverified or indeterminate; CANNOT satisfy hard requirements.
     """
 
     TRUE = "true"
@@ -41,21 +39,29 @@ class TriStateBool(str, Enum):
     UNKNOWN = "unknown"
 
     @classmethod
-    def from_bool(cls, val: Optional[bool]) -> TriStateBool:
-        if val is True:
+    def from_bool(cls, val: Optional[Union[bool, TriStateBool]]) -> TriStateBool:
+        if val is True or val == TriStateBool.TRUE:
             return cls.TRUE
-        if val is False:
+        if val is False or val == TriStateBool.FALSE:
             return cls.FALSE
         return cls.UNKNOWN
 
     def satisfies(self, required: bool) -> bool:
-        """Check if this capability state satisfies a requirement.
+        """Check if this capability/fact satisfies a requirement.
 
         UNKNOWN fails hard requirements (required=True).
         """
         if required:
             return self == TriStateBool.TRUE
         return True
+
+
+class ExecutionLocation(str, Enum):
+    """Execution location of model inference."""
+
+    LOCAL = "local"
+    REMOTE = "remote"
+    UNKNOWN = "unknown"
 
 
 class ProvenanceType(str, Enum):
@@ -81,16 +87,94 @@ class ProvenanceType(str, Enum):
 
 
 class LatencyClass(str, Enum):
-    """Categorical latency classification for routing heuristics."""
+    """Categorical latency classification for model catalog baselines."""
 
     FAST = "fast"  # < 1000ms TTFT
     MEDIUM = "medium"  # 1000ms - 3000ms
     SLOW = "slow"  # 3000ms - 8000ms
     REASONING = "reasoning"  # Deep thinking / iterative reasoning models (> 8000ms)
+    UNKNOWN = "unknown"
+
+
+class PriceUnit(str, Enum):
+    """Standardized price unit."""
+
+    PER_1M_TOKENS = "per_1m_tokens"
+    PER_1K_TOKENS = "per_1k_tokens"
+
+
+class PriceDirection(str, Enum):
+    """Token price direction."""
+
+    INPUT = "input"
+    OUTPUT = "output"
+
+
+class TokenPrice(BaseModel):
+    """Unit-explicit and time-aware token price."""
+
+    amount: float  # Exactly 0.0 means free; missing price is represented by None profile
+    currency: str = "USD"
+    unit: PriceUnit = PriceUnit.PER_1M_TOKENS
+    direction: PriceDirection
+    source: ProvenanceType = ProvenanceType.BUILTIN
+    effective_at: float = Field(default_factory=time.time)
+
+
+class ObservedLatencyMetrics(BaseModel):
+    """Live observed telemetry metrics separate from catalog baseline classification."""
+
+    p50_ms: Optional[float] = None
+    p90_ms: Optional[float] = None
+    p99_ms: Optional[float] = None
+    last_observed_ms: Optional[float] = None
+    sample_count: int = 0
+    observed_at: Optional[float] = None
+
+
+class LatencyProfile(BaseModel):
+    """Latency representation keeping static catalog baseline separate from live telemetry."""
+
+    catalog_latency_class: LatencyClass = LatencyClass.MEDIUM
+    catalog_latency_ms: Optional[float] = None
+    observed_metrics: Optional[ObservedLatencyMetrics] = None
+
+    def __init__(
+        self,
+        latency_class: Optional[LatencyClass] = None,
+        catalog_latency_ms: Optional[float] = None,
+        **data: Any,
+    ):
+        if latency_class is not None and "catalog_latency_class" not in data:
+            data["catalog_latency_class"] = latency_class
+        if catalog_latency_ms is not None:
+            data["catalog_latency_ms"] = catalog_latency_ms
+        super().__init__(**data)
+
+    @property
+    def latency_class(self) -> LatencyClass:
+        """Catalog latency class preserved without destructive live mutation."""
+        return self.catalog_latency_class
+
+    @property
+    def effective_latency_ms(self) -> Optional[float]:
+        """Return observed latency if available, else catalog baseline."""
+        if self.observed_metrics and self.observed_metrics.last_observed_ms is not None:
+            return self.observed_metrics.last_observed_ms
+        return self.catalog_latency_ms
+
+
+class CapabilityFact(BaseModel):
+    """Fine-grained capability fact preserving explicit provenance."""
+
+    value: TriStateBool = TriStateBool.UNKNOWN
+    source: ProvenanceType = ProvenanceType.BUILTIN
+    updated_at: float = Field(default_factory=time.time)
+    verified: bool = False
 
 
 class ModelCapabilities(BaseModel):
-    """Fine-grained capability dimensions evaluated with 3-valued logic."""
+    """Fine-grained capability dimensions evaluated with 3-valued logic and per-field provenance."""
 
     reasoning: TriStateBool = TriStateBool.UNKNOWN
     coding: TriStateBool = TriStateBool.UNKNOWN
@@ -98,8 +182,41 @@ class ModelCapabilities(BaseModel):
     tools: TriStateBool = TriStateBool.UNKNOWN
     structured_output: TriStateBool = TriStateBool.UNKNOWN
     embeddings: TriStateBool = TriStateBool.UNKNOWN
-    streaming: TriStateBool = TriStateBool.TRUE
+    streaming: TriStateBool = TriStateBool.UNKNOWN
     custom_capabilities: Dict[str, Any] = Field(default_factory=dict)
+    facts: Dict[str, CapabilityFact] = Field(default_factory=dict)
+
+    def get_fact(self, capability_name: str) -> CapabilityFact:
+        """Retrieve capability fact with provenance metadata."""
+        if capability_name in self.facts:
+            return self.facts[capability_name]
+        val = getattr(self, capability_name, None)
+        if isinstance(val, TriStateBool):
+            return CapabilityFact(value=val, source=ProvenanceType.BUILTIN)
+        return CapabilityFact(value=TriStateBool.UNKNOWN, source=ProvenanceType.BUILTIN)
+
+    def set_fact(
+        self,
+        capability_name: str,
+        value: TriStateBool,
+        source: ProvenanceType,
+        verified: bool = False,
+    ) -> None:
+        """Set capability value and record its provenance."""
+        if hasattr(self, capability_name) and capability_name not in (
+            "custom_capabilities",
+            "facts",
+        ):
+            setattr(self, capability_name, value)
+        else:
+            self.custom_capabilities[capability_name] = value
+
+        self.facts[capability_name] = CapabilityFact(
+            value=value,
+            source=source,
+            updated_at=time.time(),
+            verified=verified,
+        )
 
     def satisfies_requirement(
         self, capability_name: str, required_value: bool
@@ -145,43 +262,182 @@ class HardwareRequirements(BaseModel):
 
 
 class PrivacyProfile(BaseModel):
-    """Privacy and data sovereignty properties."""
+    """Privacy and data sovereignty properties with 3-valued truth discipline."""
 
-    is_local: bool = False
-    data_leaves_device: bool = True
-    zero_data_retention: Optional[bool] = None
+    execution_location: ExecutionLocation = ExecutionLocation.UNKNOWN
+    data_leaves_device: TriStateBool = TriStateBool.UNKNOWN
+    zero_data_retention: TriStateBool = TriStateBool.UNKNOWN
     compliance_tags: List[str] = Field(default_factory=list)
+    provenance: ProvenanceType = ProvenanceType.BUILTIN
+    authoritative: bool = False
+
+    def __init__(
+        self,
+        is_local: Optional[Union[bool, TriStateBool]] = None,
+        data_leaves_device: Optional[Union[bool, TriStateBool]] = None,
+        zero_data_retention: Optional[Union[bool, TriStateBool]] = None,
+        **data: Any,
+    ):
+        if is_local is not None and "execution_location" not in data:
+            if is_local is True or is_local == TriStateBool.TRUE:
+                data["execution_location"] = ExecutionLocation.LOCAL
+            elif is_local is False or is_local == TriStateBool.FALSE:
+                data["execution_location"] = ExecutionLocation.REMOTE
+            else:
+                data["execution_location"] = ExecutionLocation.UNKNOWN
+
+        if data_leaves_device is not None and "data_leaves_device" not in data:
+            if isinstance(data_leaves_device, bool):
+                data["data_leaves_device"] = TriStateBool.from_bool(data_leaves_device)
+            else:
+                data["data_leaves_device"] = data_leaves_device
+
+        if zero_data_retention is not None and "zero_data_retention" not in data:
+            if isinstance(zero_data_retention, bool):
+                data["zero_data_retention"] = TriStateBool.from_bool(zero_data_retention)
+            else:
+                data["zero_data_retention"] = zero_data_retention
+
+        super().__init__(**data)
+
+    @property
+    def is_local(self) -> TriStateBool:
+        if self.execution_location == ExecutionLocation.LOCAL:
+            return TriStateBool.TRUE
+        elif self.execution_location == ExecutionLocation.REMOTE:
+            return TriStateBool.FALSE
+        return TriStateBool.UNKNOWN
 
 
 class PricingProfile(BaseModel):
-    """Token pricing metadata with units and freshness timestamp."""
+    """Token pricing metadata with explicit units and freshness timestamp."""
 
-    input_cost_per_million: Optional[float] = None  # USD per 1,000,000 input tokens
-    output_cost_per_million: Optional[float] = None  # USD per 1,000,000 output tokens
-    currency: str = "USD"
-    price_updated_at: float = Field(default_factory=time.time)
+    input_price: Optional[TokenPrice] = None
+    output_price: Optional[TokenPrice] = None
+    is_free: bool = False  # e.g., local models
+    pricing_updated_at: Optional[float] = None
 
-
-class LatencyProfile(BaseModel):
-    """Latency metrics combining catalog estimates and live telemetry."""
-
-    catalog_latency_ms: Optional[float] = None
-    telemetry_latency_ms: Optional[float] = None
-    telemetry_updated_at: Optional[float] = None
-    latency_class: LatencyClass = LatencyClass.MEDIUM
+    def __init__(
+        self,
+        input_cost_per_million: Optional[float] = None,
+        output_cost_per_million: Optional[float] = None,
+        **data: Any,
+    ):
+        if input_cost_per_million is not None and "input_price" not in data:
+            data["input_price"] = TokenPrice(
+                amount=input_cost_per_million,
+                direction=PriceDirection.INPUT,
+                unit=PriceUnit.PER_1M_TOKENS,
+            )
+        if output_cost_per_million is not None and "output_price" not in data:
+            data["output_price"] = TokenPrice(
+                amount=output_cost_per_million,
+                direction=PriceDirection.OUTPUT,
+                unit=PriceUnit.PER_1M_TOKENS,
+            )
+        super().__init__(**data)
 
     @property
-    def effective_latency_ms(self) -> Optional[float]:
-        if self.telemetry_latency_ms is not None:
-            return self.telemetry_latency_ms
-        return self.catalog_latency_ms
+    def input_cost_per_million(self) -> Optional[float]:
+        if self.is_free:
+            return 0.0
+        if self.input_price is not None:
+            if self.input_price.unit == PriceUnit.PER_1M_TOKENS:
+                return self.input_price.amount
+            elif self.input_price.unit == PriceUnit.PER_1K_TOKENS:
+                return self.input_price.amount * 1000.0
+        return None
+
+    @property
+    def output_cost_per_million(self) -> Optional[float]:
+        if self.is_free:
+            return 0.0
+        if self.output_price is not None:
+            if self.output_price.unit == PriceUnit.PER_1M_TOKENS:
+                return self.output_price.amount
+            elif self.output_price.unit == PriceUnit.PER_1K_TOKENS:
+                return self.output_price.amount * 1000.0
+        return None
 
 
-class ModelDefinition(BaseModel):
-    """Canonical model registration record indexed by scoped provider_id:model_id."""
+class ModelIdentity(BaseModel):
+    """Structured identity decoupling provider from model identifier.
+
+    Handles model identifiers containing colons, slashes, spaces, and Unicode.
+    """
 
     provider_id: str
     model_id: str
+
+    @property
+    def canonical_id(self) -> str:
+        """Display canonical identifier 'provider_id:model_id'."""
+        return f"{self.provider_id}:{self.model_id}"
+
+    def to_serialized_id(self) -> str:
+        """Explicit versioned round-trippable serialized format."""
+        return f"v1:{urllib.parse.quote(self.provider_id, safe='')}:{urllib.parse.quote(self.model_id, safe='')}"
+
+    @classmethod
+    def from_serialized_id(cls, s: str) -> ModelIdentity:
+        return parse_model_identifier(s)
+
+    def __str__(self) -> str:
+        return self.canonical_id
+
+    def __eq__(self, other: Any) -> bool:
+        if isinstance(other, ModelIdentity):
+            return self.provider_id == other.provider_id and self.model_id == other.model_id
+        return False
+
+    def __hash__(self) -> int:
+        return hash((self.provider_id, self.model_id))
+
+
+def parse_model_identifier(raw: Union[str, ModelIdentity]) -> ModelIdentity:
+    """Parse a model identifier into a structured ModelIdentity.
+
+    Parsing Rules:
+    1. If already ModelIdentity: return unchanged.
+    2. Versioned format 'v1:provider:model': split into exactly 3 parts using split(':', 2)
+       and URL-unquote components.
+    3. Compact format 'provider:model': split on the FIRST colon only using split(':', 1).
+       Never uses unrestricted value.split(':').
+    """
+    if isinstance(raw, ModelIdentity):
+        return raw
+    clean = str(raw).strip()
+    if clean.startswith("v1:"):
+        parts = clean.split(":", 2)
+        if len(parts) != 3:
+            raise ValueError(
+                f"Malformed v1 model identifier '{raw}': expected 'v1:provider_id:model_id'"
+            )
+        pid = urllib.parse.unquote(parts[1]).strip().lower()
+        mid = urllib.parse.unquote(parts[2]).strip()
+        if not pid or not mid:
+            raise ValueError(f"Invalid model identifier in '{raw}': empty provider or model ID")
+        return ModelIdentity(provider_id=pid, model_id=mid)
+
+    if ":" not in clean:
+        raise ValueError(
+            f"Invalid scoped model identifier '{raw}': expected 'provider_id:model_id'"
+        )
+
+    parts = clean.split(":", 1)
+    pid = parts[0].strip().lower()
+    mid = parts[1].strip()
+    if not pid or not mid:
+        raise ValueError(
+            f"Invalid scoped model identifier '{raw}': neither provider_id nor model_id may be empty"
+        )
+    return ModelIdentity(provider_id=pid, model_id=mid)
+
+
+class ModelDefinition(BaseModel):
+    """Canonical model registration record indexed by structured ModelIdentity."""
+
+    identity: ModelIdentity
     display_name: str
     description: Optional[str] = None
     capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
@@ -202,26 +458,37 @@ class ModelDefinition(BaseModel):
     tags: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
+    def __init__(self, **data: Any):
+        # Support ergonomic direct provider_id and model_id arguments
+        if "identity" not in data and "provider_id" in data and "model_id" in data:
+            data["identity"] = ModelIdentity(
+                provider_id=data.pop("provider_id"),
+                model_id=data.pop("model_id"),
+            )
+        super().__init__(**data)
+
+    @property
+    def provider_id(self) -> str:
+        return self.identity.provider_id
+
+    @provider_id.setter
+    def provider_id(self, v: str) -> None:
+        self.identity = ModelIdentity(
+            provider_id=v.strip().lower(), model_id=self.identity.model_id
+        )
+
+    @property
+    def model_id(self) -> str:
+        return self.identity.model_id
+
     @property
     def canonical_id(self) -> str:
-        """Return canonical scoped identity 'provider_id:model_id'."""
-        return f"{self.provider_id}:{self.model_id}"
+        """Return canonical display identity 'provider_id:model_id'."""
+        return self.identity.canonical_id
 
-    @field_validator("provider_id")
-    @classmethod
-    def validate_provider_id(cls, v: str) -> str:
-        v_clean = v.strip().lower()
-        if not v_clean:
-            raise ValueError("provider_id must be non-empty")
-        return v_clean
-
-    @field_validator("model_id")
-    @classmethod
-    def validate_model_id(cls, v: str) -> str:
-        v_clean = v.strip()
-        if not v_clean:
-            raise ValueError("model_id must be non-empty")
-        return v_clean
+    def to_serialized_id(self) -> str:
+        """Return versioned serialized identity."""
+        return self.identity.to_serialized_id()
 
     @field_validator("max_total_context_tokens")
     @classmethod
@@ -274,7 +541,12 @@ class ModelRequirements(BaseModel):
 
 
 class ModelCandidate(BaseModel):
-    """Result container evaluating a ModelDefinition against ModelRequirements."""
+    """Result container evaluating a ModelDefinition against ModelRequirements.
+
+    Invariants:
+    - Score is strictly a deterministic metadata completeness metric [0.0, 1.0].
+    - It does not rank or select a winner among eligible candidates.
+    """
 
     canonical_id: str
     provider_id: str

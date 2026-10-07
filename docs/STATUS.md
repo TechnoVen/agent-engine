@@ -650,17 +650,17 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/model_registry/registry.py"
     - "core/models.py"
     - "tests/test_r3_model_registry.py"
-  notes: "S1 — Implemented and implementation-tested. Completed Model Capability Registry: (1) Scoped canonical identity strictly formatted as 'provider_id:model_id' with provider alias resolution. (2) 3-valued logic (TriStateBool: TRUE, FALSE, UNKNOWN) for capabilities; unknown cannot satisfy hard requirements. (3) Complete roadmap capability dimensions: reasoning, coding, vision, tools, structured output, embeddings, streaming. (4) Distinct token context limits: max_input_tokens, max_output_tokens, and max_total_context_tokens. (5) Pricing metadata with currency and freshness timestamps. (6) Latency profile combining catalog baseline classification and runtime observed telemetry. (7) Privacy metadata: is_local, data_leaves_device, zero_data_retention. (8) Declarative local hardware metadata: min_ram_bytes, min_vram_bytes, recommended_ram_bytes, quantization, architecture. (9) Provenance precedence merging: USER_OVERRIDE (4) > LOCAL_INSPECTED (3) > REMOTE_DISCOVERY (2) > BUILTIN (1). (10) Deterministic eligibility query (query_eligible_models) producing ModelCandidate instances with transparent, explainable rejection reasons. (11) Built-in reference catalog across cloud and local providers. 13/13 dedicated tests passing, 848/848 full regression passing."
+  notes: "S1 — Implemented and implementation-tested. Completed Model Capability Registry (Final Capability-Truth Closure): (1) Structured ModelIdentity(provider_id, model_id) avoiding colon parsing ambiguities; versioned serialization (v1:provider:model) supporting colons, slashes, spaces, and Unicode round-trips. (2) 3-valued logic (TriStateBool: TRUE, FALSE, UNKNOWN) for capabilities and privacy facts; UNKNOWN strictly fails hard requirements (require_local_only, no_data_leaves_device, zero_retention). (3) Complete roadmap capability dimensions with per-field CapabilityFact provenance tracking; USER_OVERRIDE remains visible and never masquerades as provider-certified metadata. (4) Distinct token context limits: max_input_tokens, max_output_tokens, and max_total_context_tokens. (5) Unit-explicit (PER_1M_TOKENS) and time-aware TokenPrice; missing pricing is UNKNOWN, never zero ($0.0). (6) Latency separation: static catalog_latency_class is preserved independently from live observed telemetry metrics. (7) Privacy facts (execution_location, data_leaves_device, zero_data_retention); user override cannot downgrade cloud data_leaves_device=TRUE to FALSE. (8) Precedence force restriction: force=True is strictly rejected for untrusted callers and discovery (PermissionError). (9) Field-level provenance merging: sparse higher-precedence records do not erase known independent facts; FALSE overrides TRUE while UNKNOWN does not. (10) Conservative defaults for generic 'compatible' provider (unsupported facts remain UNKNOWN). (11) Non-routing candidate evaluation: ModelCandidate.score is deterministic metadata completeness [0.0, 1.0], no premature winner ranking. (12) Known limitation documented: 0.5 scopes 'compatible' as a single configured provider kind instance; multi-instance disambiguation requires future provider_instance_id. 16/16 precision tests passing, 851/851 full regression passing."
 ```
 
 ---
 
 ## 8. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `848 passed, 3 warnings in 107.73s` (`uv run pytest -q`)
-- **Combined R3 Model Layer Suites:** `40 passed in 3.45s` (`uv run pytest tests/test_r3_provider_registry.py tests/test_r3_model_registry.py`)
+- **Full Regression Suite:** `851 passed, 3 warnings in 131.98s` (`uv run pytest -q`)
+- **Combined R3 Model Layer Suites:** `43 passed in 6.82s` (`uv run pytest tests/test_r3_provider_registry.py tests/test_r3_model_registry.py`)
 - **R3.1 Canonical Provider Registry Suite:** `27 passed in 3.32s` (`uv run pytest tests/test_r3_provider_registry.py`)
-- **R3.2 Model Capability Registry Suite:** `13 passed in 4.23s` (`uv run pytest tests/test_r3_model_registry.py`)
+- **R3.2 Model Capability Registry Suite:** `16 passed in 3.16s` (`uv run pytest tests/test_r3_model_registry.py`)
 - **R2 Checkpoint and Rollback Suite:** `35 passed in 3.93s` (`uv run pytest tests/test_r2_checkpoint_service.py`)
 - **R2 Diagnostics Redaction Suite:** `27 passed in 3.91s` (`uv run pytest tests/test_r2_diagnostics_redaction.py`)
 - **R2 Safe Staged Patch Application Suite:** `25 passed in 2.85s` (`uv run pytest tests/test_r2_patch_service.py`)
@@ -677,8 +677,8 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
   - `uv run ruff format --check`: passed on all modified files
 - **Desktop Tauri & Frontend Workspace:**
 
-  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.78s`)
-  - `pnpm -r build`: passed (`12.4s`)
+  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.82s`)
+  - `pnpm -r build`: passed (`12.6s`)
 - **Documented Upstream Warnings (3 known upstream warnings, 0 new unexplained/project-owned warnings):**
   1. `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.` (Origin: `fastapi/testclient.py:1` — Upstream FastAPI/Starlette testclient deprecation notice; non-runtime).
   2. `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.` (Origin: `starlette/testclient.py:53` — Upstream Starlette/AnyIO import alias notice; non-runtime).

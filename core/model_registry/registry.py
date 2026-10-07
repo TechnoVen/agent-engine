@@ -4,15 +4,18 @@ Canonical Model Capability Registry Implementation for Agent Engine.
 Part of Milestone R3 Task R3.2 (Model Capability Registry).
 
 Design Invariants:
-1. Scoped Canonical Identity: Indexes models as 'provider_id:model_id'.
-2. 3-Valued Logic: Capabilities evaluated via TriStateBool (TRUE, FALSE, UNKNOWN).
+1. Structured Model Identity: ModelIdentity(provider_id, model_id) avoids delimiter parsing ambiguities.
+2. 3-Valued Logic: Capabilities and privacy evaluated via TriStateBool (TRUE, FALSE, UNKNOWN).
    UNKNOWN cannot satisfy hard requirements.
-3. Provenance Precedence: USER_OVERRIDE > LOCAL_INSPECTED > REMOTE_DISCOVERY > BUILTIN.
-4. Deterministic Querying: Evaluates ModelRequirements and outputs ModelCandidate
-   instances with complete, explainable rejection reasons when disqualified.
-5. Inviolable Provider Decoupling: Relies on ProviderRegistry for transport/auth
-   without embedding network execution inside model metadata.
-6. Thread-Safe: Operations guarded by RLock.
+3. Provenance Precedence & Field-Level Merge:
+   USER_OVERRIDE (4) > LOCAL_INSPECTED (3) > REMOTE_DISCOVERY (2) > BUILTIN (1).
+   Sparse higher-precedence records do NOT erase known lower-precedence fields.
+   User override cannot convert authoritative cloud data_leaves_device to FALSE.
+4. Restricted Precedence Override: force=True is strictly restricted to trusted internal/admin callers.
+5. Latency Separation: Catalog baseline classification preserved separately from observed telemetry.
+6. Pricing Discipline: Missing price is UNKNOWN, never zero.
+7. Non-Routing Candidate Evaluation: Eligibility + explainable rejection reasons without premature ranking.
+8. Thread-Safe: Operations guarded by RLock; no I/O held across locks.
 """
 
 from __future__ import annotations
@@ -20,15 +23,20 @@ from __future__ import annotations
 import logging
 from threading import RLock
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from core.model_registry.catalog import get_builtin_catalog
 from core.model_registry.models import (
+    ExecutionLocation,
     LatencyClass,
     ModelCandidate,
     ModelDefinition,
+    ModelIdentity,
     ModelRequirements,
+    ObservedLatencyMetrics,
+    ProvenanceType,
     TriStateBool,
+    parse_model_identifier,
 )
 
 logger = logging.getLogger("agent_engine.model_registry")
@@ -64,43 +72,42 @@ class ModelRegistry:
             self._models[model_def.canonical_id] = model_def
 
     @staticmethod
-    def parse_canonical_id(scoped_id: str) -> Tuple[str, str]:
-        """Split a scoped canonical ID into (provider_id, model_id)."""
-        clean = scoped_id.strip()
-        if ":" not in clean:
-            raise ValueError(
-                f"Invalid scoped model identifier '{scoped_id}': expected 'provider_id:model_id'"
-            )
-        parts = clean.split(":", 1)
-        pid = parts[0].strip().lower()
-        mid = parts[1].strip()
-        if not pid or not mid:
-            raise ValueError(
-                f"Invalid scoped model identifier '{scoped_id}': neither provider_id nor model_id may be empty"
-            )
-        return pid, mid
+    def parse_canonical_id(scoped_id: Union[str, ModelIdentity]) -> Tuple[str, str]:
+        """Parse identifier into (provider_id, model_id) tuple via structured ModelIdentity."""
+        ident = parse_model_identifier(scoped_id)
+        return ident.provider_id, ident.model_id
 
-    def resolve_canonical_id(self, scoped_id: str) -> str:
-        """Resolve any provider alias in the scoped ID to its canonical form."""
-        pid, mid = self.parse_canonical_id(scoped_id)
+    def resolve_canonical_id(self, scoped_id: Union[str, ModelIdentity]) -> str:
+        """Resolve any provider alias in the scoped ID to its canonical display form."""
+        ident = parse_model_identifier(scoped_id)
         prov_reg = self._get_provider_registry()
         if prov_reg:
-            canon_pid = prov_reg.resolve_provider_id(pid)
+            canon_pid = prov_reg.resolve_provider_id(ident.provider_id)
         else:
-            canon_pid = pid
-        return f"{canon_pid}:{mid}"
+            canon_pid = ident.provider_id
+        return f"{canon_pid}:{ident.model_id}"
 
     def register_model(
         self,
         definition: ModelDefinition,
         force: bool = False,
+        caller_role: Optional[str] = None,
     ) -> bool:
-        """Register or update a model definition obeying provenance precedence.
+        """Register or update a model definition obeying provenance precedence and field-level merging.
 
         Precedence: USER_OVERRIDE (4) > LOCAL_INSPECTED (3) > REMOTE_DISCOVERY (2) > BUILTIN (1).
-        Returns True if registered, False if rejected due to lower precedence.
+        Invariants:
+        1. force=True is strictly restricted to trusted internal/admin callers.
+        2. Sparse higher-precedence records do NOT erase known lower-precedence fields.
+        3. USER_OVERRIDE cannot downgrade authoritative cloud data_leaves_device=TRUE to FALSE.
         """
         with self._lock:
+            # Audit force authorization
+            if force and caller_role not in ("admin", "trusted_internal"):
+                raise PermissionError(
+                    f"Untrusted caller role '{caller_role}' cannot invoke precedence-force registration"
+                )
+
             # Normalize provider_id using canonical provider registry if available
             prov_reg = self._get_provider_registry()
             if prov_reg:
@@ -108,9 +115,12 @@ class ModelRegistry:
 
             cid = definition.canonical_id
 
-            if cid in self._models and not force:
+            if cid in self._models:
                 existing = self._models[cid]
-                if definition.provenance.precedence < existing.provenance.precedence:
+
+                # If existing definition has strictly higher precedence and force is not set,
+                # reject full replacement if incoming is lower.
+                if definition.provenance.precedence < existing.provenance.precedence and not force:
                     logger.debug(
                         "Registration of '%s' rejected: provenance '%s' has lower precedence than existing '%s'",
                         cid,
@@ -119,11 +129,99 @@ class ModelRegistry:
                     )
                     return False
 
+                # Security invariant: User override must not convert authoritative data_leaves_device=TRUE to FALSE
+                if definition.provenance == ProvenanceType.USER_OVERRIDE:
+                    if (
+                        existing.privacy.data_leaves_device == TriStateBool.TRUE
+                        and definition.privacy.data_leaves_device == TriStateBool.FALSE
+                    ):
+                        raise ValueError(
+                            f"User override cannot convert authoritative data_leaves_device=TRUE to FALSE for {cid}"
+                        )
+
+                # Field-level merge: sparse metadata must not erase known facts!
+                merged = existing.model_copy(deep=True)
+
+                if definition.display_name:
+                    merged.display_name = definition.display_name
+                if definition.description:
+                    merged.description = definition.description
+
+                # Capabilities field-by-field merge
+                for cap in [
+                    "reasoning",
+                    "coding",
+                    "vision",
+                    "tools",
+                    "structured_output",
+                    "embeddings",
+                    "streaming",
+                ]:
+                    inc_val = getattr(definition.capabilities, cap)
+                    if inc_val != TriStateBool.UNKNOWN:
+                        existing_fact = existing.capabilities.get_fact(cap)
+                        if (
+                            definition.provenance.precedence >= existing_fact.source.precedence
+                            or force
+                        ):
+                            merged.capabilities.set_fact(cap, inc_val, definition.provenance)
+                    # If inc_val == UNKNOWN: preserve existing fact unchanged
+
+                # Context limits merge
+                if definition.max_input_tokens is not None:
+                    merged.max_input_tokens = definition.max_input_tokens
+                if definition.max_output_tokens is not None:
+                    merged.max_output_tokens = definition.max_output_tokens
+                if (
+                    definition.max_total_context_tokens is not None
+                    and definition.max_total_context_tokens != 4096
+                ):
+                    merged.max_total_context_tokens = definition.max_total_context_tokens
+
+                # Pricing merge
+                if definition.pricing.input_price is not None:
+                    merged.pricing.input_price = definition.pricing.input_price
+                if definition.pricing.output_price is not None:
+                    merged.pricing.output_price = definition.pricing.output_price
+                if definition.pricing.is_free:
+                    merged.pricing.is_free = True
+
+                # Privacy merge
+                if definition.privacy.execution_location != ExecutionLocation.UNKNOWN:
+                    merged.privacy.execution_location = definition.privacy.execution_location
+                if definition.privacy.data_leaves_device != TriStateBool.UNKNOWN:
+                    merged.privacy.data_leaves_device = definition.privacy.data_leaves_device
+                if definition.privacy.zero_data_retention != TriStateBool.UNKNOWN:
+                    merged.privacy.zero_data_retention = definition.privacy.zero_data_retention
+                if definition.privacy.compliance_tags:
+                    merged.privacy.compliance_tags = list(
+                        set(merged.privacy.compliance_tags + definition.privacy.compliance_tags)
+                    )
+
+                # Hardware merge
+                if definition.hardware is not None:
+                    merged.hardware = definition.hardware
+
+                # Latency merge (preserve catalog baseline class)
+                if definition.latency.catalog_latency_class != LatencyClass.UNKNOWN:
+                    merged.latency.catalog_latency_class = definition.latency.catalog_latency_class
+                if definition.latency.catalog_latency_ms is not None:
+                    merged.latency.catalog_latency_ms = definition.latency.catalog_latency_ms
+                if definition.latency.observed_metrics is not None:
+                    merged.latency.observed_metrics = definition.latency.observed_metrics
+
+                merged.provenance = max(
+                    definition.provenance, existing.provenance, key=lambda p: p.precedence
+                )
+                merged.updated_at = time.time()
+                self._models[cid] = merged
+                return True
+
             definition.updated_at = time.time()
             self._models[cid] = definition
             return True
 
-    def unregister_model(self, scoped_id: str) -> bool:
+    def unregister_model(self, scoped_id: Union[str, ModelIdentity]) -> bool:
         """Remove a model from the registry by its scoped ID."""
         with self._lock:
             cid = self.resolve_canonical_id(scoped_id)
@@ -132,7 +230,7 @@ class ModelRegistry:
                 return True
             return False
 
-    def get_model(self, scoped_id: str) -> Optional[ModelDefinition]:
+    def get_model(self, scoped_id: Union[str, ModelIdentity]) -> Optional[ModelDefinition]:
         """Look up a model definition by its scoped identifier (e.g. 'openai:gpt-4o')."""
         with self._lock:
             try:
@@ -162,7 +260,7 @@ class ModelRegistry:
             for m in self._models.values():
                 if target_pid and m.provider_id != target_pid:
                     continue
-                if local_only and not m.privacy.is_local:
+                if local_only and m.privacy.is_local != TriStateBool.TRUE:
                     continue
                 if tag and tag not in m.tags:
                     continue
@@ -170,24 +268,32 @@ class ModelRegistry:
 
             return sorted(results, key=lambda x: x.canonical_id)
 
-    def update_telemetry(self, scoped_id: str, latency_ms: float) -> bool:
-        """Update runtime observed latency telemetry for a model."""
+    def update_telemetry(self, scoped_id: Union[str, ModelIdentity], latency_ms: float) -> bool:
+        """Update runtime observed latency telemetry without mutating catalog classification."""
         with self._lock:
             cid = self.resolve_canonical_id(scoped_id)
             model = self._models.get(cid)
             if not model:
                 return False
-            model.latency.telemetry_latency_ms = latency_ms
-            model.latency.telemetry_updated_at = time.time()
-            # Dynamically update latency class if observed latency differs significantly
-            if latency_ms < 1000.0:
-                model.latency.latency_class = LatencyClass.FAST
-            elif latency_ms < 3000.0:
-                model.latency.latency_class = LatencyClass.MEDIUM
-            elif latency_ms < 8000.0:
-                model.latency.latency_class = LatencyClass.SLOW
+
+            if model.latency.observed_metrics is None:
+                model.latency.observed_metrics = ObservedLatencyMetrics()
+
+            obs = model.latency.observed_metrics
+            obs.sample_count += 1
+            obs.last_observed_ms = latency_ms
+            obs.observed_at = time.time()
+
+            if obs.p50_ms is None:
+                obs.p50_ms = latency_ms
+                obs.p90_ms = latency_ms
+                obs.p99_ms = latency_ms
             else:
-                model.latency.latency_class = LatencyClass.REASONING
+                obs.p50_ms = round(0.7 * obs.p50_ms + 0.3 * latency_ms, 1)
+                obs.p90_ms = max(obs.p90_ms, latency_ms)
+                obs.p99_ms = max(obs.p99_ms, latency_ms)
+
+            # Static catalog_latency_class is preserved untouched!
             return True
 
     def query_eligible_models(
@@ -200,7 +306,8 @@ class ModelRegistry:
         Invariants:
         1. 3-Valued Logic: UNKNOWN capabilities CANNOT satisfy hard requirements.
         2. Comprehensive explanation: ModelCandidate records all rejection reasons.
-        3. Deterministic scoring: Eligible candidates scored by capability, context, cost, and latency.
+        3. No Premature Routing: Candidates are NOT scored or sorted into winners.
+           Score represents deterministic metadata completeness [0.0, 1.0].
         """
         with self._lock:
             candidates: List[ModelCandidate] = []
@@ -259,44 +366,67 @@ class ModelRegistry:
                         f"Total context {model.max_total_context_tokens} < required {requirements.min_total_tokens}"
                     )
 
-            # 4. Pricing constraints
+            # 4. Pricing constraints (unit-explicit, missing is UNKNOWN, never zero)
             if requirements.max_input_cost_per_million is not None:
                 cost_in = model.pricing.input_cost_per_million
-                if cost_in is not None and cost_in > requirements.max_input_cost_per_million:
+                if cost_in is None:
+                    reasons.append(
+                        "Input pricing is UNKNOWN (cannot verify max_input_cost_per_million)"
+                    )
+                elif cost_in > requirements.max_input_cost_per_million:
                     reasons.append(
                         f"Input cost ${cost_in:.3f}/M > allowed ${requirements.max_input_cost_per_million:.3f}/M"
                     )
 
             if requirements.max_output_cost_per_million is not None:
                 cost_out = model.pricing.output_cost_per_million
-                if cost_out is not None and cost_out > requirements.max_output_cost_per_million:
+                if cost_out is None:
+                    reasons.append(
+                        "Output pricing is UNKNOWN (cannot verify max_output_cost_per_million)"
+                    )
+                elif cost_out > requirements.max_output_cost_per_million:
                     reasons.append(
                         f"Output cost ${cost_out:.3f}/M > allowed ${requirements.max_output_cost_per_million:.3f}/M"
                     )
 
-            # 5. Latency constraints
+            # 5. Latency constraints (static catalog class separate from telemetry)
             if requirements.max_latency_ms is not None:
                 eff_lat = model.latency.effective_latency_ms
-                if eff_lat is not None and eff_lat > requirements.max_latency_ms:
+                if eff_lat is None:
+                    reasons.append("Latency is UNKNOWN (cannot verify max_latency_ms)")
+                elif eff_lat > requirements.max_latency_ms:
                     reasons.append(
                         f"Latency {eff_lat:.1f}ms > allowed {requirements.max_latency_ms:.1f}ms"
                     )
 
             if requirements.allowed_latency_classes:
-                if model.latency.latency_class not in requirements.allowed_latency_classes:
+                if model.latency.catalog_latency_class not in requirements.allowed_latency_classes:
                     reasons.append(
-                        f"Latency class '{model.latency.latency_class.value}' not in allowed classes"
+                        f"Catalog latency class '{model.latency.catalog_latency_class.value}' not in allowed classes"
                     )
 
-            # 6. Privacy constraints
-            if requirements.require_local_only and not model.privacy.is_local:
-                reasons.append("Model is not local (violates require_local_only)")
+            # 6. Privacy constraints (3-valued logic, UNKNOWN rejected on hard privacy requirements)
+            if requirements.require_local_only:
+                if model.privacy.execution_location != ExecutionLocation.LOCAL:
+                    reasons.append(
+                        f"Model execution location is '{model.privacy.execution_location.value}' (violates require_local_only)"
+                    )
+                if model.privacy.data_leaves_device != TriStateBool.FALSE:
+                    reasons.append(
+                        f"Data leaves device is {model.privacy.data_leaves_device.value} (violates require_local_only)"
+                    )
 
-            if not requirements.allow_data_leaves_device and model.privacy.data_leaves_device:
-                reasons.append("Data leaves device (violates allow_data_leaves_device=False)")
+            if not requirements.allow_data_leaves_device:
+                if model.privacy.data_leaves_device != TriStateBool.FALSE:
+                    reasons.append(
+                        f"Data leaves device is {model.privacy.data_leaves_device.value} (violates allow_data_leaves_device=False)"
+                    )
 
-            if requirements.require_zero_retention and not model.privacy.zero_data_retention:
-                reasons.append("Zero data retention is not guaranteed")
+            if requirements.require_zero_retention:
+                if model.privacy.zero_data_retention != TriStateBool.TRUE:
+                    reasons.append(
+                        f"Zero data retention is {model.privacy.zero_data_retention.value} (violates require_zero_retention=True)"
+                    )
 
             # 7. Hardware constraints (for local models)
             if requirements.max_available_ram_bytes is not None and model.hardware:
@@ -324,27 +454,18 @@ class ModelRegistry:
 
             is_eligible = len(reasons) == 0
 
-            # Deterministic candidate scoring heuristic
-            score = 0.0
-            if is_eligible:
-                score = 100.0
-                # Quality & capability bonus
-                if model.capabilities.reasoning == TriStateBool.TRUE:
-                    score += 20.0
-                if model.capabilities.coding == TriStateBool.TRUE:
-                    score += 15.0
-                if model.capabilities.vision == TriStateBool.TRUE:
-                    score += 10.0
-                # Context headroom bonus (logarithmic scaling)
-                score += min(model.max_total_context_tokens / 10000.0, 25.0)
-                # Cost penalty
-                if model.pricing.input_cost_per_million:
-                    score -= min(model.pricing.input_cost_per_million * 2.0, 30.0)
-                # Latency bonus/penalty
-                if model.latency.latency_class == LatencyClass.FAST:
-                    score += 15.0
-                elif model.latency.latency_class == LatencyClass.REASONING:
-                    score += 5.0
+            # Deterministic metadata completeness score (NOT routing preference)
+            all_caps = [
+                model.capabilities.reasoning,
+                model.capabilities.coding,
+                model.capabilities.vision,
+                model.capabilities.tools,
+                model.capabilities.structured_output,
+                model.capabilities.embeddings,
+                model.capabilities.streaming,
+            ]
+            known_count = sum(1 for c in all_caps if c != TriStateBool.UNKNOWN)
+            completeness_score = round(known_count / len(all_caps), 2)
 
             candidate = ModelCandidate(
                 canonical_id=model.canonical_id,
@@ -353,14 +474,14 @@ class ModelRegistry:
                 model_definition=model,
                 eligible=is_eligible,
                 rejection_reasons=reasons,
-                score=round(score, 2),
+                score=completeness_score if is_eligible else 0.0,
             )
 
             if not eligible_only or is_eligible:
                 candidates.append(candidate)
 
-        # Sort: eligible candidates first with highest score descending; ineligible sorted by canonical_id
-        candidates.sort(key=lambda c: (-int(c.eligible), -c.score, c.canonical_id))
+        # Deterministic sort: eligible first, then alphabetical by canonical_id (no winner ranking)
+        candidates.sort(key=lambda c: (not c.eligible, c.canonical_id))
         return candidates
 
 
