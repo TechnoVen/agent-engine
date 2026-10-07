@@ -4,8 +4,8 @@ Process Lifecycle Management and Bounded Log Ring Buffer for Managed Inference.
 Part of Milestone R3 Task R3.4 (Managed Local Inference Supervisor).
 
 Invariants:
-1. Process group isolation: preexec_fn=os.setsid (POSIX) / CREATE_NEW_PROCESS_GROUP (Windows).
-2. Strict shell=False execution via validated argv list.
+1. Process group isolation: start_new_session=True (POSIX) / CREATE_NEW_PROCESS_GROUP (Windows).
+2. Strict shell=False execution via validated argv list; secrets redacted from diagnostics.
 3. Bounded ring buffer log capture (max lines & max bytes), preventing memory exhaustion.
 4. Graceful termination (SIGTERM) with bounded wait and escalation to SIGKILL on process group.
 5. Recursive descendant process cleanup guaranteeing zero orphan child processes.
@@ -46,12 +46,20 @@ class RuntimeProcessHandle:
         self.max_log_lines = max_log_lines
         self.max_log_bytes = max_log_bytes
 
+        # Extract sensitive arguments (e.g. --api-key <token>) for log redaction
+        self._redact_tokens: List[str] = []
+        for i, arg in enumerate(argv):
+            if arg == "--api-key" and i + 1 < len(argv):
+                self._redact_tokens.append(argv[i + 1])
+            elif arg.startswith("--api-key="):
+                self._redact_tokens.append(arg.split("=", 1)[1])
+
         self.stdout_ring: deque[str] = deque(maxlen=max_log_lines)
         self.stderr_ring: deque[str] = deque(maxlen=max_log_lines)
         self._total_bytes = 0
         self._lock = threading.Lock()
 
-        # Platform-specific process group creation flags
+        # Platform-specific process group creation flags (eliminates unsafe Python preexec_fn)
         popen_kwargs: Dict[str, object] = {
             "stdout": subprocess.PIPE,
             "stderr": subprocess.PIPE,
@@ -64,7 +72,7 @@ class RuntimeProcessHandle:
         if platform.system() == "Windows":
             popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
-            popen_kwargs["preexec_fn"] = os.setsid
+            popen_kwargs["start_new_session"] = True
 
         self.proc = subprocess.Popen(argv, **popen_kwargs)
         self.pid = self.proc.pid
@@ -96,12 +104,16 @@ class RuntimeProcessHandle:
             self._reader_threads.append(t_err)
 
     def _stream_reader(self, stream, ring: deque[str], name: str) -> None:
-        """Incrementally drain a process stream into a bounded ring buffer."""
+        """Incrementally drain a process stream into a bounded ring buffer with secret redaction."""
         try:
             for line in iter(stream.readline, ""):
                 if not line:
                     break
                 clean_line = line.rstrip("\r\n")
+                for secret in self._redact_tokens:
+                    if secret and secret in clean_line:
+                        clean_line = clean_line.replace(secret, "[REDACTED]")
+
                 line_bytes = len(clean_line.encode("utf-8", errors="replace"))
 
                 with self._lock:
@@ -118,6 +130,31 @@ class RuntimeProcessHandle:
                 stream.close()
             except Exception:
                 pass
+
+    @property
+    def sanitized_argv(self) -> List[str]:
+        """Return argv list with sensitive parameters (e.g. API keys) redacted."""
+        out: List[str] = []
+        skip_next = False
+        for arg in self.argv:
+            if skip_next:
+                out.append("[REDACTED]")
+                skip_next = False
+            elif arg == "--api-key":
+                out.append(arg)
+                skip_next = True
+            elif arg.startswith("--api-key="):
+                out.append("--api-key=[REDACTED]")
+            else:
+                masked_arg = arg
+                for sec in self._redact_tokens:
+                    if sec and sec in masked_arg:
+                        masked_arg = masked_arg.replace(sec, "[REDACTED]")
+                out.append(masked_arg)
+        return out
+
+    def __repr__(self) -> str:
+        return f"<RuntimeProcessHandle pid={self.pid} argv={self.sanitized_argv}>"
 
     def is_alive(self) -> bool:
         """Check if subprocess is still executing."""

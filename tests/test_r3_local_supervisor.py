@@ -29,7 +29,10 @@ from __future__ import annotations
 import concurrent.futures
 import os
 from pathlib import Path
+import platform
+import shutil
 import socket
+import subprocess
 import tempfile
 import time
 from unittest.mock import MagicMock, patch
@@ -44,8 +47,10 @@ from core.inference import (
     ModelArtifactValidator,
     ModelNotFoundError,
     ModelValidationError,
+    PortCollisionError,
     RuntimeBinaryInfo,
     RuntimeBinaryResolver,
+    RuntimeInstance,
     RuntimeProcessHandle,
     RuntimeSpec,
     RuntimeStartupError,
@@ -60,6 +65,7 @@ from core.inference import (
 )
 from core.model_registry.models import ModelIdentity
 from core.providers import get_provider_registry
+from core.storage.paths import get_private_data_dir
 
 
 @pytest.fixture(autouse=True)
@@ -116,7 +122,13 @@ def test_02_untrusted_binary_locations_rejected(tmp_path: Path):
     assert RuntimeBinaryResolver.is_prohibited_location(downloads_bin) is True
 
     # 4. Attempting AGENT_ENGINE_LLAMA_BIN pointing to workspace raises UntrustedBinaryLocationError
-    with patch.dict(os.environ, {"AGENT_ENGINE_LLAMA_BIN": str(workspace_bin)}):
+    with patch.dict(
+        os.environ,
+        {
+            "AGENT_ENGINE_LLAMA_BIN": str(workspace_bin),
+            "AGENT_ENGINE_ALLOW_UNVERIFIED_BINARY": "true",
+        },
+    ):
         with pytest.raises(UntrustedBinaryLocationError):
             resolver.resolve_binary()
 
@@ -604,20 +616,20 @@ def test_17_coordinator_records_endpoint_class_local_managed():
 
 
 # ==============================================================================
-# 18. Clean-Machine Real E2E Test (Real Binary + Real Model + Real Prompt)
+# 18. Clean-Machine Real E2E Test (Real Binary + Real Model + Real Canary Prompt)
 # ==============================================================================
 def test_18_real_clean_machine_e2e_prompt_completion():
-    """Execute real clean-machine E2E test with real managed llama-server, real model, and real prompt completion."""
-    # 1. Check if real binary exists in host installation or AE private storage
-    host_bin = Path.home() / ".local" / "lib" / "ollama" / "llama-server"
-    ae_bin = Path.home() / ".agent_engine" / "runtimes" / "llamacpp" / "llama-server"
+    """Execute real clean-machine E2E test with real managed llama-server, real model, canary prompt, and ledger verification."""
+    # 1. Check if real binary exists in AE private storage or packaged desktop resources (zero Ollama dependency)
+    ae_bin = get_private_data_dir() / "runtimes" / "llamacpp" / "llama-server"
+    desktop_bin = Path.cwd() / "apps" / "desktop" / "src-tauri" / "binaries" / "llama-server"
     model_path = Path.cwd() / "models" / "qwen2.5-coder-3b-instruct-q4_k_m.gguf"
 
     if not (
-        (host_bin.is_file() and os.access(host_bin, os.X_OK))
-        or (ae_bin.is_file() and os.access(ae_bin, os.X_OK))
+        (ae_bin.is_file() and os.access(ae_bin, os.X_OK))
+        or (desktop_bin.is_file() and os.access(desktop_bin, os.X_OK))
     ):
-        pytest.skip("Real llama-server binary not found on host; skipping hardware E2E.")
+        pytest.skip("Real llama-server binary not found in AE storage; skipping hardware E2E.")
     if not model_path.is_file():
         pytest.skip(
             "Real test model not found at models/qwen2.5-coder-3b-instruct-q4_k_m.gguf; skipping hardware E2E."
@@ -653,15 +665,84 @@ def test_18_real_clean_machine_e2e_prompt_completion():
         adapter = reg.get_adapter("llamacpp")
         assert adapter._get_base_url() == f"{inst.endpoint_url}/v1"
 
-        # Invoke prompt
+        # Invoke prompt with canary code word and temperature=0
+        canary = "AE_E2E_K7M4"
+        canary_prompt = f"Repeat this exact code word once: {canary}"
         res = adapter.invoke(
-            prompt="Reply with the single word: OK",
+            prompt=canary_prompt,
             model="qwen2.5-coder-3b-instruct-q4_k_m",
-            max_tokens=5,
+            max_tokens=20,
+            temperature=0.0,
         )
         assert res is not None
         assert res.content is not None and len(res.content.strip()) > 0
+        assert canary in res.content
         assert res.provider_id == "llamacpp"
+
+        # Verify ledger records provider, canonical ModelIdentity, endpoint_class=local_managed, and execution_id
+        import json
+        from core.execution.kernel_lm_adapter import KernelLMAdapter
+        from core.execution.models import Execution, ExecutionRequest
+        from core.execution.state import ExecutionStateMachine
+        from core.ledger.service import ExecutionLedgerService
+        from core.storage import get_storage_backend
+
+        storage = get_storage_backend()
+        ledger = ExecutionLedgerService(storage=storage)
+        exec_id = f"exec_e2e_{int(time.time())}"
+        req = ExecutionRequest(project_id="test_project", prompt=canary_prompt)
+        exec_entity = Execution(id=exec_id, project_id="test_project", request=req)
+        storage.create_execution(
+            {
+                "id": exec_id,
+                "project_id": "test_project",
+                "status": "completed",
+                "request": json.dumps({"id": exec_id, "project_id": "test_project"}),
+            }
+        )
+        ctx = ExecutionContext(
+            execution_id=exec_id,
+            project_id="test_project",
+            project_root=str(Path.cwd()),
+        )
+        state_machine = ExecutionStateMachine(execution=exec_entity)
+
+        def event_sink(ev):
+            storage.record_execution_event(ev.model_dump())
+
+        def real_lm_call(prompt=None, messages=None, **kwargs):
+            p = prompt or (messages[0]["content"] if messages else "")
+            inv_res = adapter.invoke(
+                prompt=p,
+                model="qwen2.5-coder-3b-instruct-q4_k_m",
+                max_tokens=20,
+                temperature=0.0,
+            )
+            return [inv_res.content]
+
+        klm = KernelLMAdapter(
+            exec_context=ctx,
+            coordinator=None,
+            provider="llamacpp",
+            model_name="qwen2.5-coder-3b-instruct-q4_k_m",
+            event_sink=event_sink,
+            state_machine=state_machine,
+            real_lm=real_lm_call,
+        )
+
+        klm_out = klm(prompt=canary_prompt)
+        assert klm_out and canary in klm_out[0]
+
+        # Verify factual execution ledger trace
+        trace = ledger.get_execution_trace(exec_id)
+        assert trace is not None
+        assert trace.execution_id == exec_id
+        assert len(trace.model_calls) >= 1
+        rec = trace.model_calls[0]
+        assert rec.provider_id == "llamacpp"
+        assert rec.model_id == "qwen2.5-coder-3b-instruct-q4_k_m"
+        assert rec.endpoint_class == "local_managed"
+        assert ModelIdentity(provider_id=rec.provider_id, model_id=rec.model_id) == ident
 
         # Stop runtime gracefully
         assert supervisor.stop() is True
@@ -674,3 +755,222 @@ def test_18_real_clean_machine_e2e_prompt_completion():
 
     finally:
         reset_local_inference_supervisor()
+
+
+# ==============================================================================
+# 19. No preexec_fn in Popen & Concurrent Start/Stop Isolation
+# ==============================================================================
+def test_19_no_preexec_fn_and_concurrent_start_stop(tmp_path: Path):
+    """Verify subprocess creation never uses unsafe Python preexec_fn and handles concurrent lifecycle."""
+    captured_kwargs = {}
+    orig_popen = subprocess.Popen
+
+    def mock_popen(args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return orig_popen(["/bin/sleep", "1"], **kwargs)
+
+    with patch("subprocess.Popen", side_effect=mock_popen):
+        handle = RuntimeProcessHandle(
+            argv=["/bin/sleep", "1"],
+            cwd=tmp_path,
+            env={},
+        )
+        # Invariant: preexec_fn is NEVER passed (eliminating post-fork Python execution)
+        assert "preexec_fn" not in captured_kwargs
+        if platform.system() != "Windows":
+            assert captured_kwargs.get("start_new_session") is True
+        handle.terminate_gracefully(timeout_seconds=1.0)
+
+    # Concurrency test: multiple threads launching and stopping handles concurrently
+    def run_lifecycle(idx: int):
+        h = RuntimeProcessHandle(
+            argv=["/bin/sleep", "0.2"],
+            cwd=tmp_path,
+            env={},
+        )
+        time.sleep(0.05)
+        return h.terminate_gracefully(timeout_seconds=2.0)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = [executor.submit(run_lifecycle, i) for i in range(10)]
+        results = [f.result() for f in futures]
+        assert len(results) == 10
+
+
+# ==============================================================================
+# 20. AGENT_ENGINE_LLAMA_BIN Override Gated Behind Dev Flag
+# ==============================================================================
+def test_20_binary_override_production_rejection():
+    """Verify AGENT_ENGINE_LLAMA_BIN override is rejected in default/production mode unless authorized."""
+    test_bin_dir = Path.home() / ".agent_engine_test_bin"
+    test_bin_dir.mkdir(parents=True, exist_ok=True)
+    fake_bin = test_bin_dir / "custom_llama"
+    fake_bin.write_text("#!/bin/sh\necho 'llama.cpp version b9999'\n")
+    fake_bin.chmod(0o755)
+
+    resolver = RuntimeBinaryResolver()
+
+    try:
+        # 1. In production mode without allow flag -> Rejected
+        with patch.dict(
+            os.environ,
+            {
+                "AGENT_ENGINE_LLAMA_BIN": str(fake_bin),
+                "AGENT_ENGINE_ALLOW_UNVERIFIED_BINARY": "",
+                "AGENT_ENGINE_DEV_MODE": "",
+                "AGENT_ENGINE_ENV": "production",
+            },
+            clear=False,
+        ):
+            with pytest.raises(UntrustedBinaryLocationError) as exc_info:
+                resolver.resolve_binary()
+            assert "disabled in production mode" in str(exc_info.value)
+
+        # 2. When AGENT_ENGINE_ALLOW_UNVERIFIED_BINARY=true -> Accepted
+        with patch.dict(
+            os.environ,
+            {
+                "AGENT_ENGINE_LLAMA_BIN": str(fake_bin),
+                "AGENT_ENGINE_ALLOW_UNVERIFIED_BINARY": "true",
+                "AGENT_ENGINE_DEV_MODE": "",
+                "AGENT_ENGINE_ENV": "production",
+            },
+            clear=False,
+        ):
+            info = resolver.resolve_binary()
+            assert info.binary_path == str(fake_bin.resolve())
+            assert info.provenance == "controlled_override"
+    finally:
+        shutil.rmtree(test_bin_dir, ignore_errors=True)
+
+
+# ==============================================================================
+# 21. API Key Redaction Across Process Handles, Logs, and Instance Repr
+# ==============================================================================
+def test_21_api_key_redacted_in_logs_and_repr(tmp_path: Path):
+    """Verify ephemeral endpoint API key is never leaked in repr, diagnostics, or process logs."""
+    token = "CANARY_SECRET_TOKEN_42"
+    argv = ["/bin/sh", "-c", f"echo 'Received token {token}' && echo 'ready'", "--api-key", token]
+
+    handle = RuntimeProcessHandle(
+        argv=argv,
+        cwd=tmp_path,
+        env={},
+    )
+    time.sleep(0.2)
+    handle.terminate_gracefully(timeout_seconds=1.0)
+
+    # 1. Sanitized argv
+    assert token not in handle.sanitized_argv
+    assert "[REDACTED]" in handle.sanitized_argv
+
+    # 2. Process handle repr
+    handle_repr = repr(handle)
+    assert token not in handle_repr
+    assert "[REDACTED]" in handle_repr
+
+    # 3. Stream log ring buffer redaction
+    logs = handle.get_logs()
+    logs_text = "\n".join(logs)
+    assert token not in logs_text
+    assert "[REDACTED]" in logs_text
+
+    # 4. RuntimeSpec and RuntimeInstance repr exclusion (repr=False)
+    ident = ModelIdentity(provider_id="llamacpp", model_id="test_model")
+    spec = RuntimeSpec(model_identity=ident, model_path="/fake/path.gguf", api_key=token)
+    assert token not in repr(spec)
+
+    inst = RuntimeInstance(instance_id="inst_1", spec=spec, api_key=token)
+    assert token not in repr(inst)
+
+
+# ==============================================================================
+# 22. Port Collision Bounded Retry Without Killing Foreign Process
+# ==============================================================================
+def test_22_port_collision_bounded_retry(tmp_path: Path, fake_gguf_model: Path):
+    """Verify port collision triggers bounded retry without adopting or killing foreign process."""
+    supervisor = LocalInferenceSupervisor()
+    ident = ModelIdentity(provider_id="llamacpp", model_id="qwen-collision-test")
+    spec = RuntimeSpec(model_identity=ident, model_path=str(fake_gguf_model))
+
+    mock_bin = RuntimeBinaryInfo(
+        binary_path=str(tmp_path / "mock_llama"),
+        version="v1.0",
+        implementation="llama.cpp",
+        sha256="abc1234",
+        provenance="managed_installation",
+    )
+
+    # Bind a real dummy foreign socket on loopback
+    foreign_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    foreign_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    foreign_sock.bind(("127.0.0.1", 0))
+    foreign_sock.listen(1)
+    colliding_port = foreign_sock.getsockname()[1]
+
+    # Available secondary port
+    avail_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    avail_sock.bind(("127.0.0.1", 0))
+    available_port = avail_sock.getsockname()[1]
+    avail_sock.close()
+
+    port_sequence = [colliding_port, available_port]
+    calls = []
+
+    def mock_find_port(preferred_port=None, host="127.0.0.1"):
+        p = port_sequence.pop(0) if port_sequence else available_port
+        calls.append(p)
+        return p
+
+    with (
+        patch.object(supervisor._binary_resolver, "resolve_binary", return_value=mock_bin),
+        patch("core.inference.supervisor.find_available_loopback_port", side_effect=mock_find_port),
+        patch("core.inference.supervisor.RuntimeProcessHandle") as mock_ph_cls,
+        patch("core.inference.supervisor.requests.get", return_value=MagicMock(status_code=200)),
+        patch("core.inference.supervisor.verify_endpoint_ownership", return_value=True),
+    ):
+        mock_handle = MagicMock()
+        mock_handle.pid = 9999
+        mock_handle.poll.return_value = None
+        mock_ph_cls.return_value = mock_handle
+
+        inst = supervisor.start(spec)
+        assert supervisor.state == RuntimeState.READY
+        # Verified retried on port 2 after collision on port 1
+        assert len(calls) == 2
+        assert colliding_port in calls
+        assert str(available_port) in inst.endpoint_url
+
+        # Foreign process socket is STILL open, alive, and unmolested!
+        assert foreign_sock.fileno() != -1
+        # Close dummy socket cleanly
+        foreign_sock.close()
+
+        supervisor.stop()
+        assert supervisor.state == RuntimeState.STOPPED
+
+
+# ==============================================================================
+# 23. Port Collision Exhaustion Raises PortCollisionError
+# ==============================================================================
+def test_23_port_collision_exhaustion_raises(tmp_path: Path, fake_gguf_model: Path):
+    """Verify persistent port collisions exhaust retries and raise PortCollisionError."""
+    supervisor = LocalInferenceSupervisor()
+    ident = ModelIdentity(provider_id="llamacpp", model_id="qwen-collision-fail")
+    spec = RuntimeSpec(model_identity=ident, model_path=str(fake_gguf_model))
+
+    mock_bin = RuntimeBinaryInfo(
+        binary_path=str(tmp_path / "mock_llama"),
+        version="v1.0",
+        implementation="llama.cpp",
+        sha256="abc1234",
+        provenance="managed_installation",
+    )
+
+    with (
+        patch.object(supervisor._binary_resolver, "resolve_binary", return_value=mock_bin),
+        patch("core.inference.supervisor.is_port_available", return_value=False),
+    ):
+        with pytest.raises(PortCollisionError):
+            supervisor.start(spec)
+        assert supervisor.state == RuntimeState.FAILED

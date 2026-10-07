@@ -33,7 +33,12 @@ from core.inference.models import (
     RuntimeSpec,
     RuntimeState,
 )
-from core.inference.ports import find_available_loopback_port, verify_endpoint_ownership
+from core.inference.ports import (
+    PortCollisionError,
+    find_available_loopback_port,
+    is_port_available,
+    verify_endpoint_ownership,
+)
 from core.inference.process import RuntimeProcessHandle
 from core.inference.validation import ModelArtifactValidator
 
@@ -215,116 +220,188 @@ class LocalInferenceSupervisor:
             except Exception as ex:
                 logger.debug("Observational snapshot before start failed: %s", ex)
 
-            # 7. Allocate loopback port and API key
-            port = spec.port or find_available_loopback_port(host=spec.host)
-            api_key = spec.api_key or secrets.token_urlsafe(32)
-            endpoint_url = f"http://{spec.host}:{port}"
+            # 7-11. Ephemeral port allocation, launch, and readiness probe with bounded retry on port collision
+            max_port_retries = 3 if spec.port is None else 0
+            attempt = 0
 
-            # 8. Assemble command line argv
-            argv = [
-                binary_info.binary_path,
-                "-m",
-                validated_model.canonical_path,
-                "-c",
-                str(spec.context_size),
-                "--host",
-                spec.host,
-                "--port",
-                str(port),
-                "--api-key",
-                api_key,
-                "--n-gpu-layers",
-                str(spec.gpu_layers),
-            ]
-            if spec.threads:
-                argv.extend(["-t", str(spec.threads)])
-            if spec.extra_args:
-                argv.extend(spec.extra_args)
-
-            # 9. Spawn supervised process handle
-            t0 = time.time()
-            try:
-                self._process_handle = RuntimeProcessHandle(
-                    argv=argv,
-                    cwd=Path(binary_info.binary_path).parent,
-                    env=child_env,
+            while True:
+                port = (
+                    spec.port
+                    if spec.port is not None
+                    else find_available_loopback_port(host=spec.host)
                 )
-            except Exception as ex:
-                self._state = RuntimeState.FAILED
-                raise RuntimeStartupError(f"Failed to spawn runtime process: {ex}") from ex
+                api_key = spec.api_key or secrets.token_urlsafe(32)
+                endpoint_url = f"http://{spec.host}:{port}"
 
-            inst = RuntimeInstance(
-                instance_id=instance_id,
-                spec=spec,
-                state=RuntimeState.STARTING,
-                pid=self._process_handle.pid,
-                endpoint_url=endpoint_url,
-                api_key=api_key,
-                started_at=t0,
-                binary_info=binary_info,
-                resource_snapshot_before=snap_before,
-            )
-            self._active_instance = inst
+                # Pre-flight check: verify port is not bound by a foreign process
+                if not is_port_available(port=port, host=spec.host):
+                    if attempt < max_port_retries:
+                        attempt += 1
+                        logger.warning(
+                            "Port %d collided before spawn (attempt %d/%d). Retrying with newly allocated port...",
+                            port,
+                            attempt,
+                            max_port_retries,
+                        )
+                        continue
+                    self._state = RuntimeState.FAILED
+                    raise PortCollisionError(
+                        f"Port collision detected on {spec.host}:{port}; maximum retries ({max_port_retries}) exceeded."
+                    )
 
-            # 10. Bounded readiness probe loop
-            deadline = t0 + spec.startup_timeout_seconds
-            probe_url = f"{endpoint_url}/health"
-            headers = {"Authorization": f"Bearer {api_key}"}
-            is_ready = False
+                # 8. Assemble command line argv
+                argv = [
+                    binary_info.binary_path,
+                    "-m",
+                    validated_model.canonical_path,
+                    "-c",
+                    str(spec.context_size),
+                    "--host",
+                    spec.host,
+                    "--port",
+                    str(port),
+                    "--api-key",
+                    api_key,
+                    "--n-gpu-layers",
+                    str(spec.gpu_layers),
+                ]
+                if spec.threads:
+                    argv.extend(["-t", str(spec.threads)])
+                if spec.extra_args:
+                    argv.extend(spec.extra_args)
 
-            while time.time() < deadline:
-                # Check for premature process crash
-                exit_code = self._process_handle.poll()
-                if exit_code is not None:
+                # 9. Spawn supervised process handle
+                t0 = time.time()
+                try:
+                    self._process_handle = RuntimeProcessHandle(
+                        argv=argv,
+                        cwd=Path(binary_info.binary_path).parent,
+                        env=child_env,
+                    )
+                except Exception as ex:
+                    self._state = RuntimeState.FAILED
+                    raise RuntimeStartupError(f"Failed to spawn runtime process: {ex}") from ex
+
+                inst = RuntimeInstance(
+                    instance_id=instance_id,
+                    spec=spec,
+                    state=RuntimeState.STARTING,
+                    pid=self._process_handle.pid,
+                    endpoint_url=endpoint_url,
+                    api_key=api_key,
+                    started_at=t0,
+                    binary_info=binary_info,
+                    resource_snapshot_before=snap_before,
+                )
+                self._active_instance = inst
+
+                # 10. Bounded readiness probe loop
+                deadline = t0 + spec.startup_timeout_seconds
+                probe_url = f"{endpoint_url}/health"
+                headers = {"Authorization": f"Bearer {api_key}"}
+                is_ready = False
+                port_collision_detected = False
+
+                while time.time() < deadline:
+                    # Check for premature process crash
+                    exit_code = self._process_handle.poll()
+                    if exit_code is not None:
+                        logs = self._process_handle.get_logs(tail_lines=20)
+                        logs_str = "\n".join(logs).lower()
+                        if any(
+                            err in logs_str
+                            for err in (
+                                "address already in use",
+                                "failed to bind",
+                                "port already in use",
+                                "eaddrinuse",
+                            )
+                        ) or not is_port_available(port=port, host=spec.host):
+                            port_collision_detected = True
+
+                        # Gracefully terminate own child handle (never signal or terminate foreign processes)
+                        self._process_handle.terminate_gracefully(timeout_seconds=2.0)
+                        self._process_handle = None
+
+                        if port_collision_detected and attempt < max_port_retries:
+                            attempt += 1
+                            logger.warning(
+                                "Port collision on %d detected during startup (attempt %d/%d). Retrying with newly allocated port...",
+                                port,
+                                attempt,
+                                max_port_retries,
+                            )
+                            break
+
+                        self._state = RuntimeState.FAILED
+                        inst.state = RuntimeState.FAILED
+                        inst.exit_code = exit_code
+                        inst.exit_reason = (
+                            f"Runtime process died during startup (exit {exit_code}):\n"
+                            + "\n".join(logs)
+                        )
+                        if port_collision_detected:
+                            raise PortCollisionError(inst.exit_reason)
+                        raise RuntimeCrashError(inst.exit_reason)
+
+                    # HTTP readiness probe
+                    try:
+                        resp = requests.get(probe_url, headers=headers, timeout=1.0)
+                        if resp.status_code == 200:
+                            is_ready = True
+                            break
+                        elif resp.status_code == 503:
+                            pass
+                    except requests.RequestException:
+                        pass
+
+                    time.sleep(0.5)
+
+                if port_collision_detected:
+                    continue
+
+                if not is_ready:
+                    # Startup timed out
                     logs = self._process_handle.get_logs(tail_lines=20)
+                    self._process_handle.terminate_gracefully(timeout_seconds=2.0)
                     self._state = RuntimeState.FAILED
                     inst.state = RuntimeState.FAILED
-                    inst.exit_code = exit_code
                     inst.exit_reason = (
-                        f"Runtime process died during startup (exit {exit_code}):\n"
+                        f"Startup readiness timed out after {spec.startup_timeout_seconds}s. Logs:\n"
                         + "\n".join(logs)
                     )
-                    raise RuntimeCrashError(inst.exit_reason)
+                    raise RuntimeStartupError(inst.exit_reason)
 
-                # HTTP readiness probe
-                try:
-                    resp = requests.get(probe_url, headers=headers, timeout=1.0)
-                    if resp.status_code == 200:
-                        # Model loaded and server ready!
-                        is_ready = True
-                        break
-                    elif resp.status_code == 503:
-                        # Server listening, still loading model weights into memory
-                        pass
-                except requests.RequestException:
-                    pass
+                # 11. Verify port ownership
+                if not verify_endpoint_ownership(
+                    host=spec.host,
+                    port=port,
+                    expected_pid=self._process_handle.pid,
+                    api_key=api_key,
+                ):
+                    # Terminate our own process handle; foreign processes are NEVER killed or touched
+                    self._process_handle.terminate_gracefully(timeout_seconds=2.0)
+                    self._process_handle = None
 
-                time.sleep(0.5)
+                    if attempt < max_port_retries:
+                        attempt += 1
+                        logger.warning(
+                            "Port %d ownership check failed (foreign process listening; attempt %d/%d). Retrying with newly allocated port...",
+                            port,
+                            attempt,
+                            max_port_retries,
+                        )
+                        continue
 
-            if not is_ready:
-                # Startup timed out
-                logs = self._process_handle.get_logs(tail_lines=20)
-                self._process_handle.terminate_gracefully(timeout_seconds=2.0)
-                self._state = RuntimeState.FAILED
-                inst.state = RuntimeState.FAILED
-                inst.exit_reason = (
-                    f"Startup readiness timed out after {spec.startup_timeout_seconds}s. Logs:\n"
-                    + "\n".join(logs)
-                )
-                raise RuntimeStartupError(inst.exit_reason)
+                    self._state = RuntimeState.FAILED
+                    inst.state = RuntimeState.FAILED
+                    inst.exit_reason = (
+                        f"Port collision: endpoint {endpoint_url} is not owned by child process"
+                    )
+                    raise PortCollisionError(inst.exit_reason)
 
-            # 11. Verify port ownership
-            if not verify_endpoint_ownership(
-                host=spec.host,
-                port=port,
-                expected_pid=self._process_handle.pid,
-                api_key=api_key,
-            ):
-                self._process_handle.terminate_gracefully(timeout_seconds=2.0)
-                self._state = RuntimeState.FAILED
-                inst.state = RuntimeState.FAILED
-                inst.exit_reason = f"Port ownership verification failed on {endpoint_url}"
-                raise SupervisorError(inst.exit_reason)
+                # Successfully verified port ownership and readiness
+                break
 
             # 12. Mark READY & record snapshot after load
             t_ready = time.time()

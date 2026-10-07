@@ -49,7 +49,7 @@ class RuntimeSpec(BaseModel):
     context_size: int = Field(default=2048, ge=128, le=131072)
     host: str = "127.0.0.1"
     port: Optional[int] = Field(default=None, ge=1024, le=65535)
-    api_key: Optional[str] = None
+    api_key: Optional[str] = Field(default=None, repr=False)
     gpu_layers: int = Field(default=0, ge=0)
     threads: Optional[int] = Field(default=None, ge=1)
     startup_timeout_seconds: float = Field(default=30.0, ge=0.1, le=300.0)
@@ -82,14 +82,18 @@ class RuntimeHealth(BaseModel):
 
 
 class RuntimeInstance(BaseModel):
-    """Active or historical execution instance of a managed runtime."""
+    """Active or historical execution instance of a managed runtime.
+
+    Security Boundary Note:
+    api_key is ephemeral and per-launch. repr=False prevents leakage into string logs or tracebacks.
+    """
 
     instance_id: str
     spec: RuntimeSpec
     state: RuntimeState = RuntimeState.STOPPED
     pid: Optional[int] = None
     endpoint_url: Optional[str] = None
-    api_key: Optional[str] = None
+    api_key: Optional[str] = Field(default=None, repr=False)
     started_at: Optional[float] = None
     ready_at: Optional[float] = None
     stopped_at: Optional[float] = None

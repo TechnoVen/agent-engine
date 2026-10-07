@@ -579,5 +579,38 @@ class ApprovalRequest(BaseModel):
       * Overall bundle SHA-256 cryptographic digest
       * Detailed `RedactionReport` summarizing redactions, minimized paths, preserved references, and canary scrub counts.
 
+---
+
+## 16. Managed Local Inference Supervisor Security Architecture (R3.4)
+
+* **Session & Process Group Isolation Without `preexec_fn`:**
+  * Child runtime processes are launched via `start_new_session=True` on POSIX (`subprocess.CREATE_NEW_PROCESS_GROUP` on Windows).
+  * This strictly eliminates Python post-fork code execution (`preexec_fn=os.setsid`), preventing fork-deadlocks in multi-threaded Python parents while maintaining clean process group termination (`os.killpg(pgid, signal.SIGTERM/SIGKILL)`).
+  * Descendant process discovery (`psutil.Process.children(recursive=True)`) guarantees zero orphaned worker processes.
+
+* **Controlled Binary Provenance & Override Gating:**
+  * Runtime discovery resolves exclusively from Agent Engine private runtime storage (`~/.agent_engine/runtimes/llamacpp/llama-server`) or packaged desktop resources (`apps/desktop/src-tauri/binaries/llama-server`).
+  * Third-party local runtimes (such as Ollama or LM Studio) and arbitrary system `PATH` lookups are strictly excluded.
+  * The `AGENT_ENGINE_LLAMA_BIN` operator override is restricted behind `AGENT_ENGINE_ALLOW_UNVERIFIED_BINARY=true` or explicit development mode (`AGENT_ENGINE_DEV_MODE=true` / `AGENT_ENGINE_ENV in ('dev', 'development', 'test')`). In default and production modes, arbitrary executable overrides are rejected fail-closed.
+  * Executable integrity is validated via SHA-256 digest before launch (verifying installed byte integrity; publisher authenticity and code-signing root trust belong to R2.13).
+
+* **Loopback Binding & Endpoint Protection Threat Model:**
+  * Managed inference servers bind strictly to loopback (`127.0.0.1`, `localhost`, `::1`). External interface or `0.0.0.0` binding is rejected fail-closed.
+  * Each execution generates a cryptographically random ephemeral bearer token passed via `--api-key <token>`.
+  * **Threat Model & Security Boundary:**
+    * Loopback `--api-key` blocks unauthenticated network connections from local software and network probes.
+    * Command line arguments (`argv`) of running processes may be visible via `/proc/<pid>/cmdline` to processes running under the same user UID (subject to host ptrace/hidepid settings). Agent Engine does not claim kernel-level isolation between same-UID processes.
+    * To prevent token leakage:
+      1. The bearer token is masked with `repr=False` in Pydantic models.
+      2. The token is sanitized as `[REDACTED]` in `RuntimeProcessHandle.sanitized_argv` and string representations.
+      3. The token is scrubbed from stdout/stderr ring buffer logs.
+      4. The token is never persisted to the execution ledger or diagnostic export bundles.
+      5. The token is revoked and destroyed immediately upon process exit.
+
+* **Port Collision Bounded Retries & Foreign Process Protection:**
+  * Ephemeral port allocation verifies socket availability before spawning.
+  * If a race condition or bind conflict occurs (`PortCollisionError`), the supervisor gracefully terminates only its own child process, retrying with a newly allocated port up to 3 times.
+  * Foreign processes listening on colliding ports are never signaled, terminated, or adopted.
+
 
 
