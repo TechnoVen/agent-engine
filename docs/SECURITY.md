@@ -341,10 +341,10 @@ class ApprovalRequest(BaseModel):
   * Governs all execution dimensions with mandatory untrusted defaults (`untrusted_default()`, stable identifier `untrusted_default_v1`) and validation (`validate_for_untrusted()`):
     | Parameter | Type / Unit | Default Value (`untrusted_default_v1`) | Enforcement Mechanism |
     | :--- | :--- | :--- | :--- |
-    | `max_wall_time_seconds` | `float` (seconds) | `30.0` | Wall-clock deadline check in supervisor poll loop |
-    | `max_cpu_time_seconds` | `float` (seconds) | `30.0` | Cumulative cgroup v2 `cpu.stat` (`usage_usec`) across all tasks |
-    | `cpu_quota_percent` | `float` (percent) | `100.0%` (1 core) | cgroup v2 `CPUQuota` bandwidth throttling |
-    | `rlimit_cpu_seconds` | `int` (seconds) | `None` (opt-in) | Per-process hardware trap via trusted `prlimit` wrapper |
+    | `max_wall_time_seconds` | `float` (seconds) | `30.0` | Wall-clock deadline check in supervisor poll loop (elapsed time) |
+    | `max_cpu_time_seconds` | `float` (seconds) | `30.0` | Cumulative cgroup v2 `cpu.stat` (`usage_usec`) across all tasks (cumulative sandbox CPU consumption) |
+    | `cpu_quota_percent` | `float` (percent) | `100.0%` (1 core) | cgroup v2 `CPUQuota` bandwidth throttling (consumption rate) |
+    | `rlimit_cpu_seconds` | `int` (seconds) | `None` (opt-in) | Per-process kernel CPU-time limit trap via trusted `prlimit` wrapper |
     | `max_memory_bytes` | `int` (bytes) | `536,870,912` (512 MiB) | cgroup v2 `MemoryMax` |
     | `require_swap_disabled`| `bool` | `True` | cgroup v2 `MemorySwapMax=0` (verified via probe) |
     | `max_processes` | `int` (count) | `32` | cgroup v2 `TasksMax` (counts bwrap supervisor + worker tasks) |
@@ -353,6 +353,12 @@ class ApprovalRequest(BaseModel):
     | `network.mode` | `enum` | `DENY` | Bubblewrap `--unshare-net` (no `--share-net`) |
     | `max_concurrent_sandboxes`| `int` (host capacity) | `16` | Parent admission limit (`CONCURRENCY_CAPACITY_EXCEEDED` -> `BLOCKED`) |
     | `max_total_memory_bytes` | `int` (host capacity) | `4,294,967,296` (4 GiB) | Parent aggregate memory limit (`MEMORY_CAPACITY_EXCEEDED` -> `BLOCKED`) |
+
+* **CPU Control Dimensions & Semantics (CTO Review Item 2):**
+  * **Wall Timeout (`max_wall_time_seconds`):** Governs total wall-clock elapsed time from start to completion.
+  * **CPUQuota (`cpu_quota_percent`):** Enforces rate of CPU consumption via cgroup v2 `cpu.max` bandwidth throttling without terminating the process.
+  * **cgroup `cpu.stat` Budget (`max_cpu_time_seconds`):** Enforces cumulative sandbox CPU consumption across all processes in the transient scope; exceeding the quota terminates the sandbox with `CPU_LIMIT`.
+  * **RLIMIT_CPU (`rlimit_cpu_seconds`):** Enforces kernel-enforced per-process CPU-time limit via `/usr/bin/prlimit --cpu=sec:sec+1`; exceeding the limit delivers `SIGXCPU` directly to the offending process.
 
 * **Separation of Admission Capacity from Runtime Violations (CTO Review Item 2):**
   * Parent-side admission decisions are strictly separated from worker runtime resource violations.
@@ -400,10 +406,10 @@ class ApprovalRequest(BaseModel):
   * Hard-Exit Evidence Matrix for all 10 controls:
     | Control Dimension | Classification | OS / Kernel Primitive Exercised | Concrete Evidence & Verification |
     | :--- | :--- | :--- | :--- |
-    | **Wall Time** | `REAL_LINUX_INTEGRATION` | Wall-clock deadline poll loop | Monitored in supervisor poll loop; terminates worker promptly and records `WALL_TIME_LIMIT` |
-    | **CPUQuota** | `REAL_LINUX_INTEGRATION` | cgroup v2 `cpu.max` bandwidth throttling | Throttles CPU rate without killing process; verified succeeds with `NORMAL` |
+    | **Wall Time** | `REAL_LINUX_INTEGRATION` | Wall-clock deadline poll loop | Monitored in supervisor poll loop; terminates worker promptly and records `WALL_TIME_LIMIT` (elapsed time) |
+    | **CPUQuota** | `REAL_LINUX_INTEGRATION` | cgroup v2 `cpu.max` bandwidth throttling | Throttles CPU consumption rate without killing process; verified succeeds with `NORMAL` |
     | **Cumulative CPU** | `REAL_LINUX_INTEGRATION` | cgroup v2 `cpu.stat` (`usage_usec`) | Cumulative CPU consumption across all scope tasks exceeds budget; records `CPU_LIMIT` |
-    | **RLIMIT_CPU** | `REAL_LINUX_INTEGRATION` | `/usr/bin/prlimit --cpu=sec:sec+1` | Pre-exec hardware limit trap; triggers `SIGXCPU` and records `CPU_LIMIT` without `preexec_fn` |
+    | **RLIMIT_CPU** | `REAL_LINUX_INTEGRATION` | `/usr/bin/prlimit --cpu=sec:sec+1` | Pre-exec kernel-enforced per-process CPU-time limit trap; triggers `SIGXCPU` and records `CPU_LIMIT` without `preexec_fn` |
     | **MemoryMax** | `REAL_LINUX_INTEGRATION` | cgroup v2 `MemoryMax` + `memory.events` | Allocation exceeding 512 MiB triggers kernel OOM killer (`oom_kill > 0`); records `MEMORY_LIMIT` |
     | **Process Count** | `REAL_LINUX_INTEGRATION` | cgroup v2 `TasksMax` + `pids.events` | Fork bomb blocked when tasks reach limit; records `PROCESS_LIMIT` |
     | **Network DENY** | `REAL_LINUX_INTEGRATION` | Bubblewrap `--unshare-all` + `--unshare-net` | Detached network namespace; socket connect fails with `[Errno 101] Network is unreachable` |
