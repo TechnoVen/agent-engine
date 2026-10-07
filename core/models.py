@@ -15,6 +15,34 @@ logging.basicConfig(
 )
 logger = logging.getLogger("agent_engine.models")
 
+# Re-export canonical Model Capability Registry symbols (Milestone R3 Task R3.2)
+from core.model_registry import (
+    LatencyClass,
+    ModelCandidate,
+    ModelCapabilities,
+    ModelDefinition,
+    ModelRegistry,
+    ModelRequirements,
+    ProvenanceType,
+    TriStateBool,
+    get_model_registry,
+    reset_model_registry,
+)
+
+__all__ = [
+    "get_model_provider",
+    "ModelRegistry",
+    "ModelDefinition",
+    "ModelCapabilities",
+    "ModelRequirements",
+    "ModelCandidate",
+    "TriStateBool",
+    "ProvenanceType",
+    "LatencyClass",
+    "get_model_registry",
+    "reset_model_registry",
+]
+
 
 def get_model_provider(
     provider_name: str,

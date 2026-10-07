@@ -853,7 +853,7 @@ Agent Engine can automatically select and actually invoke the best eligible loca
 - **Required Evidence:**
   - Provider conformance tests (`tests/test_r3_provider_registry.py`).
 
-### [ ] R3.2 — Model Capability Registry
+### [x] R3.2 — Model Capability Registry
 
 - **Migration:** `NEW`
 - **Target release:** `0.5`
@@ -863,7 +863,7 @@ Agent Engine can automatically select and actually invoke the best eligible loca
 - **Deliverables:**
   - Track reasoning, coding, vision, tools, structured output, embeddings, context, price, latency, privacy and hardware metadata.
 - **Acceptance Criteria:**
-  - [ ] Router can query eligible models by capability constraints.
+  - [x] Router can query eligible models by capability constraints.
 - **Required Evidence:**
   - Registry tests + sample catalog.
 

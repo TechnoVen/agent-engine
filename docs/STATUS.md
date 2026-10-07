@@ -634,15 +634,33 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/ledger/service.py"
     - "core/execution/kernel_lm_adapter.py"
     - "tests/test_r3_provider_registry.py"
-  notes: "S1 — Implemented and implementation-tested. Established single canonical provider contract: (1) Machine provider identity (provider_id) separated from display names, aliases, endpoints, and model catalogs. (2) Provider vs model responsibility separation: provider owns connection/auth/health/protocols; model owns reasoning/context/tokens. (3) Explicit 6-state health taxonomy (configured, available, healthy, degraded, unavailable, authentication_failed) with timestamped probe latency, error reasons, and cache TTL (default 60s). (4) Strict R2.6 Secret Boundary: secrets resolved through SecretsService or direct call-scope parameters; 0 global os.environ pollution, 0 plaintext secrets in logs/diagnostics/dumps. (5) Full normalized provider error hierarchy (NormalizedProviderError, ProviderAuthenticationError, ProviderRateLimitError, ProviderTimeoutError, ProviderConnectionError, ProviderNotFoundError, ProviderServerError, ProviderInvalidRequestError). (6) Transparent legacy config migration (config.yaml to ProviderRegistry). (7) Streaming capability declarations and conformance. (8) Thread-safe registry singleton with RLock and active probe caching. (9) Execution ledger integration tracking endpoint_class and provider call evidence. 15/15 dedicated conformance tests passing, 823/823 full regression passing."
+  notes: "S1 — Implemented and implementation-tested. Established single canonical provider contract: (1) Machine provider identity (provider_id) separated from display names, aliases, endpoints, and model catalogs. (2) Provider vs model responsibility separation: provider owns connection/auth/health/protocols; model owns reasoning/context/tokens. (3) Separated 3-dimensional health state taxonomy: ProviderConfigurationState (CONFIGURED, UNCONFIGURED, INVALID), ProviderAvailability (AVAILABLE, UNAVAILABLE, UNKNOWN), ProviderHealthStatus (HEALTHY, DEGRADED, UNHEALTHY, AUTHENTICATION_FAILED, UNKNOWN), enforcing configured != available != healthy. (4) Low-cost, strictly bounded (<= 5s) health probes querying lightweight metadata endpoints without executing LLM completions, with sanitized errors and zero secret leaks. (5) Strict R2.6 Secret Boundary: secrets resolved through SecretsService or direct call-scope parameters; 0 global os.environ pollution, 0 plaintext secrets in logs/diagnostics/dumps. (6) Pure migration idempotency (migrate(old) == migrate(canonical) == migrate(migrate(old))). (7) Alias shadow protection and normalization; generic 'local' strictly scoped as legacy migration alias. (8) RLock concurrency discipline: network I/O never held across locks. (9) Complete 9-adapter conformance suite passing identical contract (openai, anthropic, gemini, ollama, llamacpp, deepseek, groq, kimi, compatible). (10) Controlled non-sensitive endpoint_class taxonomy (cloud, local_managed, local_external, custom_remote) with zero URLs/ports/secrets in ledger evidence. 27/27 dedicated conformance tests passing, 848/848 full regression passing."
+
+- id: R3.2
+  title: "Model capability registry"
+  task_status: done
+  capability_maturity: S1
+  migration: NEW
+  owner: "Core & Model Architecture"
+  depends_on: [R3.1]
+  evidence:
+    - "core/model_registry/__init__.py"
+    - "core/model_registry/models.py"
+    - "core/model_registry/catalog.py"
+    - "core/model_registry/registry.py"
+    - "core/models.py"
+    - "tests/test_r3_model_registry.py"
+  notes: "S1 — Implemented and implementation-tested. Completed Model Capability Registry: (1) Scoped canonical identity strictly formatted as 'provider_id:model_id' with provider alias resolution. (2) 3-valued logic (TriStateBool: TRUE, FALSE, UNKNOWN) for capabilities; unknown cannot satisfy hard requirements. (3) Complete roadmap capability dimensions: reasoning, coding, vision, tools, structured output, embeddings, streaming. (4) Distinct token context limits: max_input_tokens, max_output_tokens, and max_total_context_tokens. (5) Pricing metadata with currency and freshness timestamps. (6) Latency profile combining catalog baseline classification and runtime observed telemetry. (7) Privacy metadata: is_local, data_leaves_device, zero_data_retention. (8) Declarative local hardware metadata: min_ram_bytes, min_vram_bytes, recommended_ram_bytes, quantization, architecture. (9) Provenance precedence merging: USER_OVERRIDE (4) > LOCAL_INSPECTED (3) > REMOTE_DISCOVERY (2) > BUILTIN (1). (10) Deterministic eligibility query (query_eligible_models) producing ModelCandidate instances with transparent, explainable rejection reasons. (11) Built-in reference catalog across cloud and local providers. 13/13 dedicated tests passing, 848/848 full regression passing."
 ```
 
 ---
 
 ## 8. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `823 passed, 3 warnings in 315.42s` (`uv run pytest`)
-- **R3.1 Canonical Provider Registry Suite:** `15 passed in 3.16s` (`uv run pytest tests/test_r3_provider_registry.py`)
+- **Full Regression Suite:** `848 passed, 3 warnings in 107.73s` (`uv run pytest -q`)
+- **Combined R3 Model Layer Suites:** `40 passed in 3.45s` (`uv run pytest tests/test_r3_provider_registry.py tests/test_r3_model_registry.py`)
+- **R3.1 Canonical Provider Registry Suite:** `27 passed in 3.32s` (`uv run pytest tests/test_r3_provider_registry.py`)
+- **R3.2 Model Capability Registry Suite:** `13 passed in 4.23s` (`uv run pytest tests/test_r3_model_registry.py`)
 - **R2 Checkpoint and Rollback Suite:** `35 passed in 3.93s` (`uv run pytest tests/test_r2_checkpoint_service.py`)
 - **R2 Diagnostics Redaction Suite:** `27 passed in 3.91s` (`uv run pytest tests/test_r2_diagnostics_redaction.py`)
 - **R2 Safe Staged Patch Application Suite:** `25 passed in 2.85s` (`uv run pytest tests/test_r2_patch_service.py`)
@@ -658,6 +676,7 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
   - `uv run ruff check`: passed (`All checks passed!`)
   - `uv run ruff format --check`: passed on all modified files
 - **Desktop Tauri & Frontend Workspace:**
+
   - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.78s`)
   - `pnpm -r build`: passed (`12.4s`)
 - **Documented Upstream Warnings (3 known upstream warnings, 0 new unexplained/project-owned warnings):**
