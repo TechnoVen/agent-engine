@@ -1,7 +1,7 @@
 # Agent Engine — Canonical Implementation Status & Capability Matrix
 
 > **Status:** Authoritative Implementation Reality  
-> **Updated:** September 18, 2026 (Stage R0 Baseline — Corrected per CTO Review)  
+> **Updated:** October 7, 2026 (Milestone R2 Formally Closed at S1 per CTO Review)  
 > **Governing Release:** 0.5 Nadir Founder MVP  
 
 ---
@@ -410,6 +410,17 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "services/python/server/api.py"
     - "tests/test_api_domain_decomposition.py"
   notes: "Decomposed the monolithic services/python/server/api.py (5,683 lines, 161 route handlers) into 19 coherent domain routers under services/python/server/routers/. Established AppServices centralized dependency container in container.py with lazy accessors and test injection hooks, canonical domain error translation in errors.py, SSE streaming transport helpers in transport.py, IPC security verifiers in dependencies.py, and all 139 Pydantic schemas in schemas.py. Constructed create_app() application factory in app.py mounting all 19 domain routers under /v1 and root liveness probe at /healthz. Refactored api.py into a lightweight 345-line backward-compatible facade with zero route decorators and zero business logic. 25/25 dedicated domain decomposition tests passing, 522/522 full regression suite passing."
+```
+
+---
+
+## 6. Canonical Task Tracking Matrix (Stage R2 — Security, Authorization & Recovery)
+
+> **Milestone Status:** S1 — Implemented and implementation-tested  
+> **0.5 Hard-Exit Gate:** PASSED (R2.1–R2.12 completed for 0.5 security scope; R2.13 deferred to 1.0 release-trust scope)  
+> **Verification Evidence:** 808 full regression tests passed, 274 combined R2 security tests passed across 11 suites, 3 known upstream warnings, 0 new unexplained/project-owned warnings  
+
+```yaml
 - id: R2.1
   title: "Mandatory local IPC authentication"
   task_status: done
@@ -478,7 +489,7 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/skills/models.py"
     - "core/execution/coordinator.py"
     - "tests/test_r2_workspace_paths.py"
-  notes: "S1 — implemented and implementation-tested. Implemented canonical workspace path enforcement and containment adhering to all CTO design corrections. Established ResolvedWorkspacePath canonical PathLike value object, trusted workspace scope hierarchy (effective = project_root ∩ union(capability_scopes) ∩ union(policy_scopes) ∩ optional_caller_narrower_scope) with caller-narrowing-only semantics (widening attempts ignored fail-closed, empty authority fails closed), parent-chain validation for non-existent targets, internal symlink destination binding, immediate pre-side-effect TOCTOU revalidation, cross-platform path semantics implemented and tested at unit level, immutable project identity (project_id) binding preventing cross-project authorization reuse, null-byte rejection fail-closed, and machine path redaction in public traces. 24/24 dedicated security test scenarios passing, full regression suite passing."
+  notes: "S1 — implemented and implementation-tested. Implemented canonical path resolution + scope containment + symlink validation + immediate pre-side-effect revalidation adhering to all CTO design corrections. Established ResolvedWorkspacePath canonical PathLike value object, trusted workspace scope hierarchy (effective = project_root ∩ union(capability_scopes) ∩ union(policy_scopes) ∩ optional_caller_narrower_scope) with caller-narrowing-only semantics (widening attempts ignored fail-closed, empty authority fails closed), parent-chain validation for non-existent targets, internal symlink destination binding, immediate pre-side-effect TOCTOU revalidation, cross-platform path semantics implemented and tested at unit level, immutable project identity (project_id) binding preventing cross-project authorization reuse, null-byte rejection fail-closed, and machine path redaction in public traces. 24/24 dedicated security test scenarios passing, full regression suite passing."
 - id: R2.6
   title: "Secrets service and runtime injection"
   task_status: done
@@ -508,7 +519,7 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/context/__init__.py"
     - "core/skills/boundary.py"
     - "tests/test_r2_prompt_injection.py"
-  notes: "S1 — implemented and implementation-tested. Established canonical content trust and authority separation (ContentTrust: SYSTEM, TRUSTED_USER, INTERNAL_STATE, UNTRUSTED_CONTENT; ContentAuthority: SYSTEM_POLICY, USER_DIRECTIVE, EVIDENCE). Enforced strict inviolable security invariant: untrusted content can never claim or exercise SYSTEM_POLICY or USER_DIRECTIVE authority (raises ValueError fail-closed). Implemented ContentProvenance tracking (source_id, source_type, content_hash, metadata). Structured envelopes (<<<BEGIN_UNTRUSTED_EXTERNAL_DATA>>> / <<<END_UNTRUSTED_EXTERNAL_DATA>>>) with mandatory delimiter escaping, zero-width Unicode smuggling sanitization, and role spoofing neutralization (prepending [DATA] to simulated system/human/assistant turns). ContextBuilder now enforces automatic enveloping for untrusted fields, RAG retrievals, and untrusted inputs. Defends across 26 comprehensive adversarial scenarios (jailbreaks, fake approvals, fake policies, path escapes, delimiter breakouts, secret exfiltration, token exhaustion DoS, external API downgrades, RAG metadata downgrades, derived child invariance, etc.). Full backend defense-in-depth: backend capability boundary, policy engine, and secrets service fail closed regardless of LLM generation. 26/26 dedicated security test scenarios passing, 675/675 full regression passing."
+  notes: "S1 — implemented and implementation-tested. Established machine-readable ContentTrust / ContentAuthority separation + backend authorization boundary + untrusted content remains EVIDENCE (ContentTrust: SYSTEM, TRUSTED_USER, INTERNAL_STATE, UNTRUSTED_CONTENT; ContentAuthority: SYSTEM_POLICY, USER_DIRECTIVE, EVIDENCE). Enforced strict inviolable security invariant: untrusted content can never claim or exercise SYSTEM_POLICY or USER_DIRECTIVE authority (raises ValueError fail-closed). Structured envelopes (<<<BEGIN_UNTRUSTED_EXTERNAL_DATA>>> / <<<END_UNTRUSTED_EXTERNAL_DATA>>>) serve as defense-in-depth with mandatory delimiter escaping, zero-width Unicode smuggling sanitization, and role spoofing neutralization (prepending [DATA] to simulated system/human/assistant turns); delimiters alone do not prevent injection without the backend authorization boundary. ContextBuilder enforces automatic enveloping for untrusted fields, RAG retrievals, and untrusted inputs. Defends across 26 comprehensive adversarial scenarios (jailbreaks, fake approvals, fake policies, path escapes, delimiter breakouts, secret exfiltration, token exhaustion DoS, external API downgrades, RAG metadata downgrades, derived child invariance, etc.). Full backend defense-in-depth: backend capability boundary, policy engine, and secrets service fail closed regardless of LLM generation. 26/26 dedicated security test scenarios passing, 675/675 full regression passing."
 - id: R2.8
   title: "Sandbox worker runtime"
   task_status: done
@@ -576,8 +587,8 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
   notes: "S1 — implemented and implementation-tested. Completed R2.11 Final Recovery Closure: (1) Permanently removed public force=True rollback; live divergence unconditionally halts with ROLLBACK_CONFLICT. (2) Relocated checkpoint & patch recovery storage to Agent Engine private root (~/.agent_engine/checkpoints/ and ~/.agent_engine/patch_recovery/, mode 0o700/0o600), guaranteeing sandbox workers with project READ_ONLY access cannot access them. (3) Durable restore operation journal (RestoreOperation: PREPARED, RESTORING, COMPLETED, PARTIAL, CONFLICT, RECOVERY_REQUIRED, FAILED) persisted with fsync before live mutation; restart reconciliation. (4) Immediate pre-mutation resource revalidation with engine locks; truthful partial multi-resource restore reporting (PARTIAL). (5) Canonical R2.4 structured compute_rollback_approval_digest binding complete restore plan (digest_version 1, project, checkpoint, restore ID, sorted resource identities, types, paths, pre-state hashes, expected post-state hashes). (6) Checkpoint material integrity verified before mutation; tampered backup raises CheckpointIntegrityError (tested across file, config, SQLite, and Git). (7) File permission semantics: stat.S_IMODE(st_mode) & 0o777 bitmask (0600, 0644, 0755), never blanket chmod; privileged setuid/setgid bits strictly masked out; staged atomic commit uses kernel/filesystem-enforced atomic no-clobber. (8) Git bounded scope: only declared/tracked files, never .env, credentials, or untracked files; 0 remote ops. (9) SQLite restore maintenance boundary: exclusive lock, connection quiescing, WAL mode consistency. (10) Typed config serialization: SecretReference preserved, SecretValue forbidden, fail-closed on unknown objects without repr(). 35/35 dedicated precision tests passing, full regression passing."
 - id: R2.12
   title: "Diagnostics redaction"
-  task_status: complete
-  capability_maturity: S1 — Implemented and implementation-tested
+  task_status: done
+  capability_maturity: S1
   migration: REFACTOR
   owner: "Security & Control Plane Architecture"
   depends_on: [R2.6]
@@ -593,7 +604,7 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
 
 ---
 
-## 6. Active Test Suite & Deprecation Warnings Log
+## 7. Active Test Suite & Deprecation Warnings Log
 
 - **Full Regression Suite:** `808 passed, 3 warnings in 105.43s` (`uv run pytest`)
 - **R2 Checkpoint and Rollback Suite:** `35 passed in 3.93s` (`uv run pytest tests/test_r2_checkpoint_service.py`)

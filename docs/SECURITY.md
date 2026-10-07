@@ -247,7 +247,7 @@ class ApprovalRequest(BaseModel):
 ## 10. Untrusted-Content Labeling & Prompt-Injection Controls (R2.7)
 
 * **Content Trust Hierarchy & Authority Separation (`core/context/models.py`):**
-  * Core Principle: **Authority ≠ Content**. Data retrieved from external environments or untrusted origins cannot dictate policy, grant approvals, or alter tool permissions.
+  * Core Principle: **Authority ≠ Content**. Machine-readable `ContentTrust` / `ContentAuthority` separation + backend authorization boundary + untrusted content remains strictly `EVIDENCE`. Delimiter framing and structured envelopes provide defense-in-depth formatting, but delimiter framing alone does not prevent prompt injection. Invariant backend boundaries guarantee data retrieved from external environments or untrusted origins cannot dictate policy, grant approvals, or alter tool permissions.
   * `ContentTrust` classifications:
     * `SYSTEM`: Trusted internal system prompts and architectural policies.
     * `TRUSTED_USER`: Explicit user prompts and interactive directives via verified channels.

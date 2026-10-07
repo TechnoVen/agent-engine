@@ -585,6 +585,10 @@ A real desktop request travels through project/session context, routing, a real 
 
 # R2 — Security, Authorization & Recovery
 
+> **Status:** S1 — Implemented and implementation-tested  
+> **0.5 Hard-Exit Gate:** PASSED (R2.1–R2.12 completed for 0.5 security scope; R2.13 deferred to 1.0 release-trust scope)  
+> **Verification Evidence:** 808 full regression tests passed, 274 combined R2 security tests passed across 11 suites, 3 known upstream warnings, 0 new unexplained/project-owned warnings  
+
 ## Objective
 
 Make the kernel safe enough for real local daily work and future external extensions.
@@ -666,7 +670,7 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
 - **Dependencies:** R1.6
 - **User Story:** As a user, I want tools constrained to approved project roots so path traversal or symlink tricks cannot reach unrelated files.
 - **Deliverables:**
-  - Canonicalize paths via single `ResolvedWorkspacePath` PathLike value object.
+  - Canonical path resolution + scope containment + symlink validation + immediate pre-side-effect revalidation via single `ResolvedWorkspacePath` PathLike value object.
   - Pre-authorization realpath resolution (symlinks, ancestor chains) and pre-side-effect TOCTOU revalidation.
   - Per-tool workspace scopes with caller-narrowing-only hierarchy (`project_root ∩ union(capability_scopes) ∩ union(policy_scopes) ∩ optional_caller_narrower_scope`).
 - **Acceptance Criteria:**
@@ -708,13 +712,14 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
 - **Dependencies:** R1.7, R2.3
 - **User Story:** As a user, I want emails, web pages and retrieved documents treated as untrusted data so embedded instructions cannot silently override my policies.
 - **Deliverables:**
+  - Machine-readable ContentTrust / ContentAuthority separation + backend authorization boundary + untrusted content remains EVIDENCE (delimited framing as defense-in-depth).
   - Provenance/trust metadata on retrieved content.
   - Context builder separates system/user instructions from untrusted data.
   - Tool authorization never derives from retrieved text.
 - **Acceptance Criteria:**
   - [x] Prompt-injection fixtures cannot authorize tools or alter policy.
 - **Required Evidence:**
-  - Adversarial context tests (`tests/test_r2_prompt_injection.py` — 17 comprehensive scenarios).
+  - Adversarial context tests (`tests/test_r2_prompt_injection.py` — 26 comprehensive scenarios).
 
 ### [x] R2.8 — Sandbox worker runtime
 
