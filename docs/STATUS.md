@@ -672,17 +672,39 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "services/python/server/api.py"
     - "tests/test_r3_resource_manager.py"
   notes: "S1 — Implemented and implementation-tested. Completed Host Resource Manager (Final Telemetry Closure): (1) Factual, timestamped host telemetry snapshot (captured_at, platform, architecture, cpu, memory, accelerators, probe_status). (2) Honest memory accounting in bytes (total_bytes, available_bytes, used_bytes, free_bytes) with strict non-negative and available <= total invariants. (3) Accelerators discovery with truthful VRAM and Apple Silicon unified memory protection (never double-counted as separate VRAM). Zero accelerators is valid. (4) Independent probe failure: failure in accelerator detection does not drop CPU/memory facts. (5) Zero device fingerprinting: hostname, username, serial number, and home paths are strictly excluded. (6) Bounded external probes with safe stream draining: timeout <= 2s, shell=False argv list execution, output truncated to <= 64KB, and child process terminated on overflow without retaining parent memory. (7) Trusted executable resolution: probe binaries resolve strictly from trusted system paths, rejecting PATH-shadowing and project/workspace directories. (8) CPU utilization honest baseline: first non-blocking sample returns None (zero fake 0.0), subsequent samples return factual measured utilization. (9) Multi-probe accelerator deduplication: merges sysfs, nvidia-smi, and lspci entries by PCI bus ID or vendor/model into a single record with richer driver marketing names, live NVML memory, and process-local IDs (gpu:0). (10) Concurrency discipline: RLock is never held across probe I/O. (11) Cache and stale semantics: fresh for stale_threshold (2s), cached up to cache_ttl (10s), with factual captured_at and cache_age_seconds preserved. (12) Canonical REST API endpoint GET /v1/resources with local IPC authentication enforcement; adapted legacy GET /telemetry/hardware. (13) Strict R3.2 boundary: host facts exposed without premature model recommendation or winner ranking. 18/18 precision tests passing, 869/869 full regression passing."
+
+- id: R3.4
+  title: "Managed Local Inference Supervisor"
+  task_status: done
+  capability_maturity: S1
+  migration: CREATE
+  owner: "Runtime & Model Architecture"
+  depends_on: ["R3.1", "R3.2", "R3.3"]
+  evidence:
+    - "core/inference/__init__.py"
+    - "core/inference/models.py"
+    - "core/inference/binary.py"
+    - "core/inference/environment.py"
+    - "core/inference/validation.py"
+    - "core/inference/ports.py"
+    - "core/inference/process.py"
+    - "core/inference/supervisor.py"
+    - "core/providers/adapters/llamacpp.py"
+    - "core/execution/kernel_lm_adapter.py"
+    - "tests/test_r3_local_supervisor.py"
+  notes: "S1 — Implemented and implementation-tested. Completed Managed Local Inference Supervisor: (1) Narrow 0.5 state machine (STOPPED, STARTING, READY, STOPPING, FAILED). (2) Controlled binary provenance and version resolution (rejecting arbitrary user PATH, workspace roots, /tmp, and Downloads; resolving from Agent Engine private runtime installation or packaged desktop resources). (3) Secret-free allowlisted child environment (strictly excluding AGENT_ENGINE_IPC_TOKEN, master keys, and provider secrets). (4) Model artifact validation (regular readable file, safe symlink resolution, non-empty, GGUF magic bytes b'GGUF' verification). (5) Loopback-only binding (127.0.0.1 strictly enforced; 0.0.0.0 / LAN exposure rejected) and local endpoint bearer token protection (--api-key). (6) Port allocation and foreign collision prevention with PID ownership verification. (7) Process group supervision (preexec_fn=os.setsid / CREATE_NEW_PROCESS_GROUP, graceful SIGTERM -> wait -> SIGKILL escalation, and clean descendant process reaping leaving zero orphan processes). (8) Single-flight concurrency and idempotency: concurrent duplicate start() calls yield one instance; start() when READY is idempotent; stop() when STOPPED is idempotent. (9) Readiness distinguished from process alive: handles HTTP 503 'Loading model' polling until HTTP 200 'ok'. (10) Bounded ring buffer log capture (max lines & max bytes; zero prompt/secret leaks). (11) Seamless integration with canonical llamacpp ProviderAdapter and ExecutionCoordinator; zero shadow provider bypasses. (12) Observational ResourceManager snapshots recorded before start and after load. (13) Execution ledger records endpoint_class='local_managed'. (14) Real clean-machine E2E test with real binary, real model, real prompt completion, and clean shutdown. 18/18 precision tests passing, 887/887 full regression passing."
 ```
 
 ---
 
 ## 8. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `869 passed, 3 warnings in 118.50s` (`uv run pytest -q`)
-- **Combined R3 Model Layer Suites:** `61 passed in 9.15s` (`uv run pytest tests/test_r3_provider_registry.py tests/test_r3_model_registry.py tests/test_r3_resource_manager.py`)
+- **Full Regression Suite:** `887 passed, 3 warnings in 107.59s` (`uv run pytest -q`)
+- **Combined R3 Model Layer Suites:** `79 passed in 16.99s` (`uv run pytest tests/test_r3_provider_registry.py tests/test_r3_model_registry.py tests/test_r3_resource_manager.py tests/test_r3_local_supervisor.py`)
 - **R3.1 Canonical Provider Registry Suite:** `27 passed in 3.32s` (`uv run pytest tests/test_r3_provider_registry.py`)
 - **R3.2 Model Capability Registry Suite:** `16 passed in 3.16s` (`uv run pytest tests/test_r3_model_registry.py`)
 - **R3.3 Resource Manager Suite:** `18 passed in 5.95s` (`uv run pytest tests/test_r3_resource_manager.py`)
+- **R3.4 Managed Local Inference Supervisor Suite:** `18 passed in 13.47s` (`uv run pytest tests/test_r3_local_supervisor.py`)
 - **R2 Checkpoint and Rollback Suite:** `35 passed in 3.93s` (`uv run pytest tests/test_r2_checkpoint_service.py`)
 - **R2 Diagnostics Redaction Suite:** `27 passed in 3.91s` (`uv run pytest tests/test_r2_diagnostics_redaction.py`)
 - **R2 Safe Staged Patch Application Suite:** `25 passed in 2.85s` (`uv run pytest tests/test_r2_patch_service.py`)

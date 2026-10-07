@@ -68,6 +68,21 @@ class KernelLMAdapter(dspy.LM):
     def cancellation_token(self) -> Optional[CancellationToken]:
         return self.exec_context.cancellation_token
 
+    def _get_endpoint_class(self) -> str:
+        try:
+            from core.providers import get_provider_registry
+
+            p_def = get_provider_registry().get_provider(self.provider)
+            if p_def and p_def.endpoint_class:
+                return (
+                    p_def.endpoint_class.value
+                    if hasattr(p_def.endpoint_class, "value")
+                    else str(p_def.endpoint_class)
+                )
+        except Exception:
+            pass
+        return f"{self.provider}_client"
+
     def __call__(
         self,
         prompt: Optional[str] = None,
@@ -102,7 +117,7 @@ class KernelLMAdapter(dspy.LM):
                         "call_id": call_id,
                         "provider_id": self.provider,
                         "model_id": self.model_name,
-                        "endpoint_class": f"{self.provider}_client",
+                        "endpoint_class": self._get_endpoint_class(),
                         "routing_tier": getattr(self.tier, "value", str(self.tier)),
                         "started_at": started_at,
                         "prompt_tokens_estimated": in_tokens,
@@ -232,7 +247,7 @@ class KernelLMAdapter(dspy.LM):
             "model_id": self.model_name,
             "provider": self.provider,
             "provider_id": self.provider,
-            "endpoint_class": f"{self.provider}_client",
+            "endpoint_class": self._get_endpoint_class(),
             "routing_tier": getattr(self.tier, "value", str(self.tier)),
             "started_at": started_at,
             "completed_at": completed_at,

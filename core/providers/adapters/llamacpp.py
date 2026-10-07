@@ -35,6 +35,20 @@ class LlamaCppAdapter(ProviderAdapter):
     """Canonical adapter for local llama.cpp server infrastructure."""
 
     def _get_base_url(self) -> str:
+        # 1. Prefer active ready instance from LocalInferenceSupervisor if managed
+        try:
+            from core.inference.supervisor import get_local_inference_supervisor
+
+            sup = get_local_inference_supervisor()
+            inst = sup.get_active_instance()
+            if inst and inst.state.value == "ready" and inst.endpoint_url:
+                url = inst.endpoint_url.rstrip("/")
+                if not url.endswith("/v1"):
+                    url = f"{url}/v1"
+                return url
+        except Exception:
+            pass
+
         url = (
             self._definition.config.endpoint_url
             or os.getenv("LLAMACPP_HOST")
@@ -44,14 +58,33 @@ class LlamaCppAdapter(ProviderAdapter):
             url = f"{url}/v1"
         return url
 
+    def _get_api_key(self, api_key: Optional[str] = None) -> str:
+        if api_key:
+            return api_key
+        try:
+            from core.inference.supervisor import get_local_inference_supervisor
+
+            sup = get_local_inference_supervisor()
+            inst = sup.get_active_instance()
+            if inst and inst.state.value == "ready" and inst.api_key:
+                return inst.api_key
+        except Exception:
+            pass
+        resolved = self.resolve_api_key()
+        if resolved:
+            return resolved
+        return "local-token-placeholder"
+
     def test_connection(self, timeout: float = 3.0) -> ProviderHealth:
         effective_timeout = min(timeout, 5.0)
         base_url = self._get_base_url()
         probe_url = f"{base_url}/models"
+        token = self._get_api_key()
+        headers = {"Authorization": f"Bearer {token}"}
 
         t0 = time.perf_counter()
         try:
-            resp = requests.get(probe_url, timeout=effective_timeout)
+            resp = requests.get(probe_url, headers=headers, timeout=effective_timeout)
             elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
             if resp.status_code == 200:
                 threshold = self._definition.capabilities.degraded_latency_threshold_ms
@@ -121,7 +154,7 @@ class LlamaCppAdapter(ProviderAdapter):
         model_name = m if m.startswith("openai/") else f"openai/{m}"
         base_url = self._get_base_url()
         to = timeout or self._definition.config.timeout_seconds or 120.0
-        token = api_key or "local-token-placeholder"
+        token = self._get_api_key(api_key)
 
         return dspy.LM(
             model_name,
