@@ -305,6 +305,58 @@ def test_08_privacy_constraints_and_unknown_fails(fresh_model_registry: ModelReg
     assert compat.eligible is False
     assert any("unknown" in r.lower() for r in compat.rejection_reasons)
 
+    # 3. Explicit ExecutionLocation Enum Verification
+    from core.model_registry.models import ModelDefinition, ModelIdentity, PrivacyProfile
+
+    # UNKNOWN execution location fails LOCAL-only
+    unknown_model = ModelDefinition(
+        identity=ModelIdentity(provider_id="custom", model_id="unknown-loc"),
+        display_name="Unknown Loc",
+        privacy=PrivacyProfile(
+            execution_location=ExecutionLocation.UNKNOWN, data_leaves_device=TriStateBool.FALSE
+        ),
+    )
+    fresh_model_registry.register_model(unknown_model)
+
+    # REMOTE execution location fails LOCAL-only
+    remote_model = ModelDefinition(
+        identity=ModelIdentity(provider_id="custom", model_id="remote-loc"),
+        display_name="Remote Loc",
+        privacy=PrivacyProfile(
+            execution_location=ExecutionLocation.REMOTE, data_leaves_device=TriStateBool.FALSE
+        ),
+    )
+    fresh_model_registry.register_model(remote_model)
+
+    # LOCAL execution location satisfies LOCAL-only
+    local_model = ModelDefinition(
+        identity=ModelIdentity(provider_id="custom", model_id="local-loc"),
+        display_name="Local Loc",
+        privacy=PrivacyProfile(
+            execution_location=ExecutionLocation.LOCAL, data_leaves_device=TriStateBool.FALSE
+        ),
+    )
+    fresh_model_registry.register_model(local_model)
+
+    test_eval = {
+        c.canonical_id: c
+        for c in fresh_model_registry.query_eligible_models(
+            ModelRequirements(require_local_only=True), eligible_only=False
+        )
+    }
+    assert test_eval["custom:unknown-loc"].eligible is False
+    assert any(
+        "violates require_local_only" in r
+        for r in test_eval["custom:unknown-loc"].rejection_reasons
+    )
+
+    assert test_eval["custom:remote-loc"].eligible is False
+    assert any(
+        "violates require_local_only" in r for r in test_eval["custom:remote-loc"].rejection_reasons
+    )
+
+    assert test_eval["custom:local-loc"].eligible is True
+
 
 # ==============================================================================
 # 8. Declarative Hardware Constraints
