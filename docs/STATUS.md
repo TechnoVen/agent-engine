@@ -576,8 +576,8 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
   notes: "S1 — implemented and implementation-tested. Completed R2.11 Final Recovery Closure: (1) Permanently removed public force=True rollback; live divergence unconditionally halts with ROLLBACK_CONFLICT. (2) Relocated checkpoint & patch recovery storage to Agent Engine private root (~/.agent_engine/checkpoints/ and ~/.agent_engine/patch_recovery/, mode 0o700/0o600), guaranteeing sandbox workers with project READ_ONLY access cannot access them. (3) Durable restore operation journal (RestoreOperation: PREPARED, RESTORING, COMPLETED, PARTIAL, CONFLICT, RECOVERY_REQUIRED, FAILED) persisted with fsync before live mutation; restart reconciliation. (4) Immediate pre-mutation resource revalidation with engine locks; truthful partial multi-resource restore reporting (PARTIAL). (5) Canonical R2.4 structured compute_rollback_approval_digest binding complete restore plan (digest_version 1, project, checkpoint, restore ID, sorted resource identities, types, paths, pre-state hashes, expected post-state hashes). (6) Checkpoint material integrity verified before mutation; tampered backup raises CheckpointIntegrityError (tested across file, config, SQLite, and Git). (7) File permission semantics: stat.S_IMODE(st_mode) & 0o777 bitmask (0600, 0644, 0755), never blanket chmod; privileged setuid/setgid bits strictly masked out; staged atomic commit uses kernel/filesystem-enforced atomic no-clobber. (8) Git bounded scope: only declared/tracked files, never .env, credentials, or untracked files; 0 remote ops. (9) SQLite restore maintenance boundary: exclusive lock, connection quiescing, WAL mode consistency. (10) Typed config serialization: SecretReference preserved, SecretValue forbidden, fail-closed on unknown objects without repr(). 35/35 dedicated precision tests passing, full regression passing."
 - id: R2.12
   title: "Diagnostics redaction"
-  task_status: in_progress
-  capability_maturity: S0 (provisional code frozen pending R2.11 sign-off)
+  task_status: complete
+  capability_maturity: S1 — Implemented and implementation-tested
   migration: REFACTOR
   owner: "Security & Control Plane Architecture"
   depends_on: [R2.6]
@@ -588,16 +588,16 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/diagnostics/exporter.py"
     - "core/diagnostics/__init__.py"
     - "tests/test_r2_diagnostics_redaction.py"
-  notes: "Provisional implementation preserved and frozen per CTO directive. 15/15 tests passing, but task remains unclosed until R2.11 is formally approved."
+  notes: "S1 — Implemented and implementation-tested. Completed R2.12 Central Diagnostics Redaction and Export Policy: (1) Reopen-and-decompress canary verification scanning every archive member with 0 secret leaks. (2) Strict archive member security: rejected path traversals, absolute paths, non-regular members, and normalized uid/gid/mtime metadata. (3) Acyclic integrity manifest with per-member SHA-256 hashes excluding manifest.json. (4) SecretReference diagnostic minimization by default (credential_configured=True, provider=...). (5) Diagnostic egress inventory covering all 10 outward surfaces with central policy enforcement. (6) Fail-safe error handling avoiding repr()/str() on unknown objects and guarding recursion/cycles/depth. (7) Bounded collection protecting against local denial-of-service. (8) Known-root path minimization for POSIX and Windows preserving benign URLs. (9) Comprehensive seeded-canary production artifact test covering 17 vectors. 27/27 precision tests passing, full regression 808 passed."
 ```
 
 ---
 
 ## 6. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `796 passed, 3 warnings` (`uv run pytest`)
+- **Full Regression Suite:** `808 passed, 3 warnings in 105.43s` (`uv run pytest`)
 - **R2 Checkpoint and Rollback Suite:** `35 passed in 3.93s` (`uv run pytest tests/test_r2_checkpoint_service.py`)
-- **R2 Diagnostics Redaction Suite:** `15 passed in 2.84s` (`uv run pytest tests/test_r2_diagnostics_redaction.py` — *provisional / frozen*)
+- **R2 Diagnostics Redaction Suite:** `27 passed in 3.91s` (`uv run pytest tests/test_r2_diagnostics_redaction.py`)
 - **R2 Safe Staged Patch Application Suite:** `25 passed in 2.85s` (`uv run pytest tests/test_r2_patch_service.py`)
 - **R2 Sandbox Resource Limits Suite:** `38 passed in 14.69s` (`uv run pytest tests/test_r2_sandbox_resource_limits.py`)
 - **R2 Sandbox Worker Runtime Suite:** `26 passed in 9.54s` (`uv run pytest tests/test_r2_sandbox_runtime.py`)
@@ -606,13 +606,13 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
 - **R2 Canonical Workspace Paths Suite:** `24 passed in 2.90s` (`uv run pytest tests/test_r2_workspace_paths.py`)
 - **R2 Policy & Exact-Operation Approvals Suite:** `33 passed in 4.26s` (`uv run pytest tests/test_r2_policy_and_approvals.py`)
 - **R2 IPC Authentication Suite:** `14 passed in 7.83s` (`uv run pytest tests/test_r2_ipc_authentication.py`)
-- **Combined R2 Security Verification:** `262 passed in 58.12s` across 11 security suites
+- **Combined R2 Security Verification:** `274 passed in 59.80s` across 11 security suites
 - **Static Code Analysis & Formatting:**
   - `uv run ruff check`: passed (`All checks passed!`)
   - `uv run ruff format --check`: passed (`256 files already formatted`)
 - **Desktop Tauri & Frontend Workspace:**
   - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.80s`)
-  - `pnpm -r build`: passed (`11.9s`)
+  - `pnpm -r build`: passed (`12.6s`)
 - **Documented Upstream Warnings (3 known upstream warnings, 0 new unexplained/project-owned warnings):**
   1. `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.` (Origin: `fastapi/testclient.py:1` — Upstream FastAPI/Starlette testclient deprecation notice; non-runtime).
   2. `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.` (Origin: `starlette/testclient.py:53` — Upstream Starlette/AnyIO import alias notice; non-runtime).

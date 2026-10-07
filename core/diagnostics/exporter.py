@@ -15,6 +15,7 @@ import logging
 import os
 from pathlib import Path
 import platform
+import re
 import sys
 import tarfile
 import time
@@ -25,11 +26,51 @@ import zipfile
 import psutil
 
 from core.config.settings import get_settings_manager
-from core.diagnostics.models import DiagnosticBundle, ExportManifest, RedactionReport
+from core.diagnostics.models import (
+    DiagnosticBundle,
+    EgressClassification,
+    ExportManifest,
+    RedactionReport,
+)
 from core.diagnostics.redactor import DiagnosticsRedactor
 from core.telemetry.hardware import get_hardware_telemetry_tracker
 
 logger = logging.getLogger("agent_engine.diagnostics.exporter")
+
+
+# Canonical Inventory of Outward Diagnostic and Operational Surfaces (CTO Review Item 8)
+DIAGNOSTIC_EGRESS_INVENTORY: Dict[str, EgressClassification] = {
+    "diagnostic_export": EgressClassification.SHAREABLE_REDACTED,
+    "trace_export": EgressClassification.SHAREABLE_REDACTED,
+    "downloadable_logs": EgressClassification.SHAREABLE_REDACTED,
+    "provider_connectivity_diagnostics": EgressClassification.SHAREABLE_REDACTED,
+    "health_support_report": EgressClassification.SHAREABLE_REDACTED,
+    "sandbox_failure_diagnostics": EgressClassification.SHAREABLE_REDACTED,
+    "checkpoint_restore_diagnostics": EgressClassification.SHAREABLE_REDACTED,
+    "patch_diagnostics": EgressClassification.SHAREABLE_REDACTED,
+    "exception_export": EgressClassification.SHAREABLE_REDACTED,
+    "telemetry_export": EgressClassification.SHAREABLE_REDACTED,
+    "vault_storage": EgressClassification.NOT_EXPORTABLE,
+    "private_ipc_tokens": EgressClassification.NOT_EXPORTABLE,
+    "checkpoint_blobs": EgressClassification.NOT_EXPORTABLE,
+    "patch_recovery_backups": EgressClassification.NOT_EXPORTABLE,
+    "internal_sqlite_raw": EgressClassification.INTERNAL_ONLY,
+}
+
+
+def is_safe_member_name(name: str) -> bool:
+    """Validate archive member name against path traversal, absolute paths, and special names (CTO Review Item 5)."""
+    if not name or name.startswith("/") or name.startswith("\\"):
+        return False
+    if ".." in name or ":" in name:
+        return False
+    parts = name.replace("\\", "/").split("/")
+    for part in parts:
+        if not part or part == "." or part == "..":
+            return False
+        if not re.match(r"^[a-zA-Z0-9_\-\.]+$", part):
+            return False
+    return True
 
 
 class DiagnosticsExporter:
@@ -46,13 +87,27 @@ class DiagnosticsExporter:
         self.storage = storage
 
     def is_path_blocked(self, rel_path: str) -> bool:
-        """Check if file matches blocked sensitive patterns (Closure Item 18)."""
+        """Check if file matches blocked sensitive patterns (CTO Review Item 10)."""
         norm = rel_path.replace("\\", "/")
         name = Path(norm).name
         for pat in self.redactor.policy.blocked_file_patterns:
             if fnmatch.fnmatch(name, pat) or fnmatch.fnmatch(norm, pat):
                 return True
         return False
+
+    def sanitize_for_egress(self, surface_name: str, payload: Any) -> Any:
+        """Sanitize diagnostic payload ensuring central policy routing for all shareable surfaces (CTO Review Item 8)."""
+        classification = DIAGNOSTIC_EGRESS_INVENTORY.get(
+            surface_name, EgressClassification.NOT_EXPORTABLE
+        )
+        if classification == EgressClassification.NOT_EXPORTABLE:
+            raise PermissionError(f"Surface '{surface_name}' is classified as NOT_EXPORTABLE")
+        if classification == EgressClassification.INTERNAL_ONLY:
+            raise PermissionError(
+                f"Surface '{surface_name}' is INTERNAL_ONLY and cannot be exported"
+            )
+        redacted, _ = self.redactor.redact(payload)
+        return redacted
 
     def gather_system_info(self, report: RedactionReport) -> Dict[str, Any]:
         """Gather host specifications and process telemetry with paths minimized."""
@@ -143,7 +198,7 @@ class DiagnosticsExporter:
         return redacted
 
     def gather_redacted_logs(self, report: RedactionReport) -> str:
-        """Read recent audit logs and apply egress boundary redaction."""
+        """Read recent audit logs and apply egress boundary redaction with bounded limits (CTO Review Item 10)."""
         lines: List[str] = [
             f"=== AGENT ENGINE AUDIT & ACTIVITY LOGS (EXPORTED {datetime.datetime.now(datetime.timezone.utc).isoformat()}) ===",
             "NOTE: All authentication tokens, API keys, credentials, and private payloads have been scrubbed at egress boundary.",
@@ -160,10 +215,18 @@ class DiagnosticsExporter:
         else:
             storage = self.storage
 
+        current_bytes = 0
+        max_bytes = self.redactor.policy.max_log_bytes
+
         if storage and hasattr(storage, "list_audit_logs"):
             try:
                 logs = storage.list_audit_logs(limit=self.redactor.policy.max_log_lines)
                 for entry in logs:
+                    if current_bytes >= max_bytes:
+                        lines.append("... [LOGS TRUNCATED DUE TO SIZE BOUND] ...")
+                        report.record_truncation()
+                        break
+
                     tool_args = (
                         entry.tool_args
                         if hasattr(entry, "tool_args")
@@ -191,7 +254,9 @@ class DiagnosticsExporter:
                         f"DECISION={decision} RISK={risk_level} "
                         f"ARGS={json.dumps(redacted_args)} RESULT={json.dumps(redacted_res)}"
                     )
-                    lines.append(self.redactor.redact_text(line, report))
+                    redacted_line = self.redactor.redact_text(line, report)
+                    lines.append(redacted_line)
+                    current_bytes += len(redacted_line.encode("utf-8"))
             except Exception as err:
                 lines.append(f"[SYSTEM] Log retrieval error: {err}")
         else:
@@ -205,10 +270,11 @@ class DiagnosticsExporter:
         custom_files: Optional[Dict[str, Any]] = None,
         bundle_id: Optional[str] = None,
     ) -> DiagnosticBundle:
-        """Create and package an egress-redacted diagnostics bundle (Closure Item 14)."""
+        """Create and package an egress-redacted diagnostics bundle with safe member metadata and acyclic manifest."""
         bid = bundle_id or f"diag-{uuid.uuid4().hex[:12]}"
         ts_slug = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         overall_report = RedactionReport()
+        omitted_sections: List[str] = []
 
         # Gather standard components
         system_info = self.gather_system_info(overall_report)
@@ -224,11 +290,19 @@ class DiagnosticsExporter:
             "logs_redacted.txt": logs_redacted.encode("utf-8"),
         }
 
-        # Add custom files if provided, enforcing blocked patterns & redaction
+        # Add custom files if provided, enforcing safe member names, blocked patterns, and size bounds
         if custom_files:
             for fname, content in custom_files.items():
+                # Enforce safe member name (CTO Review Item 5)
+                if not is_safe_member_name(fname):
+                    logger.warning(f"Rejected unsafe archive member name: {fname}")
+                    omitted_sections.append(fname)
+                    overall_report.record_redaction("unsafe_archive_member_name")
+                    continue
+
                 if self.is_path_blocked(fname):
                     logger.warning(f"Blocked sensitive file from diagnostics bundle: {fname}")
+                    omitted_sections.append(fname)
                     overall_report.record_redaction("blocked_private_payload")
                     continue
 
@@ -239,7 +313,6 @@ class DiagnosticsExporter:
                     redacted_str = self.redactor.redact_text(content, overall_report)
                     raw_bytes = redacted_str.encode("utf-8")
                 elif isinstance(content, bytes):
-                    # For binary/bytes, check if text decode is possible
                     try:
                         decoded = content.decode("utf-8")
                         redacted_str = self.redactor.redact_text(decoded, overall_report)
@@ -250,18 +323,36 @@ class DiagnosticsExporter:
                     redacted, _ = self.redactor.redact(content)
                     raw_bytes = json.dumps(redacted, indent=2).encode("utf-8")
 
+                # Bound individual file size (CTO Review Item 10)
+                if len(raw_bytes) > self.redactor.policy.max_file_size_bytes:
+                    raw_bytes = raw_bytes[: self.redactor.policy.max_file_size_bytes]
+                    overall_report.record_truncation()
+
                 bundle_files[fname] = raw_bytes
 
-        # Build manifest
+        # CTO Review Item 6: Acyclic Manifest Hash Scope
+        # Hash each exported member file independently (manifest.json itself is excluded from member_hashes)
+        member_hashes: Dict[str, str] = {}
+        for fname, bdata in bundle_files.items():
+            member_hashes[fname] = hashlib.sha256(bdata).hexdigest()
+
         all_files = sorted(list(bundle_files.keys()) + ["manifest.json"])
         manifest = ExportManifest(
             bundle_id=bid,
             created_at=time.time(),
+            export_format_version=1,
+            redaction_policy_version=1,
             format=format.lower(),
+            hash_algorithm="sha256",
+            hash_scope="canonical_exported_members",
             files=all_files,
+            member_hashes=member_hashes,
+            sections_included=sorted(list(bundle_files.keys())),
+            sections_omitted=sorted(omitted_sections),
             total_bytes=sum(len(b) for b in bundle_files.values()),
             redaction_summary=overall_report.to_dict(),
         )
+
         manifest_bytes = json.dumps(manifest.to_dict(), indent=2).encode("utf-8")
         manifest.total_bytes += len(manifest_bytes)
         bundle_files["manifest.json"] = manifest_bytes
@@ -283,10 +374,16 @@ class DiagnosticsExporter:
             buf = io.BytesIO()
             with tarfile.open(fileobj=buf, mode="w:gz") as tar:
                 for fname, bdata in sorted(bundle_files.items()):
+                    # CTO Review Item 5: Normalize archive metadata & enforce regular file type
                     ti = tarfile.TarInfo(name=fname)
                     ti.size = len(bdata)
-                    ti.mtime = int(time.time())
+                    ti.type = tarfile.REGTYPE  # Strictly regular file!
                     ti.mode = 0o600
+                    ti.uid = 0
+                    ti.gid = 0
+                    ti.uname = ""
+                    ti.gname = ""
+                    ti.mtime = 1700000000  # Normalized static timestamp
                     tar.addfile(ti, io.BytesIO(bdata))
             payload_bytes = buf.getvalue()
             content_type = "application/gzip"
@@ -295,7 +392,11 @@ class DiagnosticsExporter:
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
                 for fname, bdata in sorted(bundle_files.items()):
-                    zf.writestr(fname, bdata)
+                    # CTO Review Item 5: Normalize zip metadata
+                    zinfo = zipfile.ZipInfo(filename=fname, date_time=(2026, 1, 1, 0, 0, 0))
+                    zinfo.external_attr = 0o600 << 16
+                    zinfo.compress_type = zipfile.ZIP_DEFLATED
+                    zf.writestr(zinfo, bdata)
             payload_bytes = buf.getvalue()
             content_type = "application/zip"
             filename = f"agent_engine_diagnostics_{ts_slug}.zip"

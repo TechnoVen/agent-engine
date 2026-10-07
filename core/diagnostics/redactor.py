@@ -10,7 +10,7 @@ import dataclasses
 from pathlib import Path
 import re
 import tempfile
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from core.diagnostics.models import RedactionReport
 from core.diagnostics.policy import RedactionPolicy
@@ -19,7 +19,7 @@ from core.storage.paths import get_private_data_dir
 
 
 class DiagnosticsRedactor:
-    """Recursively redacts sensitive data, minimizing paths and preserving identifiers at egress boundary."""
+    """Recursively redacts sensitive data, minimizing paths and preserving/minimizing identifiers at egress boundary."""
 
     def __init__(
         self,
@@ -29,7 +29,11 @@ class DiagnosticsRedactor:
         data_dir: Optional[Path | str] = None,
     ) -> None:
         self.policy = policy or RedactionPolicy()
-        self.project_root = Path(project_root).resolve() if project_root else None
+        self.project_root_raw = str(project_root) if project_root else None
+        try:
+            self.project_root = Path(project_root).resolve() if project_root else None
+        except Exception:
+            self.project_root = None
         self.home_dir = Path(home_dir).resolve() if home_dir else Path.home().resolve()
         self.data_dir = Path(data_dir).resolve() if data_dir else get_private_data_dir().resolve()
         self.temp_dir = Path(tempfile.gettempdir()).resolve()
@@ -37,7 +41,8 @@ class DiagnosticsRedactor:
     def redact(self, data: Any) -> Tuple[Any, RedactionReport]:
         """Redact arbitrary structured or text data, returning transformed data and report."""
         report = RedactionReport()
-        redacted_data = self._redact_recursive(data, report)
+        seen_ids: Set[int] = set()
+        redacted_data = self._redact_recursive(data, report, depth=0, seen_ids=seen_ids)
         return redacted_data, report
 
     def redact_text(self, text: str, report: Optional[RedactionReport] = None) -> str:
@@ -58,31 +63,89 @@ class DiagnosticsRedactor:
                 rep.record_redaction("disallowed_env_var")
         return sanitized
 
-    def _redact_recursive(self, obj: Any, report: RedactionReport) -> Any:
-        # Layer 1: Structural Value Objects
+    def _redact_recursive(
+        self,
+        obj: Any,
+        report: RedactionReport,
+        depth: int,
+        seen_ids: Set[int],
+    ) -> Any:
+        # Layer 0: Depth & Cycle guards (CTO Review Items 9 & 10)
+        if depth > self.policy.max_recursion_depth:
+            report.record_recursion_limit()
+            return {"<depth_limit_exceeded>": type(obj).__name__}
+
+        # Handle primitive types immediately before cycle tracking
+        if isinstance(obj, (int, float, bool)) or obj is None:
+            return obj
+
+        if isinstance(obj, str):
+            # Check length bound
+            if len(obj) > self.policy.max_string_length:
+                report.record_truncation()
+                obj = obj[: self.policy.max_string_length] + "...[TRUNCATED]"
+            return self._redact_string(obj, report)
+
+        if isinstance(obj, (bytes, bytearray)):
+            try:
+                decoded = obj.decode("utf-8")
+                return self._redact_string(decoded, report)
+            except Exception:
+                return f"<binary_data:{len(obj)}_bytes>"
+
+        if isinstance(obj, Path):
+            return self._minimize_path(str(obj), report)
+
+        # Cycle detection for compound structures
+        obj_id = id(obj)
+        if obj_id in seen_ids:
+            return {"<recursion_cycle>": type(obj).__name__}
+
+        # Add to seen set (for mutable compound containers)
+        if isinstance(obj, (dict, list, tuple, set)) or hasattr(obj, "__dict__"):
+            seen_ids = set(seen_ids)
+            seen_ids.add(obj_id)
+
+        # Layer 1: Structural Value Objects (SecretValue, SecretReference)
         if isinstance(obj, SecretValue):
             report.record_redaction("secret_value_omitted")
             return "[REDACTED_SECRET_VALUE]"
 
         if isinstance(obj, SecretReference):
-            ref_dict = {
-                "provider": obj.provider,
-                "name": obj.name,
-                "scope": obj.scope,
-                "project_id": obj.project_id,
-            }
-            report.record_preserved_reference(str(obj))
-            return {"secret_reference": ref_dict}
+            if self.policy.include_exact_secret_references:
+                report.record_preserved_reference(str(obj))
+                ref_dict = {
+                    "provider": obj.provider,
+                    "name": obj.name,
+                    "scope": obj.scope,
+                    "project_id": obj.project_id,
+                }
+                return {"secret_reference": ref_dict}
+            else:
+                # CTO Review Item 7: Minimize SecretReference in shareable diagnostics
+                report.record_reference_minimized()
+                return {
+                    "credential_configured": True,
+                    "provider": obj.provider,
+                }
 
         # Check for SecretReference-like dictionary
         if isinstance(obj, dict):
-            # Check if dict represents SecretReference
             if ("secret_id" in obj and "provider" in obj) or (
                 "provider" in obj and "name" in obj and "scope" in obj and len(obj) <= 5
             ):
-                report.record_preserved_reference(str(obj.get("secret_id") or obj.get("name")))
-                # Safe public metadata preserved, but values sanitized
-                return {k: self._redact_recursive(v, report) for k, v in obj.items()}
+                if not self.policy.include_exact_secret_references:
+                    report.record_reference_minimized()
+                    return {
+                        "credential_configured": True,
+                        "provider": str(obj.get("provider", "unknown")),
+                    }
+                else:
+                    report.record_preserved_reference(str(obj.get("secret_id") or obj.get("name")))
+                    return {
+                        str(k): self._redact_recursive(v, report, depth + 1, seen_ids)
+                        for k, v in obj.items()
+                    }
 
             sanitized_dict: Dict[str, Any] = {}
             for k, v in obj.items():
@@ -91,73 +154,98 @@ class DiagnosticsRedactor:
 
                 # Layer 1: Structural value objects take priority
                 if isinstance(v, (SecretValue, SecretReference)):
-                    sanitized_dict[k_str] = self._redact_recursive(v, report)
+                    sanitized_dict[k_str] = self._redact_recursive(v, report, depth + 1, seen_ids)
                 # Layer 2: Key-based & Header scrubbing
                 elif k_lower in self.policy.sensitive_headers:
                     report.record_redaction("sensitive_header")
                     sanitized_dict[k_str] = self.policy.default_placeholder
                 elif any(sk in k_lower for sk in self.policy.sensitive_keys):
                     if isinstance(v, dict):
-                        sanitized_dict[k_str] = self._redact_recursive(v, report)
+                        sanitized_dict[k_str] = self._redact_recursive(
+                            v, report, depth + 1, seen_ids
+                        )
                     else:
                         report.record_redaction("sensitive_key")
                         sanitized_dict[k_str] = self.policy.default_placeholder if v else None
                 else:
-                    sanitized_dict[k_str] = self._redact_recursive(v, report)
+                    sanitized_dict[k_str] = self._redact_recursive(v, report, depth + 1, seen_ids)
 
             return sanitized_dict
 
         if isinstance(obj, list):
-            return [self._redact_recursive(item, report) for item in obj]
+            return [self._redact_recursive(item, report, depth + 1, seen_ids) for item in obj]
 
         if isinstance(obj, tuple):
-            return tuple(self._redact_recursive(item, report) for item in obj)
+            return tuple(self._redact_recursive(item, report, depth + 1, seen_ids) for item in obj)
 
         if isinstance(obj, set):
-            return [self._redact_recursive(item, report) for item in sorted(list(obj), key=str)]
-
-        if isinstance(obj, str):
-            # Layer 4: String scrubbing (Path minimization + Regex heuristics)
-            return self._redact_string(obj, report)
-
-        if isinstance(obj, (int, float, bool)) or obj is None:
-            return obj
-
-        if isinstance(obj, Path):
-            return self._minimize_path(str(obj), report)
+            # Sort safely
+            items = list(obj)
+            try:
+                sorted_items = sorted(items, key=lambda x: str(type(x).__name__))
+            except Exception:
+                sorted_items = items
+            return [
+                self._redact_recursive(item, report, depth + 1, seen_ids) for item in sorted_items
+            ]
 
         # Dataclass handling
         if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
-            return self._redact_recursive(dataclasses.asdict(obj), report)
-
-        # Check for safe to_dict()
-        if hasattr(obj, "to_dict") and callable(obj.to_dict):
             try:
-                d = obj.to_dict()
-                if isinstance(d, dict):
-                    return self._redact_recursive(d, report)
+                return self._redact_recursive(dataclasses.asdict(obj), report, depth + 1, seen_ids)
             except Exception:
                 pass
 
-        # Layer 16 Safe Object Serialization (Unknown/unserializable objects)
-        # Invariant: Unknown objects serialized WITHOUT invoking repr() indiscriminately
-        report.record_redaction("unserializable_object")
+        # Check for safe to_dict()
+        if hasattr(obj, "to_dict") and callable(getattr(obj, "to_dict", None)):
+            try:
+                d = obj.to_dict()
+                if isinstance(d, dict):
+                    return self._redact_recursive(d, report, depth + 1, seen_ids)
+            except Exception:
+                pass
+
+        # CTO Review Item 9: NEVER call repr(obj), str(obj), or json.dumps(obj, default=str)!
+        # A malicious custom object could embed secrets in __repr__ or __str__.
+        report.record_unserializable_object()
         return {"<unserializable_type>": type(obj).__name__}
 
     def _minimize_path(self, path_str: str, report: RedactionReport) -> str:
-        """Minimizes absolute host paths to standardized placeholders (Closure Item 17)."""
+        """Minimizes absolute host paths to standardized placeholders (CTO Review Item 11).
+
+        Applies known-root mapping before generic path heuristics.
+        Covers both POSIX and Windows path structures, while protecting URLs from corruption.
+        """
         original = path_str
         res = path_str
 
-        # Order: Most specific to least specific
-        if self.data_dir and str(self.data_dir) in res:
-            res = res.replace(str(self.data_dir), "<DATA_DIR>")
-        if self.project_root and str(self.project_root) in res:
-            res = res.replace(str(self.project_root), "<PROJECT>")
-        if self.temp_dir and str(self.temp_dir) in res:
-            res = res.replace(str(self.temp_dir), "<TEMP>")
-        if self.home_dir and str(self.home_dir) in res:
-            res = res.replace(str(self.home_dir), "<HOME>")
+        def get_variants(root_val: Any) -> List[str]:
+            if not root_val:
+                return []
+            raw_s = str(root_val)
+            v = {raw_s, raw_s.replace("\\", "/"), raw_s.replace("/", "\\")}
+            if isinstance(root_val, Path):
+                try:
+                    res_s = str(root_val.resolve())
+                    v.add(res_s)
+                    v.add(res_s.replace("\\", "/"))
+                    v.add(res_s.replace("/", "\\"))
+                except Exception:
+                    pass
+            return [x for x in sorted(v, key=len, reverse=True) if len(x) > 2]
+
+        known_roots = [
+            (self.data_dir, "<DATA_DIR>"),
+            (self.project_root_raw or self.project_root, "<PROJECT>"),
+            (self.temp_dir, "<TEMP>"),
+            (self.home_dir, "<HOME>"),
+        ]
+
+        for root_val, placeholder in known_roots:
+            variants = get_variants(root_val)
+            for var in variants:
+                if var in res:
+                    res = res.replace(var, placeholder)
 
         if res != original:
             report.record_path_minimization()
@@ -165,9 +253,10 @@ class DiagnosticsRedactor:
 
     def _redact_string(self, text: str, report: RedactionReport) -> str:
         """Apply path minimization and heuristic regex patterns to string."""
+        # Step 1: Known-root path minimization first (CTO Review Item 11)
         s = self._minimize_path(text, report)
 
-        # Check for seeded canaries first
+        # Step 2: Seeded canary scrub
         if "canary-" in s:
             canary_pattern = re.compile(r"\bcanary-[a-zA-Z0-9_\-]{8,}\b")
             matches = canary_pattern.findall(s)
@@ -176,10 +265,10 @@ class DiagnosticsRedactor:
                     report.record_canary()
                 s = canary_pattern.sub(self.policy.default_placeholder, s)
 
-        # Apply regex rules
+        # Step 3: Regex pattern heuristics
         for rule_name, pattern, replacement in self.policy.regex_rules:
             if rule_name == "seeded_canary":
-                continue  # already handled above
+                continue
             matches = pattern.findall(s)
             if matches:
                 for _ in matches:

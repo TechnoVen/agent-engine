@@ -784,11 +784,11 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
 - **Required Evidence:**
   - `tests/test_r2_checkpoint_service.py` (35 dedicated precision test scenarios covering lifecycle, fail-closed creation, exact byte restore, conflict detection, git safety refs and bounded scope, database integrity and WAL maintenance boundary, config secret preservation and typed serialization, canonical R2.4 structured approval digest binding, single-use token consumption, multi-resource preflight, immediate pre-mutation revalidation, partial failure reporting, permission masking, crash recovery reconciliation, sandbox isolation, and hash-only audit ledger records).
 
-### [ ] R2.12 — Diagnostics redaction (Provisional / Frozen)
+### [x] R2.12 — Diagnostics redaction (S1)
 
 - **Migration:** `REFACTOR`
 - **Target release:** `0.5`
-- **Current maturity:** `S0 (Provisional implementation preserved; frozen pending R2.11 sign-off)`
+- **Current maturity:** `S1` (Implemented and verified per R2 security baseline)
 - **Dependencies:** R2.6
 - **User Story:** As a user, I want diagnostics safe to share so troubleshooting exports never leak secrets or sensitive local paths unnecessarily.
 - **Deliverables:**
@@ -797,14 +797,14 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
   - Diagnostic bundle exporter in `core/diagnostics/exporter.py`.
   - Test fixtures for tokens, API keys, credentials, and personal file paths.
 - **Acceptance Criteria:**
-  - [ ] No seeded secret appears in exported diagnostics (0 occurrences in final archive bytes).
-  - [ ] Structural value objects isolated (`SecretValue` omitted, `SecretReference` preserved as safe identifier).
-  - [ ] Sensitive keys, HTTP headers, and disallowed environment variables scrubbed.
-  - [ ] Host paths minimized to `<HOME>`, `<PROJECT>`, `<DATA_DIR>`, `<TEMP>`.
-  - [ ] Private storage payloads blocked by default.
-  - [ ] Safe object serialization without `repr()`.
+  - [x] No seeded secret appears in exported diagnostics (0 occurrences across decompressed archive members and raw archive bytes).
+  - [x] Structural value objects isolated (`SecretValue` omitted, `SecretReference` minimized by default or preserved as safe identifier).
+  - [x] Sensitive keys, HTTP headers, and disallowed environment variables scrubbed.
+  - [x] Host paths minimized to `<HOME>`, `<PROJECT>`, `<DATA_DIR>`, `<TEMP>`.
+  - [x] Private storage payloads blocked by default.
+  - [x] Safe object serialization without `repr()` or `str()` and recursion/depth bounds.
 - **Required Evidence:**
-  - `tests/test_r2_diagnostics_redaction.py` (15/15 tests passing; code preserved and frozen per CTO directive).
+  - `tests/test_r2_diagnostics_redaction.py` (27 dedicated precision test scenarios covering archive decompressed-member scans, member security and normalized metadata, acyclic manifest integrity, SecretReference minimization, egress inventory convergence, fail-safe error handling, bounds, and comprehensive 17-vector seeded canary production artifact verification).
 
 ### [ ] R2.13 — Release artifact trust
 

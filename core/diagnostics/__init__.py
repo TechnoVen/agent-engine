@@ -6,8 +6,17 @@ Part of Milestone R2 Task R2.12.
 
 from typing import Any, Optional, Tuple
 
-from core.diagnostics.exporter import DiagnosticsExporter
-from core.diagnostics.models import DiagnosticBundle, ExportManifest, RedactionReport
+from core.diagnostics.exporter import (
+    DIAGNOSTIC_EGRESS_INVENTORY,
+    DiagnosticsExporter,
+    is_safe_member_name,
+)
+from core.diagnostics.models import (
+    DiagnosticBundle,
+    EgressClassification,
+    ExportManifest,
+    RedactionReport,
+)
 from core.diagnostics.policy import RedactionPolicy
 from core.diagnostics.redactor import DiagnosticsRedactor
 
@@ -41,6 +50,9 @@ __all__ = [
     "DiagnosticBundle",
     "ExportManifest",
     "RedactionReport",
+    "EgressClassification",
+    "DIAGNOSTIC_EGRESS_INVENTORY",
+    "is_safe_member_name",
     "build_diagnostics_bundle",
     "redact_sensitive_data",
 ]

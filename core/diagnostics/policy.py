@@ -13,15 +13,20 @@ from typing import List, Set, Tuple
 
 @dataclass
 class RedactionPolicy:
-    """Configurable redaction and export bounds policy."""
+    """Configurable redaction and export bounds policy (CTO Review Items 7, 9, 10, 11)."""
+
+    include_exact_secret_references: bool = False
 
     sensitive_keys: Set[str] = field(
         default_factory=lambda: {
             "password",
+            "passwd",
+            "pass",
             "secret",
             "token",
             "api_key",
             "apikey",
+            "api_secret",
             "authorization",
             "auth_token",
             "credential",
@@ -31,6 +36,8 @@ class RedactionPolicy:
             "privatekey",
             "jwt",
             "access_token",
+            "access_key",
+            "secret_access_key",
             "refresh_token",
             "vault_key",
             "ipc_token",
@@ -40,6 +47,7 @@ class RedactionPolicy:
             "client_secret",
             "master_key",
             "secret_key",
+            "private_key_passphrase",
         }
     )
 
@@ -124,7 +132,19 @@ class RedactionPolicy:
                 ),
                 "***REDACTED***",
             ),
-            ("seeded_canary", re.compile(r"\bcanary-[a-zA-Z0-9_\-]{10,}\b"), "***REDACTED***"),
+            ("seeded_canary", re.compile(r"\bcanary-[a-zA-Z0-9_\-]{8,}\b"), "***REDACTED***"),
+            (
+                "connection_uri_password",
+                re.compile(r"(?i)([a-z][a-z0-9+.-]*://[^:\s]+:)([^@\s]+)(@)"),
+                r"\1***REDACTED***\3",
+            ),
+            (
+                "url_query_credential",
+                re.compile(
+                    r"(?i)([?&](?:api[_-]?key|token|secret|key|password|access[_-]?token)=)([^&\s]+)"
+                ),
+                r"\1***REDACTED***",
+            ),
             (
                 "key_assignment",
                 re.compile(
@@ -135,6 +155,11 @@ class RedactionPolicy:
         ]
     )
 
-    max_file_size_bytes: int = 10 * 1024 * 1024
+    # Collection Bounds (Item 10)
+    max_file_size_bytes: int = 5 * 1024 * 1024
     max_bundle_size_bytes: int = 50 * 1024 * 1024
     max_log_lines: int = 500
+    max_log_bytes: int = 5 * 1024 * 1024
+    max_string_length: int = 65536
+    max_recursion_depth: int = 32
+    max_collection_duration_seconds: float = 10.0
