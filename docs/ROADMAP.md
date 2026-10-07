@@ -782,7 +782,7 @@ Protected operations cannot execute with missing, invalid, expired, replayed or 
   - [x] Pre-flight conflict check halts with ROLLBACK_CONFLICT rather than silently overwriting newer human edits.
   - [x] Checkpoint failure blocks consequential mutation fail-closed.
 - **Required Evidence:**
-  - `tests/test_r2_checkpoint_service.py` (34 dedicated precision test scenarios covering lifecycle, fail-closed creation, exact byte restore, conflict detection, git safety refs and bounded scope, database integrity and WAL maintenance boundary, config secret preservation and typed serialization, approval binding, single-use token consumption, multi-resource preflight, immediate pre-mutation revalidation, partial failure reporting, permission masking, crash recovery reconciliation, sandbox isolation, and hash-only audit ledger records).
+  - `tests/test_r2_checkpoint_service.py` (35 dedicated precision test scenarios covering lifecycle, fail-closed creation, exact byte restore, conflict detection, git safety refs and bounded scope, database integrity and WAL maintenance boundary, config secret preservation and typed serialization, canonical R2.4 structured approval digest binding, single-use token consumption, multi-resource preflight, immediate pre-mutation revalidation, partial failure reporting, permission masking, crash recovery reconciliation, sandbox isolation, and hash-only audit ledger records).
 
 ### [ ] R2.12 — Diagnostics redaction (Provisional / Frozen)
 

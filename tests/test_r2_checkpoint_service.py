@@ -1457,3 +1457,173 @@ print(';'.join(results))
         # Fallback path verification
         assert not chk_canary.is_relative_to(workspace)
         assert not patch_canary.is_relative_to(workspace)
+
+
+def test_rollback_approval_canonical_digest_invariants() -> None:
+    """Verify R2.11 rollback approval digest uses canonical structured serializer (CTO Review Item 1).
+
+    Invariants:
+    1. Resource-order permutation yields the exact same digest (deterministic ordering).
+    2. Modifying a hash (pre_state_hash or expected_post_state_hash) yields a different digest.
+    3. Modifying a resource identity or target path yields a different digest.
+    4. Modifying project_id, checkpoint_id, or restore_id yields a different digest.
+    5. Paths containing ':' or unusual Unicode cannot create serialization collisions.
+    6. Structurally different plans never collide through delimiter/string concatenation ambiguity.
+    """
+    res1 = CheckpointResource(
+        resource_id="res-1",
+        resource_type=CheckpointResourceType.FILE,
+        canonical_relative_path="src/main.py",
+        pre_state_hash="hash_a1",
+        expected_post_state_hash="hash_a2",
+    )
+    res2 = CheckpointResource(
+        resource_id="res-2",
+        resource_type=CheckpointResourceType.CONFIG,
+        canonical_relative_path="config/settings.json",
+        pre_state_hash="hash_b1",
+        expected_post_state_hash="hash_b2",
+    )
+
+    base_digest = compute_rollback_approval_digest(
+        project_id="proj-1",
+        checkpoint_id="chk-1",
+        restore_id="rst-1",
+        resources=[res1, res2],
+    )
+
+    # 1. Resource-order permutation -> exact same digest
+    permuted_digest = compute_rollback_approval_digest(
+        project_id="proj-1",
+        checkpoint_id="chk-1",
+        restore_id="rst-1",
+        resources=[res2, res1],
+    )
+    assert base_digest == permuted_digest
+
+    # 2. One hash change -> different digest
+    res1_hash_changed = CheckpointResource(
+        resource_id="res-1",
+        resource_type=CheckpointResourceType.FILE,
+        canonical_relative_path="src/main.py",
+        pre_state_hash="hash_a1_MODIFIED",
+        expected_post_state_hash="hash_a2",
+    )
+    d_hash = compute_rollback_approval_digest(
+        project_id="proj-1",
+        checkpoint_id="chk-1",
+        restore_id="rst-1",
+        resources=[res1_hash_changed, res2],
+    )
+    assert d_hash != base_digest
+
+    res1_post_hash_changed = CheckpointResource(
+        resource_id="res-1",
+        resource_type=CheckpointResourceType.FILE,
+        canonical_relative_path="src/main.py",
+        pre_state_hash="hash_a1",
+        expected_post_state_hash="hash_a2_MODIFIED",
+    )
+    d_post_hash = compute_rollback_approval_digest(
+        project_id="proj-1",
+        checkpoint_id="chk-1",
+        restore_id="rst-1",
+        resources=[res1_post_hash_changed, res2],
+    )
+    assert d_post_hash != base_digest
+
+    # 3. One resource identity change -> different digest
+    res1_id_changed = CheckpointResource(
+        resource_id="res-1-modified",
+        resource_type=CheckpointResourceType.FILE,
+        canonical_relative_path="src/main.py",
+        pre_state_hash="hash_a1",
+        expected_post_state_hash="hash_a2",
+    )
+    d_id = compute_rollback_approval_digest(
+        project_id="proj-1",
+        checkpoint_id="chk-1",
+        restore_id="rst-1",
+        resources=[res1_id_changed, res2],
+    )
+    assert d_id != base_digest
+
+    res1_path_changed = CheckpointResource(
+        resource_id="res-1",
+        resource_type=CheckpointResourceType.FILE,
+        canonical_relative_path="src/other.py",
+        pre_state_hash="hash_a1",
+        expected_post_state_hash="hash_a2",
+    )
+    d_path = compute_rollback_approval_digest(
+        project_id="proj-1",
+        checkpoint_id="chk-1",
+        restore_id="rst-1",
+        resources=[res1_path_changed, res2],
+    )
+    assert d_path != base_digest
+
+    # 4. Project / Checkpoint / Restore ID change -> different digest
+    d_proj = compute_rollback_approval_digest(
+        project_id="proj-2",
+        checkpoint_id="chk-1",
+        restore_id="rst-1",
+        resources=[res1, res2],
+    )
+    assert d_proj != base_digest
+
+    d_chk = compute_rollback_approval_digest(
+        project_id="proj-1",
+        checkpoint_id="chk-2",
+        restore_id="rst-1",
+        resources=[res1, res2],
+    )
+    assert d_chk != base_digest
+
+    d_rst = compute_rollback_approval_digest(
+        project_id="proj-1",
+        checkpoint_id="chk-1",
+        restore_id="rst-2",
+        resources=[res1, res2],
+    )
+    assert d_rst != base_digest
+
+    # 5. Path containing ":" or unusual Unicode cannot create serialization collisions
+    col_res_a = CheckpointResource(
+        resource_id="res:a",
+        resource_type=CheckpointResourceType.FILE,
+        canonical_relative_path="path:x",
+        pre_state_hash="h1",
+    )
+    col_res_b = CheckpointResource(
+        resource_id="res",
+        resource_type=CheckpointResourceType.FILE,
+        canonical_relative_path="a:path:x",
+        pre_state_hash="h1",
+    )
+    d_col_a = compute_rollback_approval_digest("p", "c", "r", [col_res_a])
+    d_col_b = compute_rollback_approval_digest("p", "c", "r", [col_res_b])
+    assert d_col_a != d_col_b
+
+    # Unicode normalization (NFC composition)
+    u_res1 = CheckpointResource(
+        resource_id="res-u",
+        resource_type=CheckpointResourceType.FILE,
+        canonical_relative_path="café.py",
+        pre_state_hash="h_u",
+    )
+    # Decomposed form (e + combining acute accent)
+    u_res2 = CheckpointResource(
+        resource_id="res-u",
+        resource_type=CheckpointResourceType.FILE,
+        canonical_relative_path="cafe\u0301.py",
+        pre_state_hash="h_u",
+    )
+    d_u1 = compute_rollback_approval_digest("p", "c", "r", [u_res1])
+    d_u2 = compute_rollback_approval_digest("p", "c", "r", [u_res2])
+    assert d_u1 == d_u2  # Canonical NFC normalization ensures equivalence!
+
+    # 6. Structurally different plans never collide
+    empty_plan_digest = compute_rollback_approval_digest("p", "c", "r", [])
+    single_res_digest = compute_rollback_approval_digest("p", "c", "r", [col_res_a])
+    assert empty_plan_digest != single_res_digest

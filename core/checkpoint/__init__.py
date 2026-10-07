@@ -32,6 +32,7 @@ from core.checkpoint.models import (
     RollbackConflictError,
     UnsupportedDatabaseBackendError,
     compute_rollback_approval_digest,
+    ROLLBACK_DIGEST_VERSION,
     generate_checkpoint_id,
     generate_restore_id,
 )
@@ -58,6 +59,7 @@ __all__ = [
     "RollbackConflictError",
     "UnsupportedDatabaseBackendError",
     "compute_rollback_approval_digest",
+    "ROLLBACK_DIGEST_VERSION",
     "generate_checkpoint_id",
     "generate_restore_id",
     "CheckpointService",

@@ -23,9 +23,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 import hashlib
+import json
 import time
 from typing import Any, Dict, List, Optional
 import uuid
+
+from core.safety.pending import normalize_for_digest
 
 
 class CheckpointResourceType(str, Enum):
@@ -175,24 +178,56 @@ class CheckpointResource:
         )
 
 
+ROLLBACK_DIGEST_VERSION: int = 1
+
+
 def compute_rollback_approval_digest(
     project_id: str,
     checkpoint_id: str,
     restore_id: str,
     resources: List[CheckpointResource],
+    version: int = ROLLBACK_DIGEST_VERSION,
 ) -> str:
-    """Compute cryptographic digest binding the complete restore plan parameters.
+    """Compute deterministic canonical cryptographic digest binding the complete restore plan parameters.
 
-    Binds project_id, checkpoint_id, restore_id, and for every target resource:
-    resource_id, resource_type, canonical_relative_path, pre_state_hash, and expected_post_state_hash.
+    Invariants (CTO Review R2.11 Verification Item 1 & R2.4 Canonical Mechanism):
+    Reuses the canonical R2.4 structured serializer with:
+    - Stable key ordering
+    - Explicit digest version
+    - Typed structured fields
+    - Deterministic resource ordering (sorted by resource identity)
+    - No repr()
+    - No delimiter-dependent ambiguity (canonical JSON key-value encoding)
+    - No raw secret values
+    - Canonical project/resource identity
     """
-    sorted_res = sorted(resources, key=lambda r: r.resource_id)
-    res_parts = [
-        f"{r.resource_id}:{r.resource_type.value}:{r.canonical_relative_path or ''}:{r.pre_state_hash or ''}:{r.expected_post_state_hash or ''}"
-        for r in sorted_res
-    ]
-    raw = f"rollback_approval:{project_id}:{checkpoint_id}:{restore_id}:{'|'.join(res_parts)}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    sorted_res = sorted(
+        resources,
+        key=lambda r: (str(r.resource_id), str(r.canonical_relative_path or "")),
+    )
+    payload: Dict[str, Any] = {
+        "digest_version": int(version),
+        "operation": "checkpoint_restore",
+        "project_id": str(project_id).strip(),
+        "checkpoint_id": str(checkpoint_id).strip(),
+        "restore_id": str(restore_id).strip(),
+        "resources": [
+            {
+                "type": r.resource_type.value,
+                "identity": str(r.resource_id).strip(),
+                "target_path": str(r.canonical_relative_path or "").strip(),
+                "checkpoint_hash": str(r.pre_state_hash or "").strip(),
+                "expected_current_hash": str(r.expected_post_state_hash or "").strip(),
+                "restore_hash": str(r.pre_state_hash or "").strip(),
+            }
+            for r in sorted_res
+        ],
+    }
+    normalized = normalize_for_digest(payload)
+    canonical_json = json.dumps(
+        normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
 
 @dataclass
