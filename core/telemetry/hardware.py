@@ -233,37 +233,57 @@ class HardwareTelemetryTracker:
         }
 
     def get_telemetry(self, router_status: Optional[Dict[str, Any]] = None) -> HardwareTelemetry:
-        """Compile a full snapshot of hardware utilization and throughput."""
+        """Compile a full snapshot of hardware utilization and throughput via canonical ResourceManager."""
         import time
+        from core.resources import get_resource_manager
 
         now = time.time()
-        # Cache GPU probe for 2 seconds to avoid excessive subprocess invocation
-        if not self._cached_gpu_info or (now - self._last_gpu_probe_time) > 2.0:
-            self._cached_gpu_info = self.probe_gpu()
-            self._last_gpu_probe_time = now
+        res_mgr = get_resource_manager()
+        snap = res_mgr.get_snapshot()
 
-        gpu_info = dict(self._cached_gpu_info)
+        # Map CPU
+        cpu_usage_pct = snap.cpu.current_utilization_percent or 0.0
+        cpu_logical = snap.cpu.logical_cores
+        cpu_physical = snap.cpu.physical_cores or cpu_logical
+
+        # Map RAM
+        ram_total_gb = round(snap.memory.total_bytes / (1024**3), 2)
+        ram_used_gb = round(snap.memory.used_bytes / (1024**3), 2)
+        ram_avail_gb = round(snap.memory.available_bytes / (1024**3), 2)
+        ram_used_pct = snap.memory.used_percent
+
+        # Map Accelerators
+        gpu_detected = len(snap.accelerators) > 0
+        gpu_model = "System Integrated / CPU Inference"
+        gpu_vendor = "generic"
+        vram_total_gb = 0.0
+        vram_used_gb = 0.0
+        vram_free_gb = 0.0
+        vram_used_pct = 0.0
+
+        if gpu_detected:
+            first = snap.accelerators[0]
+            gpu_model = first.device_name
+            gpu_vendor = first.vendor
+            if first.total_memory_bytes:
+                vram_total_gb = round(first.total_memory_bytes / (1024**3), 2)
+            if first.used_memory_bytes:
+                vram_used_gb = round(first.used_memory_bytes / (1024**3), 2)
+            if first.available_memory_bytes:
+                vram_free_gb = round(first.available_memory_bytes / (1024**3), 2)
+            vram_used_pct = first.memory_used_percent or 0.0
 
         # Apply testing overrides if set
         if self._vram_override_total is not None and self._vram_override_used is not None:
-            gpu_info["vram_total_gb"] = self._vram_override_total
-            gpu_info["vram_used_gb"] = self._vram_override_used
-            gpu_info["vram_free_gb"] = max(
-                0.0, self._vram_override_total - self._vram_override_used
-            )
-            gpu_info["vram_used_percent"] = round(
+            vram_total_gb = self._vram_override_total
+            vram_used_gb = self._vram_override_used
+            vram_free_gb = max(0.0, self._vram_override_total - self._vram_override_used)
+            vram_used_pct = round(
                 (self._vram_override_used / max(self._vram_override_total, 0.001)) * 100.0, 1
             )
-            gpu_info["detected"] = True
+            gpu_detected = True
 
-        ram = psutil.virtual_memory()
-        cpu_pct = psutil.cpu_percent(interval=None)
-        if cpu_pct == 0.0:
-            # First call to cpu_percent with interval=None may return 0.0, probe shortly
-            cpu_pct = psutil.cpu_percent(interval=0.05)
-
-        vram_pct = float(gpu_info.get("vram_used_percent", 0.0))
-        vram_warn = vram_pct >= 95.0
+        vram_warn = vram_used_pct >= 95.0
 
         # Runtime status
         ollama_live = False
@@ -276,20 +296,20 @@ class HardwareTelemetryTracker:
         local_runtime_active = ollama_live or llamacpp_live or is_recent_inference
 
         return HardwareTelemetry(
-            cpu_usage_percent=round(cpu_pct, 1),
-            cpu_cores_logical=psutil.cpu_count(logical=True) or 1,
-            cpu_cores_physical=psutil.cpu_count(logical=False) or 1,
-            ram_used_percent=round(ram.percent, 1),
-            ram_used_gb=round(ram.used / (1024**3), 2),
-            ram_total_gb=round(ram.total / (1024**3), 2),
-            ram_available_gb=round(ram.available / (1024**3), 2),
-            gpu_detected=bool(gpu_info.get("detected", False)),
-            gpu_model=str(gpu_info.get("model", "Unknown")),
-            gpu_vendor=str(gpu_info.get("vendor", "generic")),
-            vram_used_percent=vram_pct,
-            vram_used_gb=float(gpu_info.get("vram_used_gb", 0.0)),
-            vram_total_gb=float(gpu_info.get("vram_total_gb", 0.0)),
-            vram_free_gb=float(gpu_info.get("vram_free_gb", 0.0)),
+            cpu_usage_percent=cpu_usage_pct,
+            cpu_cores_logical=cpu_logical,
+            cpu_cores_physical=cpu_physical,
+            ram_used_percent=ram_used_pct,
+            ram_used_gb=ram_used_gb,
+            ram_total_gb=ram_total_gb,
+            ram_available_gb=ram_avail_gb,
+            gpu_detected=gpu_detected,
+            gpu_model=gpu_model,
+            gpu_vendor=gpu_vendor,
+            vram_used_percent=vram_used_pct,
+            vram_used_gb=vram_used_gb,
+            vram_total_gb=vram_total_gb,
+            vram_free_gb=vram_free_gb,
             vram_warning=vram_warn,
             vram_warning_threshold=95.0,
             tokens_per_second=self._recent_tps,

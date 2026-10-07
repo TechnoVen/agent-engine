@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Query, Request
 
 # Core domain imports
+from core.resources import ResourceSnapshot, get_resource_manager
 from core.telemetry import (
     BudgetConfig,
     get_hardware_telemetry_tracker,
@@ -108,6 +109,12 @@ async def get_hardware_telemetry():
     hw_tracker = get_hardware_telemetry_tracker()
     hw = hw_tracker.get_telemetry(router_status=router_status)
     return HardwareTelemetryResponse(**hw.to_dict())
+
+
+@router.get("/resources", response_model=ResourceSnapshot)
+async def get_resources_endpoint():
+    """Return canonical, factual host resource snapshot (Milestone R3 Task R3.3)."""
+    return get_resource_manager().get_snapshot()
 
 
 @router.post("/telemetry/record-speed", response_model=Dict[str, Any])

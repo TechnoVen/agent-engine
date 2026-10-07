@@ -867,7 +867,7 @@ Agent Engine can automatically select and actually invoke the best eligible loca
 - **Required Evidence:**
   - Registry tests + sample catalog.
 
-### [ ] R3.3 — Resource Manager
+### [x] R3.3 — Resource Manager
 
 - **Migration:** `EXPAND`
 - **Target release:** `0.5`
@@ -878,7 +878,7 @@ Agent Engine can automatically select and actually invoke the best eligible loca
   - Refactor existing hardware telemetry into service/API.
   - Expose available/used memory and accelerator information.
 - **Acceptance Criteria:**
-  - [ ] Resource data is real and timestamped; UI does not invent throughput.
+  - [x] Resource data is real and timestamped; UI does not invent throughput.
 - **Required Evidence:**
   - Hardware tests on supported OSes.
 

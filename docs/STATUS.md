@@ -651,16 +651,38 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/models.py"
     - "tests/test_r3_model_registry.py"
   notes: "S1 — Implemented and implementation-tested. Completed Model Capability Registry (Final Capability-Truth Closure): (1) Structured ModelIdentity(provider_id, model_id) avoiding colon parsing ambiguities; versioned serialization (v1:provider:model) supporting colons, slashes, spaces, and Unicode round-trips. (2) 3-valued logic (TriStateBool: TRUE, FALSE, UNKNOWN) for capabilities and privacy facts; UNKNOWN strictly fails hard requirements (require_local_only, no_data_leaves_device, zero_retention). (3) Complete roadmap capability dimensions with per-field CapabilityFact provenance tracking; USER_OVERRIDE remains visible and never masquerades as provider-certified metadata. (4) Distinct token context limits: max_input_tokens, max_output_tokens, and max_total_context_tokens. (5) Unit-explicit (PER_1M_TOKENS) and time-aware TokenPrice; missing pricing is UNKNOWN, never zero ($0.0). (6) Latency separation: static catalog_latency_class is preserved independently from live observed telemetry metrics. (7) Privacy facts (execution_location, data_leaves_device, zero_data_retention); user override cannot downgrade cloud data_leaves_device=TRUE to FALSE. (8) Precedence force restriction: force=True is strictly rejected for untrusted callers and discovery (PermissionError). (9) Field-level provenance merging: sparse higher-precedence records do not erase known independent facts; FALSE overrides TRUE while UNKNOWN does not. (10) Conservative defaults for generic 'compatible' provider (unsupported facts remain UNKNOWN). (11) Non-routing candidate evaluation: ModelCandidate.score is deterministic metadata completeness [0.0, 1.0], no premature winner ranking. (12) Known limitation documented: 0.5 scopes 'compatible' as a single configured provider kind instance; multi-instance disambiguation requires future provider_instance_id. 16/16 precision tests passing, 851/851 full regression passing."
+
+- id: R3.3
+  title: "Resource Manager"
+  task_status: done
+  capability_maturity: S1
+  migration: EXPAND
+  owner: "Core & Host Architecture"
+  depends_on: []
+  evidence:
+    - "core/resources/models.py"
+    - "core/resources/probes/base.py"
+    - "core/resources/probes/linux.py"
+    - "core/resources/probes/darwin.py"
+    - "core/resources/probes/windows.py"
+    - "core/resources/manager.py"
+    - "core/resources/__init__.py"
+    - "core/telemetry/hardware.py"
+    - "services/python/server/routers/telemetry.py"
+    - "services/python/server/api.py"
+    - "tests/test_r3_resource_manager.py"
+  notes: "S1 — Implemented and implementation-tested. Completed Host Resource Manager: (1) Factual, timestamped host telemetry snapshot (captured_at, platform, architecture, cpu, memory, accelerators, probe_status). (2) Honest memory accounting in bytes (total_bytes, available_bytes, used_bytes, free_bytes) with strict non-negative and available <= total invariants. (3) Accelerators discovery with truthful VRAM and Apple Silicon unified memory protection (never double-counted as separate VRAM). Zero accelerators is valid. (4) Independent probe failure: failure in accelerator detection does not drop CPU/memory facts. (5) Zero device fingerprinting: hostname, username, serial number, and home paths are strictly excluded. (6) Bounded external probes: timeout <= 2s, shell=False argv list execution, output truncated to <= 64KB. (7) Concurrency discipline: RLock is never held across probe I/O. (8) Cache and stale semantics: fresh for stale_threshold (2s), cached up to cache_ttl (10s), with factual captured_at and cache_age_seconds preserved. (9) Canonical REST API endpoint GET /v1/resources returning ResourceSnapshot; adapted legacy GET /telemetry/hardware to delegate to ResourceManager. (10) Strict R3.2 boundary: host facts exposed without premature model recommendation or winner ranking. 13/13 precision tests passing, 864/864 full regression passing."
 ```
 
 ---
 
 ## 8. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `851 passed, 3 warnings in 131.98s` (`uv run pytest -q`)
-- **Combined R3 Model Layer Suites:** `43 passed in 6.82s` (`uv run pytest tests/test_r3_provider_registry.py tests/test_r3_model_registry.py`)
+- **Full Regression Suite:** `864 passed, 3 warnings in 111.48s` (`uv run pytest -q`)
+- **Combined R3 Model Layer Suites:** `56 passed in 8.67s` (`uv run pytest tests/test_r3_provider_registry.py tests/test_r3_model_registry.py tests/test_r3_resource_manager.py`)
 - **R3.1 Canonical Provider Registry Suite:** `27 passed in 3.32s` (`uv run pytest tests/test_r3_provider_registry.py`)
 - **R3.2 Model Capability Registry Suite:** `16 passed in 3.16s` (`uv run pytest tests/test_r3_model_registry.py`)
+- **R3.3 Resource Manager Suite:** `13 passed in 4.86s` (`uv run pytest tests/test_r3_resource_manager.py`)
 - **R2 Checkpoint and Rollback Suite:** `35 passed in 3.93s` (`uv run pytest tests/test_r2_checkpoint_service.py`)
 - **R2 Diagnostics Redaction Suite:** `27 passed in 3.91s` (`uv run pytest tests/test_r2_diagnostics_redaction.py`)
 - **R2 Safe Staged Patch Application Suite:** `25 passed in 2.85s` (`uv run pytest tests/test_r2_patch_service.py`)

@@ -181,6 +181,7 @@ from services.python.server.routers.telemetry import (
     get_budget_config,
     get_cost_metrics,
     get_hardware_telemetry,
+    get_resources_endpoint,
     get_telemetry,
     list_distillation_candidates,
     record_cost_metric,
