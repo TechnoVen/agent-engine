@@ -19,7 +19,12 @@ from core.resources.models import (
     MemoryResources,
     ProbeStatus,
 )
-from core.resources.probes.base import BaseResourceProbe, safe_run_command
+from core.resources.probes.base import (
+    BaseResourceProbe,
+    deduplicate_accelerators,
+    normalize_bus_id,
+    safe_run_command,
+)
 
 logger = logging.getLogger("agent_engine.resources.probes.windows")
 
@@ -27,14 +32,21 @@ logger = logging.getLogger("agent_engine.resources.probes.windows")
 class WindowsResourceProbe(BaseResourceProbe):
     """Factual Windows hardware resource probe."""
 
+    def __init__(self) -> None:
+        self._cpu_baseline_initialized: bool = False
+
     def probe_cpu(self) -> CpuResources:
         arch = platform.machine() or "x86_64"
         logical = psutil.cpu_count(logical=True) or 1
         physical = psutil.cpu_count(logical=False)
 
-        util = psutil.cpu_percent(interval=None)
-        if util == 0.0:
-            util = psutil.cpu_percent(interval=0.02)
+        if not self._cpu_baseline_initialized:
+            psutil.cpu_percent(interval=None)
+            self._cpu_baseline_initialized = True
+            util = None
+        else:
+            raw_util = psutil.cpu_percent(interval=None)
+            util = round(raw_util, 1)
 
         freq_mhz = None
         try:
@@ -72,7 +84,7 @@ class WindowsResourceProbe(BaseResourceProbe):
         # NVIDIA check via nvidia-smi with bounded timeout and no shell
         cmd = [
             "nvidia-smi",
-            "--query-gpu=index,name,memory.total,memory.used,memory.free",
+            "--query-gpu=pci.bus_id,index,name,memory.total,memory.used,memory.free",
             "--format=csv,noheader,nounits",
         ]
         out = safe_run_command(cmd, timeout=1.5)
@@ -85,13 +97,14 @@ class WindowsResourceProbe(BaseResourceProbe):
             if not line:
                 continue
             parts = [p.strip() for p in line.split(",")]
-            if len(parts) >= 5:
+            if len(parts) >= 6:
                 try:
-                    idx = parts[0]
-                    name = parts[1]
-                    total_mb = float(parts[2])
-                    used_mb = float(parts[3])
-                    free_mb = float(parts[4])
+                    raw_bus_id = parts[0]
+                    idx = parts[1]
+                    name = parts[2]
+                    total_mb = float(parts[3])
+                    used_mb = float(parts[4])
+                    free_mb = float(parts[5])
 
                     results.append(
                         AcceleratorResources(
@@ -106,9 +119,10 @@ class WindowsResourceProbe(BaseResourceProbe):
                             backend="nvml",
                             probe_source="nvidia_smi",
                             status=ProbeStatus.KNOWN,
+                            metadata={"pci_bus_id": normalize_bus_id(raw_bus_id)},
                         )
                     )
                 except Exception as e:
                     logger.debug("Failed to parse Windows nvidia-smi line '%s': %s", line, e)
 
-        return results
+        return deduplicate_accelerators(results)

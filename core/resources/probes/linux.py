@@ -21,7 +21,12 @@ from core.resources.models import (
     MemoryResources,
     ProbeStatus,
 )
-from core.resources.probes.base import BaseResourceProbe, safe_run_command
+from core.resources.probes.base import (
+    BaseResourceProbe,
+    deduplicate_accelerators,
+    normalize_bus_id,
+    safe_run_command,
+)
 
 logger = logging.getLogger("agent_engine.resources.probes.linux")
 
@@ -29,16 +34,24 @@ logger = logging.getLogger("agent_engine.resources.probes.linux")
 class LinuxResourceProbe(BaseResourceProbe):
     """Factual Linux hardware resource probe leveraging psutil, sysfs, and optional tools."""
 
+    def __init__(self) -> None:
+        self._cpu_baseline_initialized: bool = False
+
     def probe_cpu(self) -> CpuResources:
         arch = platform.machine() or "unknown"
         logical = psutil.cpu_count(logical=True) or 1
         physical = psutil.cpu_count(logical=False)
 
-        # Utilization: interval=None returns immediate CPU usage since last call
-        util = psutil.cpu_percent(interval=None)
-        if util == 0.0:
-            # Brief 0.02s probe for cold start accuracy
-            util = psutil.cpu_percent(interval=0.02)
+        # Utilization: psutil docs state the first non-blocking call returns meaningless 0.0.
+        # Truthful semantics: first baseline sample returns None / UNKNOWN; subsequent samples
+        # return the factual percentage elapsed since the previous call.
+        if not self._cpu_baseline_initialized:
+            psutil.cpu_percent(interval=None)
+            self._cpu_baseline_initialized = True
+            util = None
+        else:
+            raw_util = psutil.cpu_percent(interval=None)
+            util = round(raw_util, 1)
 
         # Load average (1m, 5m, 15m)
         load_avg = None
@@ -60,7 +73,7 @@ class LinuxResourceProbe(BaseResourceProbe):
             architecture=arch,
             logical_cores=logical,
             physical_cores=physical,
-            current_utilization_percent=round(util, 1),
+            current_utilization_percent=util,
             load_average=load_avg,
             frequency_mhz=freq_mhz,
             status=ProbeStatus.KNOWN,
@@ -88,17 +101,18 @@ class LinuxResourceProbe(BaseResourceProbe):
         if nvidia_accels:
             accelerators.extend(nvidia_accels)
 
-        # 2. DRM sysfs probe (AMD / Intel) if no NVIDIA or additional GPUs
-        sysfs_accels = self._probe_sysfs_drm(existing_vendors={a.vendor for a in accelerators})
+        # 2. DRM sysfs probe (AMD / Intel / NVIDIA sysfs nodes)
+        sysfs_accels = self._probe_sysfs_drm()
         if sysfs_accels:
             accelerators.extend(sysfs_accels)
 
-        return accelerators
+        # 3. Deduplicate physical devices across probe sources into single canonical records
+        return deduplicate_accelerators(accelerators)
 
     def _probe_nvidia_smi(self) -> List[AcceleratorResources]:
         cmd = [
             "nvidia-smi",
-            "--query-gpu=index,name,memory.total,memory.used,memory.free",
+            "--query-gpu=pci.bus_id,index,name,memory.total,memory.used,memory.free",
             "--format=csv,noheader,nounits",
         ]
         out = safe_run_command(cmd, timeout=1.5)
@@ -111,13 +125,14 @@ class LinuxResourceProbe(BaseResourceProbe):
             if not line:
                 continue
             parts = [p.strip() for p in line.split(",")]
-            if len(parts) >= 5:
+            if len(parts) >= 6:
                 try:
-                    idx = parts[0]
-                    name = parts[1]
-                    total_mb = float(parts[2])
-                    used_mb = float(parts[3])
-                    free_mb = float(parts[4])
+                    raw_bus_id = parts[0]
+                    idx = parts[1]
+                    name = parts[2]
+                    total_mb = float(parts[3])
+                    used_mb = float(parts[4])
+                    free_mb = float(parts[5])
 
                     results.append(
                         AcceleratorResources(
@@ -132,13 +147,14 @@ class LinuxResourceProbe(BaseResourceProbe):
                             backend="nvml",
                             probe_source="nvidia_smi",
                             status=ProbeStatus.KNOWN,
+                            metadata={"pci_bus_id": normalize_bus_id(raw_bus_id)},
                         )
                     )
                 except (ValueError, IndexError) as e:
                     logger.debug("Failed to parse nvidia-smi line '%s': %s", line, e)
         return results
 
-    def _probe_sysfs_drm(self, existing_vendors: set[str]) -> List[AcceleratorResources]:
+    def _probe_sysfs_drm(self) -> List[AcceleratorResources]:
         results: List[AcceleratorResources] = []
         cards = glob.glob("/sys/class/drm/card*/device")
 
@@ -158,11 +174,12 @@ class LinuxResourceProbe(BaseResourceProbe):
 
                     avail_bytes = max(0, total_bytes - used_bytes)
                     card_name = os.path.basename(os.path.dirname(card))
+                    raw_bus_id = os.path.basename(os.path.realpath(card))
 
                     vendor = "amd"
                     dev_name = "AMD Radeon Graphics"
 
-                    # Resolve name from lspci if accessible
+                    # Resolve name and vendor from lspci if accessible
                     lspci_out = safe_run_command(["lspci"], timeout=1.0)
                     if lspci_out:
                         for line in lspci_out.splitlines():
@@ -179,9 +196,6 @@ class LinuxResourceProbe(BaseResourceProbe):
                                         vendor = "nvidia"
                                     break
 
-                    if vendor in existing_vendors and vendor == "nvidia":
-                        continue  # Already captured via nvidia-smi
-
                     results.append(
                         AcceleratorResources(
                             accelerator_id=f"drm:{card_name}",
@@ -195,6 +209,7 @@ class LinuxResourceProbe(BaseResourceProbe):
                             backend="sysfs",
                             probe_source="sysfs_drm",
                             status=ProbeStatus.KNOWN,
+                            metadata={"pci_bus_id": normalize_bus_id(raw_bus_id)},
                         )
                     )
                 except Exception as e:

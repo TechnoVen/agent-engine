@@ -32,14 +32,21 @@ logger = logging.getLogger("agent_engine.resources.probes.darwin")
 class DarwinResourceProbe(BaseResourceProbe):
     """Factual macOS hardware resource probe."""
 
+    def __init__(self) -> None:
+        self._cpu_baseline_initialized: bool = False
+
     def probe_cpu(self) -> CpuResources:
         arch = platform.machine() or "arm64"
         logical = psutil.cpu_count(logical=True) or 1
         physical = psutil.cpu_count(logical=False)
 
-        util = psutil.cpu_percent(interval=None)
-        if util == 0.0:
-            util = psutil.cpu_percent(interval=0.02)
+        if not self._cpu_baseline_initialized:
+            psutil.cpu_percent(interval=None)
+            self._cpu_baseline_initialized = True
+            util = None
+        else:
+            raw_util = psutil.cpu_percent(interval=None)
+            util = round(raw_util, 1)
 
         load_avg = None
         try:
@@ -51,7 +58,7 @@ class DarwinResourceProbe(BaseResourceProbe):
             architecture=arch,
             logical_cores=logical,
             physical_cores=physical,
-            current_utilization_percent=round(util, 1),
+            current_utilization_percent=util,
             load_average=load_avg,
             frequency_mhz=None,  # Not reliably reported on Apple Silicon without root
             status=ProbeStatus.KNOWN,

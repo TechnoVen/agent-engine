@@ -44,7 +44,13 @@ from core.resources import (
     get_resource_manager,
     reset_resource_manager,
 )
-from core.resources.probes.base import BaseResourceProbe, safe_run_command
+from core.resources.probes.base import (
+    BaseResourceProbe,
+    deduplicate_accelerators,
+    resolve_trusted_executable,
+    safe_run_command,
+)
+from core.resources.probes.linux import LinuxResourceProbe
 from core.telemetry.hardware import get_hardware_telemetry_tracker
 
 
@@ -371,3 +377,177 @@ def test_13_no_model_recommendation_in_resource_manager():
     assert not hasattr(mgr, "recommend_models")
     assert not hasattr(mgr, "model_fits_gpu")
     assert not hasattr(mgr, "get_recommended_tier")
+
+
+# ==============================================================================
+# 11. Bounded Capture During Stream Draining (Adversarial Probe Test)
+# ==============================================================================
+def test_14_adversarial_probe_bounded_capture_and_memory():
+    """Verify safe_run_command bounds retained memory during capture and terminates runaway child."""
+    # Run a command emitting 500 KB through stdout
+    res = safe_run_command(
+        ["python3", "-c", "import sys; sys.stdout.write('A' * 500000); sys.stdout.flush()"],
+        timeout=2.0,
+        max_bytes=4096,
+        refuse_oversized=False,
+    )
+    assert res is not None
+    assert len(res) <= 4096
+
+    # Test refuse_oversized=True terminates and returns None
+    res_refused = safe_run_command(
+        ["python3", "-c", "import sys; sys.stdout.write('A' * 500000); sys.stdout.flush()"],
+        timeout=2.0,
+        max_bytes=4096,
+        refuse_oversized=True,
+    )
+    assert res_refused is None
+
+
+# ==============================================================================
+# 12. Trusted Executable Resolution (PATH-Shadowing Rejected)
+# ==============================================================================
+def test_15_trusted_executable_resolution_and_path_shadow_rejected(tmp_path):
+    """Verify probe binaries resolve strictly from trusted system locations, rejecting PATH-shadowing."""
+    # 1. Verify standard system binary resolves to trusted system directory
+    lspci_path = resolve_trusted_executable("lspci")
+    if lspci_path is not None:
+        assert lspci_path.startswith(("/usr/bin", "/bin", "/usr/sbin"))
+        assert not lspci_path.startswith(str(tmp_path))
+
+    # 2. Simulate hostile PATH shadowing with fake executable in temporary directory
+    fake_lspci = tmp_path / "lspci"
+    fake_lspci.write_text("#!/bin/sh\necho 'FAKE_GPU'\n")
+    fake_lspci.chmod(0o755)
+
+    with patch.dict(os.environ, {"PATH": f"{tmp_path}:{os.environ.get('PATH', '')}"}):
+        # Direct resolve_trusted_executable must NOT pick up the tmp_path binary
+        resolved = resolve_trusted_executable("lspci")
+        if resolved is not None:
+            assert resolved != str(fake_lspci)
+            assert not resolved.startswith(str(tmp_path))
+
+    # 3. Explicit untrusted path passed directly is rejected
+    assert resolve_trusted_executable(str(fake_lspci)) is None
+
+    # 4. Project-local / workspace path passed directly is rejected
+    workspace_cand = os.path.join(os.getcwd(), "fake_probe.sh")
+    assert resolve_trusted_executable(workspace_cand) is None
+
+
+# ==============================================================================
+# 13. CPU Utilization First Sample vs Measured Semantics
+# ==============================================================================
+def test_16_cpu_first_sample_and_measured_semantics():
+    """Verify first non-blocking CPU sample returns None (not fake 0.0), and later sample is factual."""
+    probe = LinuxResourceProbe()
+    assert probe._cpu_baseline_initialized is False
+
+    # First call: establishes measurement baseline without delay; returns None for utilization
+    snap1 = probe.probe_cpu()
+    assert snap1.current_utilization_percent is None
+    assert probe._cpu_baseline_initialized is True
+
+    # Subsequent call after brief elapsed time: returns factual utilization
+    time.sleep(0.05)
+    snap2 = probe.probe_cpu()
+    assert snap2.current_utilization_percent is not None
+    assert 0.0 <= snap2.current_utilization_percent <= 100.0
+
+
+# ==============================================================================
+# 14. Accelerator Deduplication Fixture (Merged Physical GPU)
+# ==============================================================================
+def test_17_accelerator_deduplication_fixture():
+    """Verify two probes describing the same physical GPU merge into exactly 1 record with richer metadata."""
+    # Probe 1: from nvidia-smi with NVML live memory
+    p1 = AcceleratorResources(
+        accelerator_id="nvidia:0",
+        vendor="nvidia",
+        device_name="NVIDIA GeForce RTX 4090",
+        type=AcceleratorType.DISCRETE_GPU,
+        total_memory_bytes=25769803776,
+        used_memory_bytes=1073741824,
+        available_memory_bytes=24696061952,
+        backend="nvml",
+        probe_source="nvidia_smi",
+        metadata={"pci_bus_id": "01:00.0"},
+    )
+
+    # Probe 2: from sysfs/lspci for the same physical PCI slot
+    p2 = AcceleratorResources(
+        accelerator_id="drm:card0",
+        vendor="nvidia",
+        device_name="AD102 [GeForce RTX 4090]",
+        type=AcceleratorType.DISCRETE_GPU,
+        total_memory_bytes=25769803776,
+        used_memory_bytes=None,
+        available_memory_bytes=None,
+        backend="sysfs",
+        probe_source="sysfs_drm",
+        metadata={"pci_bus_id": "0000:01:00.0"},
+    )
+
+    deduped = deduplicate_accelerators([p1, p2])
+
+    # Invariant: exactly one AcceleratorResource, NOT two GPUs
+    assert len(deduped) == 1
+    gpu = deduped[0]
+
+    # Invariant: clean, non-sensitive, process-local identifier
+    assert gpu.accelerator_id == "gpu:0"
+
+    # Invariant: richer marketing name and live NVML memory retained
+    assert gpu.device_name == "NVIDIA GeForce RTX 4090"
+    assert gpu.total_memory_bytes == 25769803776
+    assert gpu.used_memory_bytes == 1073741824
+    assert gpu.backend == "nvml"
+    assert "nvidia_smi" in gpu.probe_source and "sysfs_drm" in gpu.probe_source
+
+    # Invariant: zero serial numbers or hardware fingerprints
+    for k in gpu.metadata:
+        assert not any(bad in k.lower() for bad in ("serial", "uuid", "mac", "fingerprint"))
+
+
+# ==============================================================================
+# 15. Resource API Authorization Verification
+# ==============================================================================
+def test_18_resource_api_authorization_enforced():
+    """Verify /v1/resources enforces local IPC authentication and /healthz remains unauthenticated."""
+    from services.python.server.app import create_app
+    from services.python.server.dependencies import get_token_manager, reset_token_manager
+
+    old_env_token = os.environ.get("AGENT_ENGINE_IPC_TOKEN")
+    try:
+        reset_token_manager()
+        token_mgr = get_token_manager()
+        valid_token = token_mgr.get_token()
+
+        with patch.dict(os.environ, {"AGENT_ENGINE_AUTH_ENFORCED": "true"}):
+            app = create_app()
+            client = TestClient(app)
+
+            # 1. Missing token -> 401 Unauthorized
+            res_no_auth = client.get("/v1/resources")
+            assert res_no_auth.status_code == 401
+
+            # 2. Invalid token -> 401 Unauthorized
+            res_bad_auth = client.get("/v1/resources", headers={"X-IPC-Token": "invalid_token_123"})
+            assert res_bad_auth.status_code == 401
+
+            # 3. Valid IPC token -> 200 OK
+            res_auth = client.get("/v1/resources", headers={"X-IPC-Token": valid_token})
+            assert res_auth.status_code == 200
+            snap = res_auth.json()
+            assert "cpu" in snap
+            assert "memory" in snap
+
+            # 4. Minimal liveness endpoint /healthz remains accessible without authentication
+            res_health = client.get("/healthz")
+            assert res_health.status_code == 200
+    finally:
+        reset_token_manager()
+        if old_env_token is not None:
+            os.environ["AGENT_ENGINE_IPC_TOKEN"] = old_env_token
+        else:
+            os.environ.pop("AGENT_ENGINE_IPC_TOKEN", None)
