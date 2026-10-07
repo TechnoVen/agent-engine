@@ -331,6 +331,7 @@ class ExecutionLedgerService:
                     call_id=c_id,
                     provider_id=payload.get("provider_id", "unknown"),
                     model_id=payload.get("model_id", "unknown"),
+                    endpoint_class=payload.get("endpoint_class"),
                     routing_tier=payload.get("routing_tier"),
                     started_at=payload.get("started_at") or ev.get("timestamp", ""),
                     status="started",
@@ -353,6 +354,8 @@ class ExecutionLedgerService:
 
                 if c_id in model_calls_map:
                     rec = model_calls_map[c_id]
+                    if payload.get("endpoint_class"):
+                        rec.endpoint_class = payload.get("endpoint_class")
                     rec.completed_at = payload.get("completed_at") or ev.get("timestamp", "")
                     rec.status = payload.get("status", "completed")
                     rec.input_tokens = in_tok
@@ -369,6 +372,7 @@ class ExecutionLedgerService:
                         call_id=c_id,
                         provider_id=payload.get("provider_id", "unknown"),
                         model_id=payload.get("model_id", "unknown"),
+                        endpoint_class=payload.get("endpoint_class"),
                         routing_tier=payload.get("routing_tier"),
                         started_at=payload.get("started_at") or ev.get("timestamp", ""),
                         completed_at=payload.get("completed_at") or ev.get("timestamp", ""),

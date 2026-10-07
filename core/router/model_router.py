@@ -78,16 +78,21 @@ class ModelRouter:
 
     def get_status(self, force_refresh: bool = False) -> dict[str, Any]:
         """Return comprehensive health, latency, circuit state, and key status for all providers."""
-        providers = [
-            "ollama",
-            "llamacpp",
-            "gemini",
-            "openai",
-            "anthropic",
-            "deepseek",
-            "groq",
-            "kimi",
-        ]
+        try:
+            from core.providers import get_provider_registry
+
+            providers = [p.provider_id for p in get_provider_registry().list_providers()]
+        except Exception:
+            providers = [
+                "ollama",
+                "llamacpp",
+                "gemini",
+                "openai",
+                "anthropic",
+                "deepseek",
+                "groq",
+                "kimi",
+            ]
         providers_to_probe = [p for p in providers if self.circuit_breaker.can_attempt(p)]
         probe_results = self.health_prober.probe_all(
             providers=providers_to_probe, force_refresh=force_refresh

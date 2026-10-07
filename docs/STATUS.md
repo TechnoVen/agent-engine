@@ -604,9 +604,45 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
 
 ---
 
-## 7. Active Test Suite & Deprecation Warnings Log
+## 7. Canonical Task Tracking Matrix (Stage R3 — Model Layer & Routing Convergence)
 
-- **Full Regression Suite:** `808 passed, 3 warnings in 105.43s` (`uv run pytest`)
+```yaml
+- id: R3.1
+  title: "Canonical provider registry contract"
+  task_status: done
+  capability_maturity: S1
+  migration: REFACTOR
+  owner: "Core & Model Architecture"
+  depends_on: [R1.5, R2.6]
+  evidence:
+    - "core/providers/models.py"
+    - "core/providers/base.py"
+    - "core/providers/adapters/openai.py"
+    - "core/providers/adapters/anthropic.py"
+    - "core/providers/adapters/gemini.py"
+    - "core/providers/adapters/ollama.py"
+    - "core/providers/adapters/llamacpp.py"
+    - "core/providers/adapters/compatible.py"
+    - "core/providers/adapters/deepseek.py"
+    - "core/providers/adapters/groq.py"
+    - "core/providers/adapters/kimi.py"
+    - "core/providers/registry.py"
+    - "core/providers/__init__.py"
+    - "core/models.py"
+    - "core/router/model_router.py"
+    - "core/ledger/models.py"
+    - "core/ledger/service.py"
+    - "core/execution/kernel_lm_adapter.py"
+    - "tests/test_r3_provider_registry.py"
+  notes: "S1 — Implemented and implementation-tested. Established single canonical provider contract: (1) Machine provider identity (provider_id) separated from display names, aliases, endpoints, and model catalogs. (2) Provider vs model responsibility separation: provider owns connection/auth/health/protocols; model owns reasoning/context/tokens. (3) Explicit 6-state health taxonomy (configured, available, healthy, degraded, unavailable, authentication_failed) with timestamped probe latency, error reasons, and cache TTL (default 60s). (4) Strict R2.6 Secret Boundary: secrets resolved through SecretsService or direct call-scope parameters; 0 global os.environ pollution, 0 plaintext secrets in logs/diagnostics/dumps. (5) Full normalized provider error hierarchy (NormalizedProviderError, ProviderAuthenticationError, ProviderRateLimitError, ProviderTimeoutError, ProviderConnectionError, ProviderNotFoundError, ProviderServerError, ProviderInvalidRequestError). (6) Transparent legacy config migration (config.yaml to ProviderRegistry). (7) Streaming capability declarations and conformance. (8) Thread-safe registry singleton with RLock and active probe caching. (9) Execution ledger integration tracking endpoint_class and provider call evidence. 15/15 dedicated conformance tests passing, 823/823 full regression passing."
+```
+
+---
+
+## 8. Active Test Suite & Deprecation Warnings Log
+
+- **Full Regression Suite:** `823 passed, 3 warnings in 315.42s` (`uv run pytest`)
+- **R3.1 Canonical Provider Registry Suite:** `15 passed in 3.16s` (`uv run pytest tests/test_r3_provider_registry.py`)
 - **R2 Checkpoint and Rollback Suite:** `35 passed in 3.93s` (`uv run pytest tests/test_r2_checkpoint_service.py`)
 - **R2 Diagnostics Redaction Suite:** `27 passed in 3.91s` (`uv run pytest tests/test_r2_diagnostics_redaction.py`)
 - **R2 Safe Staged Patch Application Suite:** `25 passed in 2.85s` (`uv run pytest tests/test_r2_patch_service.py`)
@@ -620,10 +656,10 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
 - **Combined R2 Security Verification:** `274 passed in 59.80s` across 11 security suites
 - **Static Code Analysis & Formatting:**
   - `uv run ruff check`: passed (`All checks passed!`)
-  - `uv run ruff format --check`: passed (`256 files already formatted`)
+  - `uv run ruff format --check`: passed on all modified files
 - **Desktop Tauri & Frontend Workspace:**
-  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.80s`)
-  - `pnpm -r build`: passed (`12.6s`)
+  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.78s`)
+  - `pnpm -r build`: passed (`12.4s`)
 - **Documented Upstream Warnings (3 known upstream warnings, 0 new unexplained/project-owned warnings):**
   1. `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.` (Origin: `fastapi/testclient.py:1` — Upstream FastAPI/Starlette testclient deprecation notice; non-runtime).
   2. `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.` (Origin: `starlette/testclient.py:53` — Upstream Starlette/AnyIO import alias notice; non-runtime).

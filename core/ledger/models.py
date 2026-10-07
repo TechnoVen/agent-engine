@@ -97,6 +97,7 @@ class ModelCallRecord(BaseModel):
     call_id: str
     provider_id: str
     model_id: str
+    endpoint_class: Optional[str] = None
     routing_tier: Optional[str] = None
     started_at: str
     completed_at: Optional[str] = None

@@ -838,20 +838,20 @@ Agent Engine can automatically select and actually invoke the best eligible loca
 
 ## Tasks
 
-### [ ] R3.1 — Canonical Provider Registry
+### [x] R3.1 — Canonical Provider Registry
 
 - **Migration:** `REFACTOR`
 - **Target release:** `0.5`
-- **Initial maturity:** `S0` unless `docs/STATUS.md` verifies a higher level from legacy work.
+- **Initial maturity:** `S1`
 - **Dependencies:** R1.5
 - **User Story:** As a Power User, I want all providers represented through one contract so switching providers does not change product semantics.
 - **Deliverables:**
   - Provider capabilities/configuration/health contract.
   - Migrate existing provider config.
 - **Acceptance Criteria:**
-  - [ ] Existing providers pass common contract suite.
+  - [x] Existing providers pass common contract suite.
 - **Required Evidence:**
-  - Provider conformance tests.
+  - Provider conformance tests (`tests/test_r3_provider_registry.py`).
 
 ### [ ] R3.2 — Model Capability Registry
 
