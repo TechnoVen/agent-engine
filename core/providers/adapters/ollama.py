@@ -22,6 +22,8 @@ from core.providers.base import (
     ProviderTimeoutError,
 )
 from core.providers.models import (
+    ProviderAvailability,
+    ProviderConfigurationState,
     ProviderHealth,
     ProviderHealthStatus,
 )
@@ -40,12 +42,13 @@ class OllamaAdapter(ProviderAdapter):
         ).rstrip("/")
 
     def test_connection(self, timeout: float = 3.0) -> ProviderHealth:
+        effective_timeout = min(timeout, 5.0)
         base_url = self._get_base_url()
         probe_url = f"{base_url}/api/tags"
 
         t0 = time.perf_counter()
         try:
-            resp = requests.get(probe_url, timeout=timeout)
+            resp = requests.get(probe_url, timeout=effective_timeout)
             elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
             if resp.status_code == 200:
                 threshold = self._definition.capabilities.degraded_latency_threshold_ms
@@ -55,31 +58,43 @@ class OllamaAdapter(ProviderAdapter):
                     else ProviderHealthStatus.HEALTHY
                 )
                 h = ProviderHealth(
+                    config_state=ProviderConfigurationState.CONFIGURED,
+                    availability=ProviderAvailability.AVAILABLE,
                     status=status,
                     latency_ms=elapsed_ms,
                     last_checked_at=time.time(),
                     consecutive_failures=0,
+                    probe_type="transport_reachability",
                     details={"status_code": 200, "endpoint": probe_url},
                 )
             else:
                 h = ProviderHealth(
-                    status=ProviderHealthStatus.UNAVAILABLE,
+                    config_state=ProviderConfigurationState.CONFIGURED,
+                    availability=ProviderAvailability.AVAILABLE,
+                    status=ProviderHealthStatus.UNHEALTHY,
                     latency_ms=elapsed_ms,
-                    error_message=f"HTTP {resp.status_code}: {resp.text[:200]}",
+                    error_message=f"HTTP {resp.status_code}: Upstream error",
                     last_checked_at=time.time(),
+                    probe_type="transport_reachability",
                     details={"status_code": resp.status_code},
                 )
         except requests.Timeout:
             h = ProviderHealth(
-                status=ProviderHealthStatus.UNAVAILABLE,
-                error_message=f"Ollama connection timed out after {timeout}s",
+                config_state=ProviderConfigurationState.CONFIGURED,
+                availability=ProviderAvailability.UNAVAILABLE,
+                status=ProviderHealthStatus.UNHEALTHY,
+                error_message=f"Ollama connection timed out after {effective_timeout}s",
                 last_checked_at=time.time(),
+                probe_type="transport_reachability",
             )
-        except Exception as e:
+        except Exception:
             h = ProviderHealth(
-                status=ProviderHealthStatus.UNAVAILABLE,
-                error_message=f"Cannot reach Ollama at {base_url}: {e}",
+                config_state=ProviderConfigurationState.CONFIGURED,
+                availability=ProviderAvailability.UNAVAILABLE,
+                status=ProviderHealthStatus.UNHEALTHY,
+                error_message="Cannot reach Ollama daemon",
                 last_checked_at=time.time(),
+                probe_type="transport_reachability",
             )
 
         self._definition.health = h
@@ -94,6 +109,7 @@ class OllamaAdapter(ProviderAdapter):
         max_tokens: Optional[int] = None,
         cache: bool = True,
         timeout: Optional[float] = None,
+        api_key: Optional[str] = None,
     ) -> dspy.LM:
         m = model or self._definition.default_model
         # Use configured environment override if available

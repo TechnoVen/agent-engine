@@ -31,6 +31,15 @@ from core.security.secrets import SecretReference
 _PROVIDER_ID_PATTERN = re.compile(r"^[a-z0-9_\-]+$")
 
 
+class ProviderEndpointClass(str, Enum):
+    """Canonical controlled taxonomy of endpoint types for execution ledger and routing."""
+
+    CLOUD = "cloud"
+    LOCAL_MANAGED = "local_managed"
+    LOCAL_EXTERNAL = "local_external"
+    CUSTOM_REMOTE = "custom_remote"
+
+
 class ProviderAuthType(str, Enum):
     """Authentication mechanisms supported by providers."""
 
@@ -51,15 +60,30 @@ class ProviderEndpointStyle(str, Enum):
     CUSTOM = "custom"
 
 
-class ProviderHealthStatus(str, Enum):
-    """Explicit lifecycle health states for provider instances."""
+class ProviderConfigurationState(str, Enum):
+    """Configuration validity state of a provider."""
 
-    CONFIGURED = "configured"  # Configured in engine, awaiting initial health probe
-    AVAILABLE = "available"  # Reachable and operational
-    HEALTHY = "healthy"  # Fully operational, latency within threshold, zero recent errors
-    DEGRADED = "degraded"  # Operational but elevated latency or transient retries
-    UNAVAILABLE = "unavailable"  # Unreachable, connection refused, circuit open, or 5xx
-    AUTHENTICATION_FAILED = "authentication_failed"  # 401 / 403 or invalid credential
+    CONFIGURED = "configured"
+    UNCONFIGURED = "unconfigured"
+    INVALID = "invalid"
+
+
+class ProviderAvailability(str, Enum):
+    """Operational / transport reachability of a provider."""
+
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+    UNKNOWN = "unknown"
+
+
+class ProviderHealthStatus(str, Enum):
+    """Health quality and authentication state of a provider."""
+
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+    UNHEALTHY = "unhealthy"
+    AUTHENTICATION_FAILED = "authentication_failed"
+    UNKNOWN = "unknown"
 
 
 class ProviderCapabilities(BaseModel):
@@ -69,6 +93,7 @@ class ProviderCapabilities(BaseModel):
     supports_tools: bool = False
     supports_vision: bool = False
     supports_json_mode: bool = False
+    supports_model_discovery: bool = False
     is_local: bool = False
     requires_credentials: bool = True
     max_context_window: Optional[int] = None
@@ -77,22 +102,48 @@ class ProviderCapabilities(BaseModel):
 
 
 class ProviderHealth(BaseModel):
-    """Timestamped health evidence produced by active probes."""
+    """Timestamped health evidence separating configuration, availability, and health dimensions.
 
-    status: ProviderHealthStatus = ProviderHealthStatus.CONFIGURED
+    Invariants:
+    1. configured != available != healthy.
+    2. Zero secret leaks in error_message or details.
+    3. Checked_at records monotonic time; stale indicates cache expiry.
+    """
+
+    config_state: ProviderConfigurationState = ProviderConfigurationState.UNCONFIGURED
+    availability: ProviderAvailability = ProviderAvailability.UNKNOWN
+    status: ProviderHealthStatus = ProviderHealthStatus.UNKNOWN
     latency_ms: float = 0.0
     last_checked_at: float = Field(default_factory=time.time)
     error_message: Optional[str] = None
+    degraded_reason: Optional[str] = None
     consecutive_failures: int = 0
+    probe_type: str = "transport"
+    stale: bool = False
     details: Dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def is_configured(self) -> bool:
+        return self.config_state == ProviderConfigurationState.CONFIGURED
+
+    @property
+    def is_available(self) -> bool:
+        return self.availability == ProviderAvailability.AVAILABLE
+
+    @property
+    def is_healthy(self) -> bool:
+        return self.status == ProviderHealthStatus.HEALTHY
 
     def is_usable(self) -> bool:
         """Return True if provider can accept inference requests."""
-        return self.status in (
-            ProviderHealthStatus.HEALTHY,
-            ProviderHealthStatus.AVAILABLE,
-            ProviderHealthStatus.DEGRADED,
-            ProviderHealthStatus.CONFIGURED,
+        return (
+            self.config_state == ProviderConfigurationState.CONFIGURED
+            and self.availability != ProviderAvailability.UNAVAILABLE
+            and self.status
+            not in (
+                ProviderHealthStatus.AUTHENTICATION_FAILED,
+                ProviderHealthStatus.UNHEALTHY,
+            )
         )
 
 
@@ -127,6 +178,7 @@ class ProviderDefinition(BaseModel):
     provider_id: str
     display_name: str
     endpoint_style: ProviderEndpointStyle
+    endpoint_class: ProviderEndpointClass = ProviderEndpointClass.CLOUD
     default_endpoint_url: Optional[str] = None
     default_model: str
     aliases: List[str] = Field(default_factory=list)
@@ -150,6 +202,7 @@ class ProviderDefinition(BaseModel):
             "provider_id": self.provider_id,
             "display_name": self.display_name,
             "endpoint_style": self.endpoint_style.value,
+            "endpoint_class": self.endpoint_class.value,
             "default_endpoint_url": self.default_endpoint_url,
             "default_model": self.default_model,
             "aliases": self.aliases,
@@ -184,3 +237,14 @@ class ProviderCallEvidence(BaseModel):
     output_tokens_estimated: int = 0
     is_fallback: bool = False
     details: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("endpoint_class")
+    @classmethod
+    def validate_endpoint_class(cls, v: str) -> str:
+        clean = v.strip().lower()
+        valid = {e.value for e in ProviderEndpointClass}
+        if clean not in valid:
+            raise ValueError(
+                f"Invalid endpoint_class '{v}': must be one of {sorted(valid)} (zero URLs/ports/queries allowed)"
+            )
+        return clean

@@ -29,10 +29,13 @@ from core.providers.base import (
 )
 from core.providers.models import (
     ProviderAuthType,
+    ProviderAvailability,
     ProviderCallEvidence,
     ProviderCapabilities,
     ProviderConfiguration,
+    ProviderConfigurationState,
     ProviderDefinition,
+    ProviderEndpointClass,
     ProviderEndpointStyle,
     ProviderHealth,
     ProviderHealthStatus,
@@ -40,12 +43,16 @@ from core.providers.models import (
 from core.providers.registry import (
     ProviderRegistry,
     get_provider_registry,
+    migrate_config_dict,
     reset_provider_registry,
 )
 
 __all__ = [
     # Models & Enums
     "ProviderAuthType",
+    "ProviderAvailability",
+    "ProviderConfigurationState",
+    "ProviderEndpointClass",
     "ProviderEndpointStyle",
     "ProviderHealthStatus",
     "ProviderCapabilities",
@@ -78,5 +85,6 @@ __all__ = [
     # Registry & Singleton
     "ProviderRegistry",
     "get_provider_registry",
+    "migrate_config_dict",
     "reset_provider_registry",
 ]

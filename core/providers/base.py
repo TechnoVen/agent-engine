@@ -123,6 +123,10 @@ class ProviderAdapter(abc.ABC):
     def provider_id(self) -> str:
         return self._definition.provider_id
 
+    @property
+    def endpoint_class(self) -> Any:
+        return self._definition.endpoint_class
+
     def _get_secrets_service(self) -> Optional[Any]:
         if self._secrets_service is not None:
             return self._secrets_service
@@ -280,3 +284,7 @@ class ProviderAdapter(abc.ABC):
             status_code=status_code,
             raw_error=raw_error,
         )
+
+    def __repr__(self) -> str:
+        ep_val = getattr(self.endpoint_class, "value", self.endpoint_class)
+        return f"<{self.__class__.__name__}(provider_id='{self.provider_id}', endpoint_class='{ep_val}')>"

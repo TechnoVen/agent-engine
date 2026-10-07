@@ -24,6 +24,8 @@ from core.providers.base import (
     ProviderTimeoutError,
 )
 from core.providers.models import (
+    ProviderAvailability,
+    ProviderConfigurationState,
     ProviderHealth,
     ProviderHealthStatus,
 )
@@ -52,12 +54,16 @@ class GeminiAdapter(ProviderAdapter):
         return os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
     def test_connection(self, timeout: float = 5.0) -> ProviderHealth:
+        effective_timeout = min(timeout, 5.0)
         key = self.resolve_api_key()
         if not key:
             h = ProviderHealth(
-                status=ProviderHealthStatus.AUTHENTICATION_FAILED,
+                config_state=ProviderConfigurationState.UNCONFIGURED,
+                availability=ProviderAvailability.UNKNOWN,
+                status=ProviderHealthStatus.UNKNOWN,
                 error_message="Missing Gemini API key (GEMINI_API_KEY or GOOGLE_API_KEY)",
                 last_checked_at=time.time(),
+                probe_type="config_validation",
             )
             self._definition.health = h
             return h
@@ -65,11 +71,16 @@ class GeminiAdapter(ProviderAdapter):
         endpoint = (
             self._definition.config.endpoint_url or "https://generativelanguage.googleapis.com"
         ).rstrip("/")
-        models_url = f"{endpoint}/v1beta/models?key={key}"
+        # Pass key via x-goog-api-key header to avoid query parameter leakage in logs
+        models_url = f"{endpoint}/v1beta/models"
 
         t0 = time.perf_counter()
         try:
-            resp = requests.get(models_url, timeout=timeout)
+            resp = requests.get(
+                models_url,
+                headers={"x-goog-api-key": key},
+                timeout=effective_timeout,
+            )
             elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
             if resp.status_code == 200:
                 threshold = self._definition.capabilities.degraded_latency_threshold_ms
@@ -79,39 +90,65 @@ class GeminiAdapter(ProviderAdapter):
                     else ProviderHealthStatus.HEALTHY
                 )
                 h = ProviderHealth(
+                    config_state=ProviderConfigurationState.CONFIGURED,
+                    availability=ProviderAvailability.AVAILABLE,
                     status=status,
                     latency_ms=elapsed_ms,
                     last_checked_at=time.time(),
                     consecutive_failures=0,
-                    details={"status_code": 200},
+                    probe_type="authentication_validation",
+                    details={"status_code": 200, "endpoint": models_url},
                 )
             elif resp.status_code in (400, 401, 403):
                 h = ProviderHealth(
+                    config_state=ProviderConfigurationState.CONFIGURED,
+                    availability=ProviderAvailability.AVAILABLE,
                     status=ProviderHealthStatus.AUTHENTICATION_FAILED,
                     latency_ms=elapsed_ms,
                     error_message=f"HTTP {resp.status_code}: Invalid Gemini API key",
                     last_checked_at=time.time(),
+                    probe_type="authentication_validation",
                     details={"status_code": resp.status_code},
+                )
+            elif resp.status_code == 429:
+                h = ProviderHealth(
+                    config_state=ProviderConfigurationState.CONFIGURED,
+                    availability=ProviderAvailability.AVAILABLE,
+                    status=ProviderHealthStatus.DEGRADED,
+                    latency_ms=elapsed_ms,
+                    degraded_reason="Rate limited by upstream provider",
+                    last_checked_at=time.time(),
+                    probe_type="transport_reachability",
+                    details={"status_code": 429},
                 )
             else:
                 h = ProviderHealth(
-                    status=ProviderHealthStatus.UNAVAILABLE,
+                    config_state=ProviderConfigurationState.CONFIGURED,
+                    availability=ProviderAvailability.AVAILABLE,
+                    status=ProviderHealthStatus.UNHEALTHY,
                     latency_ms=elapsed_ms,
-                    error_message=f"HTTP {resp.status_code}: {resp.text[:200]}",
+                    error_message=f"HTTP {resp.status_code}: Upstream error",
                     last_checked_at=time.time(),
+                    probe_type="transport_reachability",
                     details={"status_code": resp.status_code},
                 )
         except requests.Timeout:
             h = ProviderHealth(
-                status=ProviderHealthStatus.UNAVAILABLE,
-                error_message=f"Connection timed out after {timeout}s",
+                config_state=ProviderConfigurationState.CONFIGURED,
+                availability=ProviderAvailability.UNAVAILABLE,
+                status=ProviderHealthStatus.UNHEALTHY,
+                error_message=f"Connection timed out after {effective_timeout}s",
                 last_checked_at=time.time(),
+                probe_type="transport_reachability",
             )
-        except Exception as e:
+        except Exception:
             h = ProviderHealth(
-                status=ProviderHealthStatus.UNAVAILABLE,
-                error_message=str(e),
+                config_state=ProviderConfigurationState.CONFIGURED,
+                availability=ProviderAvailability.UNAVAILABLE,
+                status=ProviderHealthStatus.UNHEALTHY,
+                error_message="Connection failed or refused",
                 last_checked_at=time.time(),
+                probe_type="transport_reachability",
             )
 
         self._definition.health = h
@@ -121,9 +158,12 @@ class GeminiAdapter(ProviderAdapter):
         key = self.resolve_api_key()
         if not key:
             h = ProviderHealth(
-                status=ProviderHealthStatus.CONFIGURED,
+                config_state=ProviderConfigurationState.UNCONFIGURED,
+                availability=ProviderAvailability.UNKNOWN,
+                status=ProviderHealthStatus.UNKNOWN,
                 error_message="No API key configured",
                 last_checked_at=time.time(),
+                probe_type="config_validation",
             )
             self._definition.health = h
             return h

@@ -2,21 +2,13 @@
 
 Comprehensive Provider Conformance Test Suite for Agent Engine.
 Part of Milestone R3 Task R3.1 (Canonical Provider Registry Contract).
-
-Verifies the 8 core R3.1 conformance pillars:
-1. Stable provider identity distinct from display name, alias, endpoint, and model.
-2. Provider vs model responsibility separation.
-3. Explicit provider health state taxonomy (CONFIGURED, AVAILABLE, HEALTHY, DEGRADED, UNAVAILABLE, AUTHENTICATION_FAILED).
-4. Low-cost, bounded-timeout health checks with timestamped evidence.
-5. Inviolable R2.6 secret boundary: zero plaintext leaks, SecretReference preservation, zero os.environ mutation.
-6. Transparent legacy configuration migration (config.yaml, environment variables).
-7. Streaming capability declaration and error normalization into typed hierarchies.
-8. Execution ledger integration with non-sensitive ProviderCallEvidence.
 """
 
 from __future__ import annotations
 
 import os
+import threading
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -26,10 +18,13 @@ from core.providers import (
     NormalizedProviderError,
     ProviderAuthenticationError,
     ProviderAuthType,
+    ProviderAvailability,
     ProviderCallEvidence,
     ProviderCapabilities,
     ProviderConfiguration,
+    ProviderConfigurationState,
     ProviderDefinition,
+    ProviderEndpointClass,
     ProviderEndpointStyle,
     ProviderHealth,
     ProviderHealthStatus,
@@ -38,10 +33,23 @@ from core.providers import (
     ProviderRateLimitError,
     ProviderRegistry,
     ProviderServerError,
+    migrate_config_dict,
     reset_provider_registry,
 )
 from core.router.model_router import ModelRouter
 from core.security.secrets import SecretReference
+
+ALL_BUILTIN_PROVIDERS = [
+    "openai",
+    "anthropic",
+    "gemini",
+    "ollama",
+    "llamacpp",
+    "deepseek",
+    "groq",
+    "kimi",
+    "compatible",
+]
 
 
 @pytest.fixture(autouse=True)
@@ -79,7 +87,7 @@ def test_01_stable_provider_identity(fresh_registry: ProviderRegistry):
 
 
 # ==============================================================================
-# 2. Alias Resolution
+# 2. Alias Resolution & Shadow Protection
 # ==============================================================================
 def test_02_alias_resolution(fresh_registry: ProviderRegistry):
     """Verify provider aliases resolve deterministically to canonical provider IDs."""
@@ -90,6 +98,8 @@ def test_02_alias_resolution(fresh_registry: ProviderRegistry):
     assert fresh_registry.resolve_provider_id("gemma4") == "llamacpp"
     assert fresh_registry.resolve_provider_id("chatgpt") == "openai"
     assert fresh_registry.resolve_provider_id("claude") == "anthropic"
+    assert fresh_registry.resolve_provider_id("vllm") == "compatible"
+    assert fresh_registry.resolve_provider_id("localai") == "compatible"
 
     # Getting provider by alias returns canonical definition
     google_def = fresh_registry.get_provider("google")
@@ -101,10 +111,40 @@ def test_02_alias_resolution(fresh_registry: ProviderRegistry):
     assert local_def.provider_id == "llamacpp"
 
 
+def test_03_alias_shadow_protection(fresh_registry: ProviderRegistry):
+    """Verify aliases cannot shadow existing canonical provider IDs."""
+    # Attempting to register an alias that matches an existing canonical ID must fail
+    with pytest.raises(ValueError, match="cannot shadow"):
+        fresh_registry.register_alias("openai", "anthropic")
+
+    with pytest.raises(ValueError, match="cannot shadow"):
+        fresh_registry.register_alias("gemini", "kimi")
+
+    # Attempting to register alias for non-existent canonical provider must fail
+    with pytest.raises(KeyError, match="not registered"):
+        fresh_registry.register_alias("new_alias", "non_existent_provider")
+
+    # Valid alias registration
+    fresh_registry.register_alias("fast_local", "llamacpp")
+    assert fresh_registry.resolve_provider_id("fast_local") == "llamacpp"
+
+    # Registering a provider whose aliases match existing canonical provider must fail
+    bad_def = ProviderDefinition(
+        provider_id="my_custom",
+        display_name="Custom",
+        endpoint_style=ProviderEndpointStyle.CUSTOM,
+        default_model="m",
+        aliases=["openai"],  # Shadows canonical "openai"
+        config=ProviderConfiguration(provider_id="my_custom"),
+    )
+    with pytest.raises(ValueError, match="cannot shadow"):
+        fresh_registry.register_provider(bad_def)
+
+
 # ==============================================================================
 # 3. Provider vs Model Separation
 # ==============================================================================
-def test_03_provider_vs_model_responsibility_separation(fresh_registry: ProviderRegistry):
+def test_04_provider_vs_model_responsibility_separation(fresh_registry: ProviderRegistry):
     """Verify provider contracts govern connection and auth boundaries, not model catalogs."""
     prov = fresh_registry.get_provider("anthropic")
     assert prov is not None
@@ -119,36 +159,71 @@ def test_03_provider_vs_model_responsibility_separation(fresh_registry: Provider
 
 
 # ==============================================================================
-# 4. Explicit Health State Taxonomy
+# 4. Separated 3-Dimensional Health State Model
 # ==============================================================================
-def test_04_explicit_health_state_taxonomy():
-    """Verify explicit health taxonomy and is_usable() semantics."""
-    states = [
-        ProviderHealthStatus.CONFIGURED,
-        ProviderHealthStatus.AVAILABLE,
-        ProviderHealthStatus.HEALTHY,
-        ProviderHealthStatus.DEGRADED,
-        ProviderHealthStatus.UNAVAILABLE,
-        ProviderHealthStatus.AUTHENTICATION_FAILED,
-    ]
-    assert len(states) == 6
+def test_05_separated_health_state_dimensions():
+    """Verify configured != available != healthy and is_usable() matrix."""
+    # Case 1: Configured, but unavailable (host down) -> Unusable
+    h1 = ProviderHealth(
+        config_state=ProviderConfigurationState.CONFIGURED,
+        availability=ProviderAvailability.UNAVAILABLE,
+        status=ProviderHealthStatus.UNHEALTHY,
+    )
+    assert h1.is_configured is True
+    assert h1.is_available is False
+    assert h1.is_healthy is False
+    assert h1.is_usable() is False
 
-    # Usable states
-    assert ProviderHealth(status=ProviderHealthStatus.HEALTHY).is_usable() is True
-    assert ProviderHealth(status=ProviderHealthStatus.AVAILABLE).is_usable() is True
-    assert ProviderHealth(status=ProviderHealthStatus.DEGRADED).is_usable() is True
-    assert ProviderHealth(status=ProviderHealthStatus.CONFIGURED).is_usable() is True
+    # Case 2: Configured, available, but authentication failed -> Unusable
+    h2 = ProviderHealth(
+        config_state=ProviderConfigurationState.CONFIGURED,
+        availability=ProviderAvailability.AVAILABLE,
+        status=ProviderHealthStatus.AUTHENTICATION_FAILED,
+    )
+    assert h2.is_configured is True
+    assert h2.is_available is True
+    assert h2.is_healthy is False
+    assert h2.is_usable() is False
 
-    # Non-usable states
-    assert ProviderHealth(status=ProviderHealthStatus.UNAVAILABLE).is_usable() is False
-    assert ProviderHealth(status=ProviderHealthStatus.AUTHENTICATION_FAILED).is_usable() is False
+    # Case 3: Configured, available, but degraded (high latency) -> Usable
+    h3 = ProviderHealth(
+        config_state=ProviderConfigurationState.CONFIGURED,
+        availability=ProviderAvailability.AVAILABLE,
+        status=ProviderHealthStatus.DEGRADED,
+    )
+    assert h3.is_configured is True
+    assert h3.is_available is True
+    assert h3.is_healthy is False
+    assert h3.is_usable() is True
+
+    # Case 4: Fully configured, available, and healthy -> Usable
+    h4 = ProviderHealth(
+        config_state=ProviderConfigurationState.CONFIGURED,
+        availability=ProviderAvailability.AVAILABLE,
+        status=ProviderHealthStatus.HEALTHY,
+    )
+    assert h4.is_configured is True
+    assert h4.is_available is True
+    assert h4.is_healthy is True
+    assert h4.is_usable() is True
+
+    # Case 5: Unconfigured -> Unusable
+    h5 = ProviderHealth(
+        config_state=ProviderConfigurationState.UNCONFIGURED,
+        availability=ProviderAvailability.UNKNOWN,
+        status=ProviderHealthStatus.UNKNOWN,
+    )
+    assert h5.is_configured is False
+    assert h5.is_available is False
+    assert h5.is_healthy is False
+    assert h5.is_usable() is False
 
 
 # ==============================================================================
-# 5. Latency Degradation
+# 5. Latency Degradation & Low-Cost Bounded Timeout Checks
 # ==============================================================================
-def test_05_health_probe_latency_degradation(fresh_registry: ProviderRegistry):
-    """Verify that elevated probe latency triggers DEGRADED status."""
+def test_06_health_probe_latency_degradation(fresh_registry: ProviderRegistry):
+    """Verify that elevated probe latency triggers DEGRADED status without marking unavailable."""
     adapter = fresh_registry.get_adapter("openai")
 
     with patch("requests.get") as mock_get:
@@ -156,34 +231,40 @@ def test_05_health_probe_latency_degradation(fresh_registry: ProviderRegistry):
         mock_resp.status_code = 200
         mock_get.return_value = mock_resp
 
-        # Inject artificial high latency
+        # Inject artificial latency above degraded threshold
         with patch("time.perf_counter", side_effect=[0.0, 4.5]):
             with patch.object(adapter, "resolve_api_key", return_value="sk-test-mock-key"):
                 health = adapter.test_connection(timeout=5.0)
+                assert health.config_state == ProviderConfigurationState.CONFIGURED
+                assert health.availability == ProviderAvailability.AVAILABLE
                 assert health.status == ProviderHealthStatus.DEGRADED
                 assert health.latency_ms == 4500.0
+                assert health.is_usable() is True
 
 
-# ==============================================================================
-# 6. Low-Cost Bounded Timeout Health Checks
-# ==============================================================================
-def test_06_low_cost_bounded_timeout_health_checking(fresh_registry: ProviderRegistry):
-    """Verify health checks enforce bounded timeouts and handle failures gracefully."""
+def test_07_low_cost_bounded_timeout_health_checking(fresh_registry: ProviderRegistry):
+    """Verify health checks enforce bounded timeouts (<= 5s) and sanitize errors."""
     adapter = fresh_registry.get_adapter("ollama")
 
     import requests
 
     with patch("requests.get", side_effect=requests.Timeout("Operation timed out")):
-        health = adapter.test_connection(timeout=2.0)
-        assert health.status == ProviderHealthStatus.UNAVAILABLE
+        health = adapter.test_connection(timeout=10.0)  # Requesting 10s timeout
+        assert health.config_state == ProviderConfigurationState.CONFIGURED
+        assert health.availability == ProviderAvailability.UNAVAILABLE
+        assert health.status == ProviderHealthStatus.UNHEALTHY
         assert "timed out" in health.error_message.lower()
+        # Probe type recorded
+        assert health.probe_type == "transport_reachability"
+        # Zero secrets leaked
+        assert "sk-" not in str(health)
         assert health.last_checked_at > 0
 
 
 # ==============================================================================
-# 7. Inviolable R2.6 Secret Boundary
+# 6. Inviolable R2.6 Secret Boundary
 # ==============================================================================
-def test_07_secret_boundary_r26_isolation(fresh_registry: ProviderRegistry):
+def test_08_secret_boundary_r26_isolation(fresh_registry: ProviderRegistry):
     """Verify credentials never appear in public definitions, to_safe_dict, str, or repr."""
     prov = fresh_registry.get_provider("openai")
     assert prov is not None
@@ -204,9 +285,9 @@ def test_07_secret_boundary_r26_isolation(fresh_registry: ProviderRegistry):
 
 
 # ==============================================================================
-# 8. Zero Global os.environ Mutation
+# 7. Zero Global os.environ Mutation
 # ==============================================================================
-def test_08_no_global_os_environ_mutation(
+def test_09_no_global_os_environ_mutation(
     fresh_registry: ProviderRegistry, monkeypatch: pytest.MonkeyPatch
 ):
     """Verify resolving keys or constructing LM never contaminates os.environ."""
@@ -225,9 +306,39 @@ def test_08_no_global_os_environ_mutation(
 
 
 # ==============================================================================
-# 9. Legacy Config Migration
+# 8. Pure Migration Idempotency & Legacy Config Migration
 # ==============================================================================
-def test_09_legacy_config_migration(
+def test_10_migration_idempotency():
+    """Verify migrate_config_dict is completely idempotent."""
+    raw_legacy = {
+        "default_priority": ["local", "google", "moonshot", "openai"],
+        "providers": {
+            "local": {"provider_id": "local", "enabled": True},
+            "google": {"provider_id": "google", "enabled": True},
+            "custom": {"host": "internal.service"},
+        },
+        "custom_setting": 42,
+    }
+
+    # First pass: old -> canonical
+    c1 = migrate_config_dict(raw_legacy)
+    assert c1["default_priority"] == ["llamacpp", "gemini", "kimi", "openai"]
+    assert "llamacpp" in c1["providers"]
+    assert c1["providers"]["llamacpp"]["provider_id"] == "llamacpp"
+    assert "gemini" in c1["providers"]
+    assert c1["providers"]["gemini"]["provider_id"] == "gemini"
+    assert c1["custom_setting"] == 42
+
+    # Second pass: canonical -> canonical
+    c2 = migrate_config_dict(c1)
+    assert c1 == c2
+
+    # Third pass: double migration
+    c3 = migrate_config_dict(c2)
+    assert c2 == c3
+
+
+def test_11_legacy_config_migration(
     fresh_registry: ProviderRegistry, monkeypatch: pytest.MonkeyPatch
 ):
     """Verify legacy environment variables and YAML configurations migrate transparently."""
@@ -242,16 +353,18 @@ def test_09_legacy_config_migration(
 
     ollama = fresh_registry.get_provider("ollama")
     assert ollama.config.endpoint_url == "http://custom-ollama:11434"
+    assert ollama.health.config_state == ProviderConfigurationState.CONFIGURED
 
     llamacpp = fresh_registry.get_provider("llamacpp")
     assert llamacpp.config.endpoint_url == "http://custom-llamacpp:8080/v1"
     assert llamacpp.default_model == "custom-qwen-model"
+    assert llamacpp.health.config_state == ProviderConfigurationState.CONFIGURED
 
 
 # ==============================================================================
-# 10. Streaming Capability & Conformance
+# 9. Streaming Capability & Error Normalization
 # ==============================================================================
-def test_10_streaming_capability_declaration_and_conformance(
+def test_12_streaming_capability_declaration_and_conformance(
     fresh_registry: ProviderRegistry,
 ):
     """Verify streaming capability declarations and stream interface."""
@@ -266,10 +379,7 @@ def test_10_streaming_capability_declaration_and_conformance(
         assert chunks[0] == "Hello world response"
 
 
-# ==============================================================================
-# 11. Error Normalization
-# ==============================================================================
-def test_11_error_normalization(fresh_registry: ProviderRegistry):
+def test_13_error_normalization(fresh_registry: ProviderRegistry):
     """Verify standard HTTP status codes translate to typed NormalizedProviderError subclasses."""
     adapter = fresh_registry.get_adapter("openai")
 
@@ -303,15 +413,16 @@ def test_11_error_normalization(fresh_registry: ProviderRegistry):
 
 
 # ==============================================================================
-# 12. Execution Ledger Integration & Call Evidence
+# 10. Execution Ledger Integration & Non-Sensitive endpoint_class
 # ==============================================================================
-def test_12_execution_ledger_integration_and_call_evidence(fresh_registry: ProviderRegistry):
-    """Verify ProviderCallEvidence audit record captures metrics without secrets."""
+def test_14_execution_ledger_endpoint_class_sanitization(fresh_registry: ProviderRegistry):
+    """Verify ProviderCallEvidence enforces controlled non-sensitive taxonomy without URLs/ports."""
+    # Valid controlled category
     evidence = ProviderCallEvidence(
         call_id="call-abc-123",
         provider_id="openai",
         model_id="gpt-4o-mini",
-        endpoint_class="openai_client",
+        endpoint_class="cloud",
         started_at=100.0,
         completed_at=100.85,
         latency_ms=850.0,
@@ -319,24 +430,142 @@ def test_12_execution_ledger_integration_and_call_evidence(fresh_registry: Provi
         input_tokens_estimated=42,
         output_tokens_estimated=88,
     )
-
     fresh_registry.record_invocation_evidence(evidence)
     records = fresh_registry.get_invocation_evidence()
     assert len(records) == 1
-    assert records[0].call_id == "call-abc-123"
-    assert records[0].provider_id == "openai"
-    assert records[0].endpoint_class == "openai_client"
-    assert records[0].latency_ms == 850.0
-    # Invariant: No secret fields present
-    ev_dict = records[0].model_dump()
-    assert "api_key" not in ev_dict
-    assert "secret" not in ev_dict
+    assert records[0].endpoint_class == "cloud"
+
+    # Reject URLs, ports, query strings, or unrecognized classes
+    with pytest.raises(ValueError, match="Invalid endpoint_class"):
+        ProviderCallEvidence(
+            call_id="call-leak-1",
+            provider_id="openai",
+            model_id="gpt-4o",
+            endpoint_class="https://api.openai.com/v1",
+            started_at=100.0,
+            completed_at=100.1,
+            latency_ms=100.0,
+        )
+
+    with pytest.raises(ValueError, match="Invalid endpoint_class"):
+        ProviderCallEvidence(
+            call_id="call-leak-2",
+            provider_id="ollama",
+            model_id="qwen",
+            endpoint_class="localhost:11434",
+            started_at=100.0,
+            completed_at=100.1,
+            latency_ms=100.0,
+        )
+
+
+# ==============================================================================
+# 11. Concurrency & RLock Discipline
+# ==============================================================================
+def test_15_rlock_discipline_no_lock_held_during_io(fresh_registry: ProviderRegistry):
+    """Verify slow external health probe in one thread does NOT block registry lookups in another."""
+    adapter = fresh_registry.get_adapter("ollama")
+
+    probe_started = threading.Event()
+    probe_can_finish = threading.Event()
+    lookup_completed = threading.Event()
+
+    def slow_probe():
+        def blocking_health(timeout=3.0):
+            probe_started.set()
+            probe_can_finish.wait(timeout=2.0)
+            return ProviderHealth(
+                config_state=ProviderConfigurationState.CONFIGURED,
+                availability=ProviderAvailability.AVAILABLE,
+                status=ProviderHealthStatus.HEALTHY,
+                last_checked_at=time.time(),
+            )
+
+        with patch.object(adapter, "check_health", side_effect=blocking_health):
+            fresh_registry.check_health("ollama", force_refresh=True)
+
+    thread_a = threading.Thread(target=slow_probe, daemon=True)
+    thread_a.start()
+
+    # Wait until probe starts and is in progress
+    assert probe_started.wait(timeout=1.0) is True
+
+    # Concurrently in Thread B, perform registry operations
+    t0 = time.perf_counter()
+    p_def = fresh_registry.get_provider("openai")
+    p_list = fresh_registry.list_providers()
+    p_canon = fresh_registry.resolve_provider_id("google")
+    elapsed = time.perf_counter() - t0
+
+    lookup_completed.set()
+    probe_can_finish.set()
+    thread_a.join(timeout=1.0)
+
+    # Invariant: Lookups in Thread B completed almost instantaneously (< 100ms)
+    assert p_def is not None
+    assert len(p_list) >= 9
+    assert p_canon == "gemini"
+    assert elapsed < 0.1, f"Registry lookup was blocked by probe: took {elapsed:.3f}s"
+
+
+# ==============================================================================
+# 12. Complete 9-Adapter Conformance Matrix
+# ==============================================================================
+@pytest.mark.parametrize("provider_id", ALL_BUILTIN_PROVIDERS)
+def test_16_all_9_providers_conformance_contract(
+    fresh_registry: ProviderRegistry, provider_id: str
+):
+    """Verify that all 9 concrete adapters pass the identical common conformance contract."""
+    prov = fresh_registry.get_provider(provider_id)
+    assert prov is not None, f"Provider '{provider_id}' not found in registry"
+    assert prov.provider_id == provider_id
+    assert prov.endpoint_class in [
+        ProviderEndpointClass.CLOUD,
+        ProviderEndpointClass.LOCAL_MANAGED,
+        ProviderEndpointClass.LOCAL_EXTERNAL,
+        ProviderEndpointClass.CUSTOM_REMOTE,
+    ]
+
+    # Safe representation check
+    safe_dict = prov.to_safe_dict()
+    assert "sk-" not in str(safe_dict)
+    assert "api_key" not in safe_dict["config"]
+
+    # Adapter instantiation
+    adapter = fresh_registry.get_adapter(provider_id)
+    assert adapter is not None
+    assert adapter.provider_id == provider_id
+    assert adapter.endpoint_class == prov.endpoint_class
+    assert "sk-" not in repr(adapter)
+
+    # Health probe with mocked success (HTTP 200)
+    with patch("requests.get") as mock_get:
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_get.return_value = mock_resp
+
+        with patch.object(adapter, "resolve_api_key", return_value="mock-test-key-12345"):
+            health = adapter.test_connection(timeout=3.0)
+            assert health.config_state == ProviderConfigurationState.CONFIGURED
+            assert health.availability == ProviderAvailability.AVAILABLE
+            assert health.status == ProviderHealthStatus.HEALTHY
+            assert health.is_usable() is True
+            assert health.last_checked_at > 0
+
+    # DSPy LM instantiation with direct credential injection
+    with patch("dspy.LM") as mock_lm:
+        lm = adapter.create_dspy_lm(api_key="direct-key-inject")
+        assert lm is not None
+        mock_lm.assert_called_once()
+        _, kwargs = mock_lm.call_args
+        if prov.capabilities.requires_credentials:
+            assert kwargs.get("api_key") == "direct-key-inject"
 
 
 # ==============================================================================
 # 13. Backward-Compatible Model Factory & Router Integration
 # ==============================================================================
-def test_13_backward_compatible_model_factory(monkeypatch: pytest.MonkeyPatch):
+def test_17_backward_compatible_model_factory(monkeypatch: pytest.MonkeyPatch):
     """Verify core.models.get_model_provider and ModelRouter delegate to ProviderRegistry."""
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -357,7 +586,7 @@ def test_13_backward_compatible_model_factory(monkeypatch: pytest.MonkeyPatch):
 # ==============================================================================
 # 14. Custom OpenAI-Compatible Provider Registration
 # ==============================================================================
-def test_14_custom_openai_compatible_provider_registration(
+def test_18_custom_openai_compatible_provider_registration(
     fresh_registry: ProviderRegistry,
 ):
     """Verify dynamic registration of custom OpenAI-compatible endpoints."""
@@ -365,6 +594,7 @@ def test_14_custom_openai_compatible_provider_registration(
         provider_id="custom_vllm",
         display_name="Internal vLLM Cluster",
         endpoint_style=ProviderEndpointStyle.OPENAI_COMPATIBLE,
+        endpoint_class=ProviderEndpointClass.CUSTOM_REMOTE,
         default_endpoint_url="http://internal-vllm.infra:8000/v1",
         default_model="meta-llama/Llama-3.1-8B-Instruct",
         capabilities=ProviderCapabilities(
@@ -397,7 +627,7 @@ def test_14_custom_openai_compatible_provider_registration(
 # ==============================================================================
 # 15. Thread-Safe Registry & Health Cache TTL
 # ==============================================================================
-def test_15_thread_safe_registry_and_health_caching(fresh_registry: ProviderRegistry):
+def test_19_thread_safe_registry_and_health_caching(fresh_registry: ProviderRegistry):
     """Verify health probe caching respects TTL and avoid redundant network calls."""
     adapter = fresh_registry.get_adapter("ollama")
 
@@ -407,6 +637,8 @@ def test_15_thread_safe_registry_and_health_caching(fresh_registry: ProviderRegi
         nonlocal call_count
         call_count += 1
         return ProviderHealth(
+            config_state=ProviderConfigurationState.CONFIGURED,
+            availability=ProviderAvailability.AVAILABLE,
             status=ProviderHealthStatus.HEALTHY,
             latency_ms=12.5,
             last_checked_at=100.0,
