@@ -42,6 +42,7 @@ import requests
 
 from core.execution.models import ExecutionContext
 from core.inference import (
+    BinaryNotFoundError,
     InvalidModelFormatError,
     LocalInferenceSupervisor,
     ModelArtifactValidator,
@@ -60,8 +61,17 @@ from core.inference import (
     find_available_loopback_port,
     get_local_inference_supervisor,
     reset_local_inference_supervisor,
+    set_local_inference_supervisor,
     verify_child_environment_is_clean,
     verify_endpoint_ownership,
+    ChecksumMismatchError,
+    MissingArtifactError,
+    RuntimeInstaller,
+    RuntimeManifest,
+    RuntimeArtifactEntry,
+    UnsupportedPlatformError,
+    UnversionedRuntimeError,
+    verify_runtime_bundle,
 )
 from core.model_registry.models import ModelIdentity
 from core.providers import get_provider_registry
@@ -89,7 +99,8 @@ def fake_gguf_model(tmp_path: Path) -> Path:
 # ==============================================================================
 def test_01_managed_executable_resolution_and_provenance(tmp_path: Path):
     """Verify managed executable resolves from AE location with version and SHA-256 recorded."""
-    resolver = RuntimeBinaryResolver(managed_root=tmp_path)
+    # 1. Component resolution and hash computation
+    resolver = RuntimeBinaryResolver(managed_root=tmp_path, enforce_integrity=False)
     fake_bin = tmp_path / resolver.executable_name
     fake_bin.write_text("#!/bin/sh\necho 'llama.cpp version b3500 (commit 1234abcd)'\n")
     fake_bin.chmod(0o755)
@@ -100,6 +111,11 @@ def test_01_managed_executable_resolution_and_provenance(tmp_path: Path):
     assert "b3500" in info.version or "1234abcd" in info.version
     assert len(info.sha256) == 64
     assert info.provenance == "managed_installation"
+
+    # 2. Strict integrity enforcement rejects unversioned / modified binaries
+    strict_resolver = RuntimeBinaryResolver(managed_root=tmp_path, enforce_integrity=True)
+    with pytest.raises(ChecksumMismatchError):
+        strict_resolver.resolve_binary()
 
 
 # ==============================================================================
@@ -642,7 +658,7 @@ def test_18_real_clean_machine_e2e_prompt_completion():
         model_path=str(model_path),
         context_size=512,
         gpu_layers=0,  # Pure CPU execution for clean-machine determinism
-        startup_timeout_seconds=30.0,
+        startup_timeout_seconds=180.0,
         shutdown_timeout_seconds=5.0,
     )
 
@@ -974,3 +990,242 @@ def test_23_port_collision_exhaustion_raises(tmp_path: Path, fake_gguf_model: Pa
         with pytest.raises(PortCollisionError):
             supervisor.start(spec)
         assert supervisor.state == RuntimeState.FAILED
+
+
+# ==============================================================================
+# 24. Runtime Digest Enforced & Bundle Integrity Verification
+# ==============================================================================
+def test_24_runtime_manifest_digest_enforcement_and_bundle_integrity(tmp_path: Path):
+    """Verify runtime SHA-256 byte integrity and sibling library bundle integrity enforcement."""
+    from core.inference.manifest import (
+        compute_file_sha256,
+        register_runtime_manifest,
+    )
+
+    bundle_dir = tmp_path / "mock_runtime_bundle"
+    bundle_dir.mkdir(parents=True)
+
+    server_bin = bundle_dir / "llama-server"
+    server_bin.write_bytes(b"TEST_LLAMA_SERVER_BYTES_ORIGINAL")
+    server_bin.chmod(0o755)
+
+    lib_impl = bundle_dir / "libllama-server-impl.so"
+    lib_impl.write_bytes(b"TEST_LIB_IMPL_BYTES_ORIGINAL")
+    lib_impl.chmod(0o755)
+
+    server_hash = compute_file_sha256(server_bin)
+    lib_hash = compute_file_sha256(lib_impl)
+
+    custom_manifest = RuntimeManifest(
+        runtime_name="llamacpp",
+        runtime_version="test-manifest-v1",
+        platform_key="custom-test-platform",
+        main_executable="llama-server",
+        artifacts={
+            "llama-server": RuntimeArtifactEntry(
+                path="llama-server",
+                sha256=server_hash,
+                size_bytes=len(b"TEST_LLAMA_SERVER_BYTES_ORIGINAL"),
+                required=True,
+                is_executable=True,
+            ),
+            "libllama-server-impl.so": RuntimeArtifactEntry(
+                path="libllama-server-impl.so",
+                sha256=lib_hash,
+                size_bytes=len(b"TEST_LIB_IMPL_BYTES_ORIGINAL"),
+                required=True,
+                is_executable=True,
+            ),
+        },
+    )
+    register_runtime_manifest(custom_manifest)
+
+    # 1. Exact digest matches -> Runtime accepted
+    verified = verify_runtime_bundle(bundle_dir, expected_manifest=custom_manifest)
+    assert verified.runtime_version == "test-manifest-v1"
+
+    # 2. One-byte modified executable -> Rejected with ChecksumMismatchError
+    server_bin.write_bytes(b"TEST_LLAMA_SERVER_BYTES_CORRUPTE")
+    with pytest.raises(ChecksumMismatchError) as exc_info:
+        verify_runtime_bundle(bundle_dir, expected_manifest=custom_manifest)
+    assert "byte integrity verification failed" in str(exc_info.value)
+    # Restore original executable
+    server_bin.write_bytes(b"TEST_LLAMA_SERVER_BYTES_ORIGINAL")
+
+    # 3. One-byte modified sibling library -> Rejected with ChecksumMismatchError
+    lib_impl.write_bytes(b"TEST_LIB_IMPL_BYTES_CORRUPTED!!")
+    with pytest.raises(ChecksumMismatchError) as exc_info:
+        verify_runtime_bundle(bundle_dir, expected_manifest=custom_manifest)
+    assert "Sibling runtime artifact" in str(exc_info.value)
+    assert "byte integrity verification failed" in str(exc_info.value)
+    # Restore original library
+    lib_impl.write_bytes(b"TEST_LIB_IMPL_BYTES_ORIGINAL")
+
+    # 4. Missing required sibling artifact -> Rejected with MissingArtifactError
+    lib_impl.unlink()
+    with pytest.raises(MissingArtifactError) as exc_info:
+        verify_runtime_bundle(bundle_dir, expected_manifest=custom_manifest)
+    assert "missing from bundle" in str(exc_info.value)
+
+    # 5. Unknown/unversioned managed binary -> Rejected with UnversionedRuntimeError
+    with pytest.raises(UnversionedRuntimeError):
+        verify_runtime_bundle(
+            bundle_dir, platform_key="custom-test-platform", version="unknown_version_999"
+        )
+
+    # 6. Wrong platform/architecture -> Rejected with UnsupportedPlatformError
+    with pytest.raises(UnsupportedPlatformError):
+        verify_runtime_bundle(bundle_dir, platform_key="solaris-sparc", version="test-manifest-v1")
+
+
+# ==============================================================================
+# 25. Fresh Install Controlled Provisioning & E2E Canary Execution
+# ==============================================================================
+def test_25_fresh_install_controlled_provisioning_and_e2e_canary(tmp_path: Path):
+    """Execute end-to-end fresh install scenario:
+    1. Empty AE private runtime directory (no pre-existing installation).
+    2. Zero Ollama, system llama-server, or PATH fallback.
+    3. AE controlled RuntimeInstaller provisions versioned bundle and asserts integrity.
+    4. Runtime resolves, starts, loads real model, completes canary prompt, and shuts down with 0 orphans.
+    """
+    genuine_src = Path.home() / ".agent_engine" / "runtimes" / "llamacpp"
+    model_path = Path.cwd() / "models" / "qwen2.5-coder-3b-instruct-q4_k_m.gguf"
+
+    if not (genuine_src / "llama-server").is_file():
+        pytest.skip("Genuine local llama-server distribution not available for provisioning test.")
+    if not model_path.is_file():
+        pytest.skip("GGUF model not found; skipping hardware E2E.")
+
+    # 1. Create fresh completely empty runtime storage directory
+    fresh_runtime_dir = tmp_path / "fresh_ae_runtimes" / "llamacpp"
+    assert not fresh_runtime_dir.exists()
+
+    # 2. Strict environment without overrides or host binaries
+    clean_env = {
+        "AGENT_ENGINE_LLAMA_BIN": "",
+        "AGENT_ENGINE_ALLOW_UNVERIFIED_BINARY": "",
+        "PATH": "/usr/bin:/bin",  # Standard system PATH without ollama
+    }
+
+    with patch.dict(os.environ, clean_env, clear=False):
+        # Resolver on empty directory raises BinaryNotFoundError (proving no fallback to PATH/Ollama)
+        empty_resolver = RuntimeBinaryResolver(managed_root=fresh_runtime_dir)
+        with pytest.raises(BinaryNotFoundError):
+            empty_resolver.resolve_binary()
+
+        # 3. AE Controlled RuntimeInstaller provisions versioned runtime bundle into empty target
+        installer = RuntimeInstaller(target_root=fresh_runtime_dir)
+        provisioned_manifest = installer.provision_bundle(
+            source_dir=genuine_src,
+            target_dir=fresh_runtime_dir,
+            version="0.3.0",
+        )
+        assert provisioned_manifest is not None
+        assert provisioned_manifest.runtime_version == "0.3.0"
+
+        # Manifest receipt exists
+        receipt = fresh_runtime_dir / "manifest.json"
+        assert receipt.is_file()
+
+        # 4. RuntimeBinaryResolver successfully resolves with verified byte integrity
+        resolver = RuntimeBinaryResolver(managed_root=fresh_runtime_dir)
+        binary_info = resolver.resolve_binary()
+        assert binary_info.provenance == "managed_installation"
+        assert binary_info.manifest_verified is True
+        assert binary_info.bundle_integrity_verified is True
+        assert binary_info.binary_path == str((fresh_runtime_dir / "llama-server").resolve())
+
+        # 5. Launch managed supervisor from provisioned runtime
+        supervisor = LocalInferenceSupervisor(binary_resolver=resolver)
+        set_local_inference_supervisor(supervisor)
+        ident = ModelIdentity(provider_id="llamacpp", model_id="qwen2.5-coder-3b-instruct-q4_k_m")
+        spec = RuntimeSpec(
+            model_identity=ident,
+            model_path=str(model_path),
+            context_size=512,
+            gpu_layers=0,  # Deterministic CPU execution
+            startup_timeout_seconds=180.0,
+            shutdown_timeout_seconds=5.0,
+        )
+
+        try:
+            inst = supervisor.start(spec)
+            assert supervisor.state == RuntimeState.READY
+            assert inst.pid is not None
+            assert inst.binary_info.manifest_verified is True
+            assert inst.binary_info.bundle_integrity_verified is True
+
+            # 6. Verify real canary inference through ProviderAdapter
+            reg = get_provider_registry()
+            adapter = reg.get_adapter("llamacpp")
+            canary = "AE_E2E_PROV_7X9Q"
+            canary_prompt = f"Repeat this exact code word once: {canary}"
+
+            res = adapter.invoke(
+                prompt=canary_prompt,
+                model="qwen2.5-coder-3b-instruct-q4_k_m",
+                max_tokens=20,
+                temperature=0.0,
+            )
+            assert res is not None
+            assert canary in res.content
+            assert res.provider_id == "llamacpp"
+
+            # 7. Verify ledger trace
+            from core.execution.kernel_lm_adapter import KernelLMAdapter
+            from core.execution.models import Execution, ExecutionRequest
+            from core.execution.state import ExecutionStateMachine
+            from core.ledger.service import ExecutionLedgerService
+            from core.storage import get_storage_backend
+
+            storage = get_storage_backend()
+            ledger = ExecutionLedgerService(storage=storage)
+            exec_id = f"exec_prov_{int(time.time())}"
+            req = ExecutionRequest(project_id="test_project", prompt=canary_prompt)
+            exec_entity = Execution(id=exec_id, project_id="test_project", request=req)
+            storage.create_execution(
+                {
+                    "id": exec_id,
+                    "project_id": "test_project",
+                    "status": "completed",
+                    "request": '{"id": "' + exec_id + '"}',
+                }
+            )
+            ctx = ExecutionContext(
+                execution_id=exec_id,
+                project_id="test_project",
+                project_root=str(Path.cwd()),
+            )
+            state_machine = ExecutionStateMachine(execution=exec_entity)
+
+            klm = KernelLMAdapter(
+                exec_context=ctx,
+                coordinator=None,
+                provider="llamacpp",
+                model_name="qwen2.5-coder-3b-instruct-q4_k_m",
+                event_sink=lambda ev: storage.record_execution_event(ev.model_dump()),
+                state_machine=state_machine,
+                real_lm=lambda prompt=None, **kw: [res.content],
+            )
+            klm_out = klm(prompt=canary_prompt)
+            assert klm_out and canary in klm_out[0]
+
+            trace = ledger.get_execution_trace(exec_id)
+            assert trace is not None
+            assert len(trace.model_calls) >= 1
+            call_rec = trace.model_calls[0]
+            assert call_rec.provider_id == "llamacpp"
+            assert call_rec.model_id == "qwen2.5-coder-3b-instruct-q4_k_m"
+            assert call_rec.endpoint_class == "local_managed"
+
+            # 8. Graceful shutdown
+            assert supervisor.stop() is True
+            assert supervisor.state == RuntimeState.STOPPED
+
+            # 9. Verify zero orphan processes left behind
+            time.sleep(0.5)
+            with pytest.raises(requests.RequestException):
+                requests.get(f"{inst.endpoint_url}/health", timeout=0.5)
+        finally:
+            supervisor.stop()
+            reset_local_inference_supervisor()

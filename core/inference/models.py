@@ -39,6 +39,8 @@ class RuntimeBinaryInfo(BaseModel):
     implementation: str = "llama.cpp"
     sha256: str
     provenance: str = "managed_installation"
+    manifest_verified: bool = False
+    bundle_integrity_verified: bool = False
 
 
 class RuntimeSpec(BaseModel):

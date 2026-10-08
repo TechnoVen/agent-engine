@@ -594,6 +594,12 @@ class ApprovalRequest(BaseModel):
   * The `AGENT_ENGINE_LLAMA_BIN` operator override is restricted behind `AGENT_ENGINE_ALLOW_UNVERIFIED_BINARY=true` or explicit development mode (`AGENT_ENGINE_DEV_MODE=true` / `AGENT_ENGINE_ENV in ('dev', 'development', 'test')`). In default and production modes, arbitrary executable overrides are rejected fail-closed.
   * Executable integrity is validated via SHA-256 digest before launch (verifying installed byte integrity; publisher authenticity and code-signing root trust belong to R2.13).
 
+* **Runtime Bundle Integrity Manifest & Controlled Provisioning (`core/inference/manifest.py`, `core/inference/installer.py`):**
+  * **Bundle Integrity Scope:** Hashing covers both the main executable (`llama-server`) and all required sibling dynamic libraries (`.so`, `.dylib`, `.dll`) loaded from the managed runtime directory (`libllama-server-impl.so`, `libllama.so`, `libllama-common.so`, `libggml.so`, `libggml-base.so`, etc.).
+  * **Manifest Enforcement:** Runtime artifacts are verified against exact SHA-256 digests in versioned platform manifests (`RuntimeManifest`). Any 1-byte alteration raises `ChecksumMismatchError`. Missing artifacts raise `MissingArtifactError`. Wrong platform/architecture artifacts raise `UnsupportedPlatformError`. Unversioned/unknown binaries raise `UnversionedRuntimeError`.
+  * **Controlled Provisioning:** `RuntimeInstaller` provisions the versioned bundle from controlled packages into private storage (`~/.agent_engine/runtimes/llamacpp`), asserts pre-installation byte integrity, sets `0o755` permissions, generates symlinks, writes `manifest.json`, and verifies the installed bundle post-install before activation.
+  * **Terminology & Trust Boundary:** SHA-256 comparison against expected manifest digests provides **byte integrity** against accidental corruption or unauthorized local modification. It does **not** assert publisher cryptographic authenticity or CA root trust chains, which remain the formal responsibility of Milestone R2 Task R2.13.
+
 * **Loopback Binding & Endpoint Protection Threat Model:**
   * Managed inference servers bind strictly to loopback (`127.0.0.1`, `localhost`, `::1`). External interface or `0.0.0.0` binding is rejected fail-closed.
   * Each execution generates a cryptographically random ephemeral bearer token passed via `--api-key <token>`.

@@ -21,6 +21,10 @@ import subprocess
 import tempfile
 from typing import Optional
 
+from core.inference.manifest import (
+    RuntimeManifest,
+    verify_runtime_bundle,
+)
 from core.inference.models import RuntimeBinaryInfo
 from core.storage.paths import get_private_data_dir
 
@@ -59,11 +63,18 @@ class UntrustedBinaryLocationError(PermissionError):
 class RuntimeBinaryResolver:
     """Discovers, validates, and records provenance of managed inference binaries."""
 
-    def __init__(self, managed_root: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        managed_root: Optional[Path] = None,
+        enforce_integrity: bool = True,
+        expected_manifest: Optional[RuntimeManifest] = None,
+    ) -> None:
         self.managed_root = managed_root or (get_private_data_dir() / "runtimes" / "llamacpp")
         self.executable_name = (
             "llama-server.exe" if platform.system() == "Windows" else "llama-server"
         )
+        self.enforce_integrity = enforce_integrity
+        self.expected_manifest = expected_manifest
 
     @classmethod
     def is_prohibited_location(cls, path: Path) -> bool:
@@ -138,25 +149,51 @@ class RuntimeBinaryResolver:
         # 2. Agent Engine private runtime storage (~/.agent_engine/runtimes/llamacpp/llama-server)
         managed_bin = self.managed_root / self.executable_name
         if managed_bin.is_file() and os.access(managed_bin, os.X_OK):
-            return self._inspect_binary(managed_bin, provenance="managed_installation")
+            if self.enforce_integrity:
+                verify_runtime_bundle(self.managed_root, expected_manifest=self.expected_manifest)
+            return self._inspect_binary(
+                managed_bin,
+                provenance="managed_installation",
+                manifest_verified=self.enforce_integrity,
+                bundle_integrity_verified=self.enforce_integrity,
+            )
 
         # 3. System-wide Agent Engine runtime directory (/opt/agent_engine/runtimes/llamacpp)
-        system_ae_bin = Path("/opt/agent_engine/runtimes/llamacpp") / self.executable_name
+        system_ae_dir = Path("/opt/agent_engine/runtimes/llamacpp")
+        system_ae_bin = system_ae_dir / self.executable_name
         if system_ae_bin.is_file() and os.access(system_ae_bin, os.X_OK):
-            return self._inspect_binary(system_ae_bin, provenance="system_managed_installation")
+            verify_runtime_bundle(system_ae_dir)
+            return self._inspect_binary(
+                system_ae_bin,
+                provenance="system_managed_installation",
+                manifest_verified=True,
+                bundle_integrity_verified=True,
+            )
 
         # 4. Packaged desktop resources
         packaged_dir = PROJECT_ROOT / "apps" / "desktop" / "src-tauri" / "binaries"
         packaged_bin = packaged_dir / self.executable_name
         if packaged_bin.is_file() and os.access(packaged_bin, os.X_OK):
-            return self._inspect_binary(packaged_bin, provenance="packaged_resource")
+            verify_runtime_bundle(packaged_dir)
+            return self._inspect_binary(
+                packaged_bin,
+                provenance="packaged_resource",
+                manifest_verified=True,
+                bundle_integrity_verified=True,
+            )
 
         raise BinaryNotFoundError(
             f"No managed llama.cpp runtime binary found. Expected at '{managed_bin}'. "
             "Arbitrary PATH lookup and third-party host lookups (e.g. Ollama) are disabled for security."
         )
 
-    def _inspect_binary(self, binary_path: Path, provenance: str) -> RuntimeBinaryInfo:
+    def _inspect_binary(
+        self,
+        binary_path: Path,
+        provenance: str,
+        manifest_verified: bool = False,
+        bundle_integrity_verified: bool = False,
+    ) -> RuntimeBinaryInfo:
         """Inspect binary to compute SHA-256 byte integrity digest and query version via bounded execution.
 
         Note on Security & Provenance:
@@ -199,4 +236,6 @@ class RuntimeBinaryResolver:
             implementation="llama.cpp",
             sha256=digest,
             provenance=provenance,
+            manifest_verified=manifest_verified,
+            bundle_integrity_verified=bundle_integrity_verified,
         )

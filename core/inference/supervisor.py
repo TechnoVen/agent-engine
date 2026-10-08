@@ -60,12 +60,12 @@ class RuntimeCrashError(SupervisorError):
 class LocalInferenceSupervisor:
     """Authoritative supervisor managing lifecycle of local llama.cpp inference runtimes."""
 
-    def __init__(self) -> None:
+    def __init__(self, binary_resolver: Optional[RuntimeBinaryResolver] = None) -> None:
         self._lock = threading.RLock()
         self._state: RuntimeState = RuntimeState.STOPPED
         self._active_instance: Optional[RuntimeInstance] = None
         self._process_handle: Optional[RuntimeProcessHandle] = None
-        self._binary_resolver = RuntimeBinaryResolver()
+        self._binary_resolver = binary_resolver or RuntimeBinaryResolver()
 
     @property
     def state(self) -> RuntimeState:
@@ -499,3 +499,10 @@ def reset_local_inference_supervisor() -> None:
             except Exception:
                 pass
             _SUPERVISOR_INSTANCE = None
+
+
+def set_local_inference_supervisor(supervisor: Optional[LocalInferenceSupervisor]) -> None:
+    """Set process-wide supervisor singleton (for testing isolation with custom resolvers)."""
+    global _SUPERVISOR_INSTANCE
+    with _SUPERVISOR_LOCK:
+        _SUPERVISOR_INSTANCE = supervisor

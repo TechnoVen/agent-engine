@@ -39,6 +39,7 @@ from core.inference.supervisor import (
     SupervisorError,
     get_local_inference_supervisor,
     reset_local_inference_supervisor,
+    set_local_inference_supervisor,
 )
 from core.inference.validation import (
     InvalidModelFormatError,
@@ -46,6 +47,18 @@ from core.inference.validation import (
     ModelNotFoundError,
     ModelValidationError,
     ValidatedModelArtifact,
+)
+
+from core.inference.installer import RuntimeInstaller
+from core.inference.manifest import (
+    ChecksumMismatchError,
+    MissingArtifactError,
+    RuntimeArtifactEntry,
+    RuntimeIntegrityError,
+    RuntimeManifest,
+    UnsupportedPlatformError,
+    UnversionedRuntimeError,
+    verify_runtime_bundle,
 )
 
 __all__ = [
@@ -72,7 +85,17 @@ __all__ = [
     "LocalInferenceSupervisor",
     "get_local_inference_supervisor",
     "reset_local_inference_supervisor",
+    "set_local_inference_supervisor",
     "SupervisorError",
     "RuntimeStartupError",
     "RuntimeCrashError",
+    "RuntimeInstaller",
+    "RuntimeManifest",
+    "RuntimeArtifactEntry",
+    "RuntimeIntegrityError",
+    "ChecksumMismatchError",
+    "MissingArtifactError",
+    "UnsupportedPlatformError",
+    "UnversionedRuntimeError",
+    "verify_runtime_bundle",
 ]
