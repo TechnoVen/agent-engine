@@ -31,6 +31,7 @@ class ProjectSettings(BaseModel):
     isolation_mode: str = "standard"  # "standard", "worktree", "read_only"
     custom_rules: Dict[str, Any] = Field(default_factory=dict)
     data_routing_policy: Optional[DataRoutingPolicy] = None
+    routing_objective: Optional[str] = "balanced"
 
 
 class Project(BaseModel):

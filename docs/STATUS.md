@@ -738,14 +738,14 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "tests/test_r3_model_download.py"
   notes: "S1 — Implemented and implementation-tested (Final closure commit 81e5698). Completed Managed Model Download and Verification final download-safety closure: (1) Anti-SSRF and DNS rebinding immunity with socket-level IP pinning (PinningHTTPAdapter, PinningPoolManager, PinningHTTPConnection, PinningHTTPSConnection) validating all candidate IPs from socket.getaddrinfo and connecting directly to the validated IP while preserving the hostname for TLS SNI and certificate verification. (2) Ambient proxy isolation (session.trust_env = False) rejecting HTTP_PROXY, HTTPS_PROXY, and ALL_PROXY environment variables. (3) Storage authority and path restriction (validate_model_root) rejecting system roots, home root, ~/Downloads, ~/Desktop, /tmp, and workspace source tree; disallowing custom roots in production mode without explicit dev/test authorization; enforcing 0700 directory and 0600 file permissions. (4) Post-verification integrity recomputation in ModelArtifactValidator, checking on-disk SHA-256 before runtime launch and rejecting tampered files with ModelValidationError. (5) Atomic no-clobber promotion (atomic_promote) via hardlink and parent directory fsync; conflicting existing destination files raise ArtifactConflictError without overwriting. (6) Startup reconciliation (reconcile_startup_state) recovering factual truth across mid-download, post-fsync, verifying, and uncommitted placement crashes. (7) Full-artifact resumed checksum verification pre-hashing existing partial files and detecting corrupted partials upon resume. (8) Authoritative PolicyEngine gating on download initiation requiring SkillPermission.NETWORK and SkillPermission.WRITE_LOCAL, returning structured HTTP 403 with zero network, filesystem, or lock side-effects on policy denial. (9) Streamed socket actual-byte ceiling enforcement aborting runaway downloads. (10) Factual resumable and partial_present status semantics with catalog versioning (catalog_version='2026.10.1'). 24/24 precision tests passing, 124/124 R3 suites passing, 932/932 full regression passing."
 - id: R3.7
-  title: "Cloud provider secret and credential lifecycle"
+  title: "External local-runtime compatibility"
   task_status: deferred
   capability_maturity: "Deferred to 0.6"
-  migration: DEFER
-  owner: "Security Architecture"
-  depends_on: ["R3.1", "R2.6"]
+  migration: INTEGRATE
+  owner: "Runtime Architecture"
+  depends_on: ["R3.1"]
   evidence: []
-  notes: "DEFERRED to 0.6 per CTO sign-off. Cloud credential lifecycle deferred to next release cycle."
+  notes: "DEFERRED to 0.6 per CTO sign-off. External local-runtime compatibility (OpenAI-compatible/Ollama/LM Studio endpoints) deferred to 0.6 release cycle."
 
 - id: R3.8
   title: "Privacy classes and data-routing policy"
@@ -767,15 +767,38 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "services/python/server/routers/policies.py"
     - "services/python/server/routers/privacy.py"
     - "tests/test_r3_privacy_routing.py"
-  notes: "S1 — Implemented and implementation-tested. Closed Privacy Classes and Data-Routing Policy: (1) Three canonical privacy classes: LOCAL_ONLY, APPROVED_CLOUD, and ANY_CONFIGURED with strict precedence (Profile Default -> Project Override -> Task/Execution Override). (2) Tightening is permitted at narrower scopes; relaxation requires explicit trusted authority. Untrusted inputs (prompts, tool outputs, renderer claims) cannot relax policy. (3) LOCAL_ONLY zero cloud fallback invariant: when local provider/model is unavailable or unhealthy, fails closed immediately with NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY, never falling back to remote endpoints. (4) Two-layer defense-in-depth: Layer 1 in ModelRouter pre-scoring filter excludes non-compliant providers before ranking; Layer 2 in ExecutionCoordinator dispatch-time privacy guard verifies eligibility immediately prior to dispatch and blocks with PRIVACY_POLICY_BLOCKED with zero outbound network egress. (5) 3-valued truth semantics: ExecutionLocation.UNKNOWN or data_leaves_device=UNKNOWN fails closed for LOCAL_ONLY. (6) Managed llama.cpp on loopback HTTP qualifies as LOCAL_ONLY (local execution, zero remote egress). (7) Approved cloud targets specify canonical provider_id/model_id without wildcards, URLs, or credentials. (8) PolicyEngine integration via evaluate_data_routing() evaluating data routing rules. (9) Complete ledger explainability recording effective_privacy_class, policy_source, and privacy_rejections without secret leakage. (10) Typed IPC-auth protected configuration endpoints: GET/PUT /v1/privacy/policy and GET/PUT /v1/projects/{id}/privacy. 25/25 precision tests passing, 149/149 R3 tests passing, 957/957 full regression passing."
+  notes: "S1 — Implemented and implementation-tested (Final closure commit fec6640). Closed Privacy Classes and Data-Routing Policy: (1) Three canonical privacy classes: LOCAL_ONLY, APPROVED_CLOUD, and ANY_CONFIGURED with strict precedence (Profile Default -> Project Override -> Task/Execution Override). (2) Tightening is permitted at narrower scopes; relaxation requires explicit trusted authority. Untrusted inputs (prompts, tool outputs, renderer claims) cannot relax policy. (3) LOCAL_ONLY zero cloud fallback invariant: when local provider/model is unavailable or unhealthy, fails closed immediately with NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY, never falling back to remote endpoints. (4) Two-layer defense-in-depth: Layer 1 in ModelRouter pre-scoring filter excludes non-compliant providers before ranking; Layer 2 in ExecutionCoordinator dispatch-time privacy guard verifies eligibility immediately prior to dispatch and blocks with PRIVACY_POLICY_BLOCKED with zero outbound network egress. (5) 3-valued truth semantics: ExecutionLocation.UNKNOWN or data_leaves_device=UNKNOWN fails closed for LOCAL_ONLY. (6) Managed llama.cpp on loopback HTTP qualifies as LOCAL_ONLY (local execution, zero remote egress). (7) Approved cloud targets specify canonical provider_id/model_id without wildcards, URLs, or credentials. (8) PolicyEngine integration via evaluate_data_routing() evaluating data routing rules. (9) Complete ledger explainability recording effective_privacy_class, policy_source, and privacy_rejections without secret leakage. (10) Typed IPC-auth protected configuration endpoints: GET/PUT /v1/privacy/policy and GET/PUT /v1/projects/{id}/privacy. 25/25 precision tests passing, 149/149 R3 tests passing, 957/957 full regression passing."
+
+- id: R3.9
+  title: "Quality/cost/latency routing objective"
+  task_status: done
+  capability_maturity: S1
+  migration: REFACTOR
+  owner: "Runtime & Model Architecture"
+  depends_on: ["R3.1", "R3.2", "R3.8"]
+  evidence:
+    - "core/router/models.py"
+    - "core/router/objective.py"
+    - "core/router/model_router.py"
+    - "core/router/config.py"
+    - "core/router/execution_router.py"
+    - "core/router/__init__.py"
+    - "core/execution/coordinator.py"
+    - "core/projects/models.py"
+    - "core/ledger/models.py"
+    - "core/ledger/service.py"
+    - "services/python/server/routers/models.py"
+    - "tests/test_r3_routing_objective.py"
+  notes: "S1 — Implemented and implementation-tested (Final closure commit 2ae800b). Completed Quality/cost/latency routing objective (Task R3.9): (1) Permanently replaced legacy 90/9/1 and hardcoded priority routing with deterministic multi-attribute utility calculation over four canonical profiles: balanced, cost_first, latency_first, quality_first. (2) Strict multi-stage constraint pipeline: Stage 1 PRIVACY (R3.8 fail-closed; prohibited candidates never enter scoring), Stage 2 CAPABILITY (R3.2 requirements gating; ineligibles never enter scoring), Stage 3 HEALTH (R3.1 availability/circuits gating; unavailables never enter scoring). (3) Unit-aware pricing math in USD per 1M tokens: factual free local execution ($0.0); unknown pricing receives UNKNOWN penalty (never fake $0.00). (4) Fresh observed latency preferred over static catalog; unknown latency receives UNKNOWN penalty (never fake fastest); zero active network benchmarks during routing. (5) Evidenced quality grounded in real evaluated task performance or curated quality policy with uncertainty penalties for missing or low-confidence data. (6) Strict, deterministic 6-stage tie-breaking ending in canonical_id, mathematically invariant under arbitrary candidate order shuffling. (7) Verified fallback chain: only eligible, surviving candidates populate fallback chain (zero prohibited cloud models under LOCAL_ONLY). (8) Complete ledger explainability: durable ModelRoutingTrace captures weights, candidate metrics, rejections, final score, selection reason, and tie-break flag with zero secrets or credentials. (9) Trusted configuration precedence: routing objective extracted strictly from trusted request inputs or project settings; prompt injection attempts have zero effect. (10) Strict boundary: stops before R3.10; zero cost-per-success, retry count, or adaptive weights learning. 21/21 precision tests passing, 170/170 R3 tests passing, 978/978 full regression passing."
 ```
 
 ---
 
 ## 8. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `957 passed, 3 warnings` (`uv run pytest -q`)
-- **Combined R3 Model Layer Suites:** `149 passed in 32.5s` (`uv run pytest tests/test_r3_*.py`)
+- **Full Regression Suite:** `978 passed, 3 warnings` (`uv run pytest -q`)
+- **Combined R3 Model Layer Suites:** `170 passed in 26.83s` (`uv run pytest tests/test_r3_*.py`)
+- **R3.9 Quality/Cost/Latency Suite:** `21 passed in 2.93s` (`uv run pytest tests/test_r3_routing_objective.py`)
 - **R3.1 Canonical Provider Registry Suite:** `27 passed in 3.32s` (`uv run pytest tests/test_r3_provider_registry.py`)
 - **R3.2 Model Capability Registry Suite:** `16 passed in 3.16s` (`uv run pytest tests/test_r3_model_registry.py`)
 - **R3.3 Resource Manager Suite:** `18 passed in 5.95s` (`uv run pytest tests/test_r3_resource_manager.py`)

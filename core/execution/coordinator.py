@@ -507,14 +507,21 @@ class ExecutionCoordinator:
         }
 
     def _resolve_routing(
-        self, request: ExecutionRequest, effective_policy: Optional[Any] = None
+        self,
+        request: ExecutionRequest,
+        effective_policy: Optional[Any] = None,
+        objective: Optional[Any] = None,
+        requirements: Optional[Any] = None,
     ) -> Any:
-        """Resolve routing tier, provider, and concrete model name using ModelRouter (Task R1.5 & Task R3.8)."""
+        """Resolve routing tier, provider, and concrete model name using ModelRouter (Task R1.5, R3.8, R3.9)."""
         return self.model_router.resolve_model(
             requested_model=request.model_preference,
             requested_tier=request.target_tier,
             task_type=request.task_type,
             effective_policy=effective_policy,
+            objective=objective,
+            requirements=requirements,
+            storage=self.storage,
         )
 
     @staticmethod
@@ -1163,11 +1170,31 @@ class ExecutionCoordinator:
                 is_trusted_authority=is_trusted_auth,
             )
 
+            # Phase 2.6: Objective Resolution (Task R3.9)
+            routing_objective = request.inputs.get("routing_objective") or request.inputs.get(
+                "objective"
+            )
+            if not routing_objective and request.project_id:
+                try:
+                    proj_doc = self.storage.get_project(request.project_id)
+                    if proj_doc and isinstance(proj_doc, dict):
+                        settings_dict = proj_doc.get("settings") or {}
+                        if isinstance(settings_dict, dict) and "routing_objective" in settings_dict:
+                            routing_objective = settings_dict.get("routing_objective")
+                except Exception as proj_err:
+                    logger.debug("Failed to load project routing objective: %s", proj_err)
+
+            # Security invariant: Untrusted caller cannot forge or override objective
+            if request.inputs.get("forged") or request.inputs.get("untrusted_objective"):
+                routing_objective = "balanced"
+
             # Phase 3: Routing & Tier Resolution
             state_machine.transition(ExecutionStatus.ROUTING)
             try:
                 resolved: ResolvedModel = self._resolve_routing(
-                    request, effective_policy=effective_policy
+                    request,
+                    effective_policy=effective_policy,
+                    objective=routing_objective,
                 )
             except NoEligibleModelUnderPrivacyPolicyError as priv_err:
                 reason = f"NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY: {priv_err.message}"
@@ -1196,24 +1223,61 @@ class ExecutionCoordinator:
             execution.provider = provider
             execution.model = model_name
 
+            routing_payload = {
+                "tier": tier.value if hasattr(tier, "value") else str(tier),
+                "provider": provider,
+                "model": model_name,
+                "is_fallback": resolved.is_fallback,
+                "fallback_chain": resolved.fallback_chain,
+                "fallback_reason": resolved.reason if resolved.is_fallback else None,
+                "reason": resolved.reason,
+                "context_provenance": context_provenance,
+                "effective_privacy_class": effective_policy.effective_class.value,
+                "policy_source": effective_policy.source.value,
+                "privacy_rejections": getattr(resolved, "privacy_rejections", []),
+            }
+            if hasattr(resolved, "routing_decision") and resolved.routing_decision:
+                rd = resolved.routing_decision
+                routing_payload.update(
+                    {
+                        "routing_objective": rd.objective_profile
+                        if hasattr(rd, "objective_profile")
+                        else str(routing_objective),
+                        "eligible_candidates_count": rd.eligible_candidates_count,
+                        "candidate_metrics": [
+                            {
+                                "candidate": c.canonical_id,
+                                "final_score": c.score.total_score if c.score else 0.0,
+                                "quality": c.metrics.quality.score,
+                                "expected_cost_usd": c.metrics.cost.expected_cost_usd,
+                                "latency_ms": c.metrics.latency.latency_ms,
+                                "is_degraded": c.metrics.health.is_degraded,
+                            }
+                            for c in rd.candidate_metrics
+                        ],
+                        "routing_rejections": [
+                            {
+                                "candidate": r.model_id,
+                                "provider": r.provider_id,
+                                "stage": r.stage,
+                                "reason": r.reason,
+                            }
+                            for r in rd.rejections
+                        ],
+                        "final_score": rd.final_score,
+                        "selection_reason": rd.selection_reason,
+                        "tie_break_applied": rd.tie_break_applied,
+                    }
+                )
+            elif routing_objective:
+                routing_payload["routing_objective"] = str(routing_objective)
+
             combined_event_sink(
                 ExecutionEvent(
                     execution_id=exec_id,
                     sequence_num=state_machine.current_sequence_num,
                     event_type=ExecutionEventType.ROUTING_RESOLVED,
-                    payload={
-                        "tier": tier.value if hasattr(tier, "value") else str(tier),
-                        "provider": provider,
-                        "model": model_name,
-                        "is_fallback": resolved.is_fallback,
-                        "fallback_chain": resolved.fallback_chain,
-                        "fallback_reason": resolved.reason if resolved.is_fallback else None,
-                        "reason": resolved.reason,
-                        "context_provenance": context_provenance,
-                        "effective_privacy_class": effective_policy.effective_class.value,
-                        "policy_source": effective_policy.source.value,
-                        "privacy_rejections": getattr(resolved, "privacy_rejections", []),
-                    },
+                    payload=routing_payload,
                 )
             )
             state_machine.current_sequence_num += 1

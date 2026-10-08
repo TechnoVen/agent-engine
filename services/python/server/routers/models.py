@@ -215,7 +215,7 @@ async def get_eval_benchmarks_endpoint(
 
 @router.post("/router/route", response_model=RouteStepResponse)
 async def route_step_endpoint(req: RouteStepRequest):
-    """Classify a step according to 90/9/1 cost optimization rules and resolve execution tier."""
+    """Classify a step according to multi-objective routing rules and resolve execution tier."""
     cache = get_semantic_cache()
     router = ExecutionRouter(cache=cache)
     step = StepProfile(
@@ -257,11 +257,12 @@ async def route_step_endpoint(req: RouteStepRequest):
 
 @router.get("/router/tiers", response_model=RouterTiersResponse)
 async def get_router_tiers_endpoint():
-    """Retrieve execution tiers and model allocations under the 90/9/1 rule."""
+    """Retrieve execution tiers, model allocations, and R3.9 multi-objective routing profiles."""
     tiers_map = {tier.value: models for tier, models in DEFAULT_TIER_MODELS.items()}
     guidelines = {
-        "law_1_rule": "90% deterministic code/cache/small local model, 9% mid-tier, 1% frontier.",
-        "frontier_ceiling": "Max allowable frontier model steps is 10%.",
+        "routing_objectives": "Multi-objective optimization: BALANCED, QUALITY_FIRST, COST_FIRST, LATENCY_FIRST.",
+        "law_1_rule": "90% deterministic code/cache/small local model, 9% mid-tier, 1% frontier (advisory baseline).",
+        "frontier_ceiling": "Max allowable frontier model steps is 10% in static pipeline ratio audits.",
         "context_target": "Average context per step < 8,000 tokens.",
     }
     return RouterTiersResponse(

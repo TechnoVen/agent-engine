@@ -149,6 +149,13 @@ class ExecutionLedgerService:
         effective_privacy_class: Optional[str] = None
         policy_source: Optional[str] = None
         privacy_rejections: List[Dict[str, Any]] = []
+        routing_objective: Optional[str] = None
+        eligible_candidates_count: Optional[int] = None
+        candidate_metrics: List[Dict[str, Any]] = []
+        routing_rejections: List[Dict[str, Any]] = []
+        final_score: Optional[float] = None
+        selection_reason: Optional[str] = None
+        tie_break_applied: bool = False
 
         for ev in raw_events:
             ev_type = ev.get("event_type")
@@ -167,6 +174,17 @@ class ExecutionLedgerService:
                     policy_source = payload.get("policy_source")
                     if payload.get("privacy_rejections"):
                         privacy_rejections.extend(payload["privacy_rejections"])
+                    routing_objective = payload.get("routing_objective", routing_objective)
+                    eligible_candidates_count = payload.get(
+                        "eligible_candidates_count", eligible_candidates_count
+                    )
+                    if payload.get("candidate_metrics"):
+                        candidate_metrics.extend(payload["candidate_metrics"])
+                    if payload.get("routing_rejections"):
+                        routing_rejections.extend(payload["routing_rejections"])
+                    final_score = payload.get("final_score", final_score)
+                    selection_reason = payload.get("selection_reason", selection_reason)
+                    tie_break_applied = bool(payload.get("tie_break_applied", tie_break_applied))
                 else:
                     # Subsequent routing resolution is a runtime fallback
                     is_fallback = True
@@ -187,6 +205,13 @@ class ExecutionLedgerService:
             effective_privacy_class=effective_privacy_class,
             policy_source=policy_source,
             privacy_rejections=privacy_rejections,
+            routing_objective=routing_objective,
+            eligible_candidates_count=eligible_candidates_count,
+            candidate_metrics=candidate_metrics,
+            routing_rejections=routing_rejections,
+            final_score=final_score,
+            selection_reason=selection_reason,
+            tie_break_applied=tie_break_applied,
         )
 
         # 7. Reconstruct Context Provenance

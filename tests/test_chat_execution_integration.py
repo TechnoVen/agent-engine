@@ -157,7 +157,14 @@ def test_provider_adapter_receives_request(integration_env):
     assert len(dispatches) == 1
     last_call = dispatches[-1]
     assert last_call["task"] == "Generate a unique hash for test 3"
-    assert last_call["provider"] in ("anthropic", "openai", "google", "ollama", "deterministic")
+    assert last_call["provider"] in (
+        "anthropic",
+        "openai",
+        "google",
+        "gemini",
+        "ollama",
+        "deterministic",
+    )
 
 
 # ---------------------------------------------------------------------------

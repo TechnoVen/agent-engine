@@ -31,6 +31,20 @@ from core.router.execution_router import (
 )
 from core.router.health import HealthProber, ProbeResult
 from core.router.model_router import ModelRouter, ResolvedModel
+from core.router.models import (
+    CostEvidence,
+    HealthEvidence,
+    LatencyEvidence,
+    QualityEvidence,
+    RoutingCandidate,
+    RoutingDecision,
+    RoutingMetrics,
+    RoutingObjective,
+    RoutingObjectiveProfile,
+    RoutingRejection,
+    RoutingScore,
+)
+from core.router.objective import RoutingOptimizer
 
 __all__ = [
     "ModelRouter",
@@ -52,4 +66,17 @@ __all__ = [
     "audit_pipeline",
     "profiled_step",
     "DEFAULT_TIER_MODELS",
+    # R3.9 Multi-Objective Routing
+    "RoutingObjectiveProfile",
+    "RoutingObjective",
+    "QualityEvidence",
+    "CostEvidence",
+    "LatencyEvidence",
+    "HealthEvidence",
+    "RoutingMetrics",
+    "RoutingScore",
+    "RoutingCandidate",
+    "RoutingRejection",
+    "RoutingDecision",
+    "RoutingOptimizer",
 ]

@@ -66,6 +66,13 @@ class ModelRoutingTrace(BaseModel):
     effective_privacy_class: Optional[str] = None
     policy_source: Optional[str] = None
     privacy_rejections: List[Dict[str, Any]] = Field(default_factory=list)
+    routing_objective: Optional[str] = None
+    eligible_candidates_count: Optional[int] = None
+    candidate_metrics: List[Dict[str, Any]] = Field(default_factory=list)
+    routing_rejections: List[Dict[str, Any]] = Field(default_factory=list)
+    final_score: Optional[float] = None
+    selection_reason: Optional[str] = None
+    tie_break_applied: bool = False
 
     @property
     def provider_id(self) -> Optional[str]:
@@ -227,6 +234,11 @@ class ExecutionTrace(BaseModel):
     def context_provenance(self) -> Dict[str, Any]:
         """Convenience property returning dict representation of context provenance."""
         return self.context.model_dump()
+
+    @property
+    def routing_trace(self) -> ModelRoutingTrace:
+        """Convenience alias for self.routing."""
+        return self.routing
 
     def to_dict(self) -> Dict[str, Any]:
         return self.model_dump()

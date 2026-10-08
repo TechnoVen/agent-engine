@@ -134,11 +134,16 @@ class RatioAudit:
 
 def audit_pipeline(steps: List[StepProfile]) -> RatioAudit:
     """
-    Enforce Law 1 (The 90/9/1 Rule):
+    Audit static pipeline steps against the legacy 90/9/1 guideline:
     - 90% deterministic code, caching, or small local model.
     - 9% mid-tier model.
     - 1% frontier model (hard ceiling: <= 10%).
-    If a pipeline proposes sending > 10% of steps to frontier models, it violates Law 1.
+
+    Note (Milestone R3 Task R3.9):
+    In production model selection, Agent Engine does NOT enforce rigid percentage rules
+    or hardcoded provider priorities. Instead, ModelRouter and RoutingOptimizer perform
+    constrained multi-objective utility optimization (quality, cost, latency, health)
+    under strict privacy and capability gates.
     """
     if not steps:
         return RatioAudit(

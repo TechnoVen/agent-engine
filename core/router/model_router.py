@@ -4,7 +4,7 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import dspy
 from dotenv import load_dotenv
@@ -47,6 +47,7 @@ class ResolvedModel:
     effective_privacy_class: Optional[str] = None
     policy_source: Optional[str] = None
     privacy_rejections: List[Dict[str, Any]] = field(default_factory=list)
+    routing_decision: Optional[Any] = None
 
 
 class ModelRouter:
@@ -244,15 +245,26 @@ class ModelRouter:
     def resolve_model(
         self,
         requested_model: Optional[str] = None,
-        requested_tier: Optional[RoutingTier] = None,
+        requested_tier: Optional[Union[RoutingTier, str]] = None,
         task_type: Optional[str] = None,
         effective_policy: Optional[EffectiveRoutingPolicy] = None,
+        objective: Optional[Union[Any, str]] = None,
+        requirements: Optional[Any] = None,
+        storage: Optional[Any] = None,
+        estimated_input_tokens: int = 1000,
+        estimated_output_tokens: int = 500,
     ) -> ResolvedModel:
         """
-        Resolve provider, model, and routing tier (Task R1.5 & Task R3.8).
+        Resolve provider, model, and routing tier (Task R1.5, Task R3.8, Task R3.9).
         Respects circuit breaker status, enforces effective privacy policy constraints before scoring,
-        and guarantees zero cloud fallback under LOCAL_ONLY.
+        and guarantees multi-objective optimization with zero cloud fallback under LOCAL_ONLY.
         """
+        if isinstance(requested_tier, str):
+            try:
+                requested_tier = RoutingTier(requested_tier.lower())
+            except Exception:
+                pass
+
         effective_privacy_class = (
             effective_policy.effective_class.value if effective_policy else None
         )
@@ -531,7 +543,109 @@ class ModelRouter:
                     privacy_rejections=privacy_rejections,
                 )
 
-        # 3. Default resolution
+        # 3. Multi-objective or Default resolution (Task R3.9)
+        try:
+            from core.model_registry import get_model_registry
+            from core.router.models import RoutingObjectiveProfile
+            from core.router.objective import RoutingOptimizer
+
+            optimizer = RoutingOptimizer(
+                circuit_breaker=self.circuit_breaker,
+                health_prober=self.health_prober,
+            )
+            catalog_candidates = get_model_registry().list_models()
+            eff_objective = (
+                objective
+                or getattr(self.config, "default_objective", None)
+                or RoutingObjectiveProfile.BALANCED
+            )
+
+            decision = optimizer.optimize(
+                candidates=catalog_candidates,
+                requirements=requirements,
+                effective_policy=effective_policy,
+                objective=eff_objective,
+                task_type=task_type,
+                storage=storage,
+                estimated_input_tokens=estimated_input_tokens,
+                estimated_output_tokens=estimated_output_tokens,
+            )
+
+            if decision.winner is not None:
+                winner_cand = decision.winner
+                w_provider = winner_cand.provider_id
+                w_model = winner_cand.model_id
+                w_tier = winner_cand.routing_tier
+                w_cost = (
+                    winner_cand.metrics.cost.expected_cost_usd
+                    if winner_cand.metrics.cost.expected_cost_usd is not None
+                    else self._estimate_cost_per_1k(w_provider, w_model)
+                )
+                w_fallback_chain = list(decision.fallback_chain)
+                privacy_rejs = [
+                    {"provider": r.provider_id, "reasons": [r.reason]}
+                    for r in decision.privacy_rejections
+                ]
+                return ResolvedModel(
+                    provider_id=w_provider,
+                    model_id=w_model,
+                    routing_tier=w_tier,
+                    reason=decision.selection_reason,
+                    capabilities=["general_chat", "completion"],
+                    estimated_cost_per_1k_tokens=w_cost,
+                    fallback_chain=w_fallback_chain,
+                    is_fallback=False,
+                    effective_privacy_class=effective_privacy_class,
+                    policy_source=policy_source,
+                    privacy_rejections=privacy_rejs or privacy_rejections,
+                    routing_decision=decision,
+                )
+            else:
+                # No candidates survived hard constraints
+                if (
+                    effective_policy
+                    and effective_policy.effective_class == DataRoutingClass.LOCAL_ONLY
+                ):
+                    raise NoEligibleModelUnderPrivacyPolicyError(
+                        "NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY: No local model available and cloud fallback forbidden under LOCAL_ONLY",
+                        rejection_details=[
+                            {"candidate": r.candidate_id, "reason": r.reason}
+                            for r in decision.rejections
+                        ],
+                    )
+                if (
+                    effective_policy
+                    and effective_policy.effective_class == DataRoutingClass.APPROVED_CLOUD
+                ):
+                    raise NoEligibleModelUnderPrivacyPolicyError(
+                        "NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY: No approved cloud or local provider available under APPROVED_CLOUD",
+                        rejection_details=[
+                            {"candidate": r.candidate_id, "reason": r.reason}
+                            for r in decision.rejections
+                        ],
+                    )
+                return ResolvedModel(
+                    provider_id="none",
+                    model_id="none",
+                    routing_tier=RoutingTier.LOCAL,
+                    reason=decision.selection_reason or "no_eligible_candidates",
+                    capabilities=[],
+                    fallback_chain=[],
+                    is_fallback=False,
+                    effective_privacy_class=effective_privacy_class,
+                    policy_source=policy_source,
+                    privacy_rejections=[
+                        {"candidate": r.candidate_id, "reason": r.reason}
+                        for r in decision.privacy_rejections
+                    ],
+                    routing_decision=decision,
+                )
+        except NoEligibleModelUnderPrivacyPolicyError:
+            raise
+        except Exception as opt_err:
+            logger.warning("RoutingOptimizer fallback to provider priority: %s", opt_err)
+
+        # Fallback to provider priority if optimizer could not run
         available = self.get_available_providers(
             task_type=task_type,
             effective_policy=effective_policy,
