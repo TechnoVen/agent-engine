@@ -156,6 +156,11 @@ class ExecutionLedgerService:
         final_score: Optional[float] = None
         selection_reason: Optional[str] = None
         tie_break_applied: bool = False
+        objective_policy_version: Optional[str] = None
+        metric_normalization_version: Optional[str] = None
+        is_price_proxy: bool = False
+        catalog_price_proxy: Optional[float] = None
+        price_proxy_policy_version: Optional[str] = None
 
         for ev in raw_events:
             ev_type = ev.get("event_type")
@@ -175,6 +180,11 @@ class ExecutionLedgerService:
                     if payload.get("privacy_rejections"):
                         privacy_rejections.extend(payload["privacy_rejections"])
                     routing_objective = payload.get("routing_objective", routing_objective)
+                    objective_policy_version = payload.get("objective_policy_version")
+                    metric_normalization_version = payload.get("metric_normalization_version")
+                    is_price_proxy = bool(payload.get("is_price_proxy", False))
+                    catalog_price_proxy = payload.get("catalog_price_proxy")
+                    price_proxy_policy_version = payload.get("price_proxy_policy_version")
                     eligible_candidates_count = payload.get(
                         "eligible_candidates_count", eligible_candidates_count
                     )
@@ -212,6 +222,11 @@ class ExecutionLedgerService:
             final_score=final_score,
             selection_reason=selection_reason,
             tie_break_applied=tie_break_applied,
+            objective_policy_version=objective_policy_version,
+            metric_normalization_version=metric_normalization_version,
+            is_price_proxy=is_price_proxy,
+            catalog_price_proxy=catalog_price_proxy,
+            price_proxy_policy_version=price_proxy_policy_version,
         )
 
         # 7. Reconstruct Context Provenance

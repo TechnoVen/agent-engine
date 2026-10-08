@@ -33,6 +33,7 @@ from core.router.health import HealthProber, ProbeResult
 from core.router.model_router import ModelRouter, ResolvedModel
 from core.router.models import (
     CostEvidence,
+    ExecutionRoutingPreferences,
     HealthEvidence,
     LatencyEvidence,
     QualityEvidence,
@@ -41,6 +42,7 @@ from core.router.models import (
     RoutingMetrics,
     RoutingObjective,
     RoutingObjectiveProfile,
+    RoutingPreferenceSource,
     RoutingRejection,
     RoutingScore,
 )
@@ -69,6 +71,8 @@ __all__ = [
     # R3.9 Multi-Objective Routing
     "RoutingObjectiveProfile",
     "RoutingObjective",
+    "ExecutionRoutingPreferences",
+    "RoutingPreferenceSource",
     "QualityEvidence",
     "CostEvidence",
     "LatencyEvidence",

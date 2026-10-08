@@ -106,6 +106,8 @@ class ExecutionRequest(BaseModel):
     task_type: str = "chat"  # "chat", "dspy", "skill", "workflow_step", "agent_task"
     prompt: str
     inputs: Dict[str, Any] = Field(default_factory=dict)
+    routing_preferences: Optional[Any] = None
+    routing_policy: Optional[Any] = None
     model_preference: Optional[str] = None
     target_tier: Optional[RoutingTier] = None
     isolation_mode: str = "standard"  # "standard", "worktree", "read_only"

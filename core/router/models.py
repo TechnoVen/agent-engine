@@ -21,6 +21,7 @@ import time
 from typing import Dict, List, Optional
 from pydantic import BaseModel, Field
 
+from core.context.models import ContentAuthority
 from core.execution.models import RoutingTier
 from core.model_registry.models import ModelIdentity
 from core.providers.models import ProviderHealthStatus
@@ -29,10 +30,40 @@ from core.providers.models import ProviderHealthStatus
 class RoutingObjectiveProfile(str, Enum):
     """Canonical objective profiles for multi-attribute routing optimization."""
 
-    BALANCED = "balanced"
+    BALANCED = "balanced"  # balanced / moderately quality-weighted
     QUALITY_FIRST = "quality_first"
     COST_FIRST = "cost_first"
     LATENCY_FIRST = "latency_first"
+
+
+class RoutingPreferenceSource(str, Enum):
+    """Authoritative source category for routing preference configuration."""
+
+    USER_DIRECTIVE = "user_directive"
+    PROJECT_CONFIG = "project_config"
+    PROFILE_CONFIG = "profile_config"
+    INTERNAL_POLICY = "internal_policy"
+    UNTRUSTED_INPUT = "untrusted_input"
+
+
+class ExecutionRoutingPreferences(BaseModel):
+    """Typed domain preference for execution model routing with explicit authority."""
+
+    objective_profile: RoutingObjectiveProfile = RoutingObjectiveProfile.BALANCED
+    source: RoutingPreferenceSource = RoutingPreferenceSource.USER_DIRECTIVE
+    authority: ContentAuthority = ContentAuthority.USER_DIRECTIVE
+
+    def is_trusted(self) -> bool:
+        """Validate whether the routing preference originates from an authorized source."""
+        return self.authority in (
+            ContentAuthority.USER_DIRECTIVE,
+            ContentAuthority.SYSTEM_POLICY,
+        ) and self.source in (
+            RoutingPreferenceSource.USER_DIRECTIVE,
+            RoutingPreferenceSource.PROJECT_CONFIG,
+            RoutingPreferenceSource.PROFILE_CONFIG,
+            RoutingPreferenceSource.INTERNAL_POLICY,
+        )
 
 
 class RoutingObjective(BaseModel):
@@ -51,6 +82,7 @@ class RoutingObjective(BaseModel):
 
     # Normalization scaling constants
     cost_norm_ceiling_usd: float = 0.05  # $0.05 per request is utility 0.0
+    price_proxy_norm_ceiling: float = 20.0  # $20 blended catalog price per 1M is utility 0.0
     latency_norm_ceiling_ms: float = 5000.0  # 5000ms is utility 0.0
 
     @classmethod
@@ -104,7 +136,7 @@ class RoutingObjective(BaseModel):
                 max_cost_dollars=max_cost_dollars,
                 max_latency_ms=max_latency_ms,
             )
-        else:  # BALANCED
+        else:  # BALANCED: balanced / moderately quality-weighted
             return cls(
                 profile=RoutingObjectiveProfile.BALANCED,
                 w_quality=0.35,
@@ -123,10 +155,11 @@ class QualityEvidence(BaseModel):
     score: Optional[float] = None  # [0.0, 1.0]
     task_family: str = "general"
     eval_id: Optional[str] = None
-    version: Optional[str] = None
+    eval_version: Optional[str] = None
     sample_size: Optional[int] = None
     updated_at: Optional[float] = None
-    provenance: str = "unknown"  # "eval_benchmark", "curated_policy", "catalog", "unknown"
+    captured_at: Optional[float] = None
+    provenance: str = "unknown"  # "eval_benchmark", "curated_policy", "unknown"
     confidence: float = 0.0  # [0.0, 1.0]
 
     @property
@@ -138,16 +171,22 @@ class CostEvidence(BaseModel):
     """Verifiable evidence supporting request-level cost estimation."""
 
     expected_cost_usd: Optional[float] = None
-    input_tokens: int = 1000
-    output_tokens: int = 500
+    catalog_price_proxy: Optional[float] = None
+    price_proxy_policy_version: Optional[str] = None
+    is_price_proxy: bool = False
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
     input_cost_per_1m: Optional[float] = None
     output_cost_per_1m: Optional[float] = None
     is_free: bool = False
-    provenance: str = "unknown"  # "free_local", "measured_tokens_unit_pricing", "unknown"
+    provenance: str = "unknown"  # "free_local", "measured_tokens_unit_pricing", "estimated_tokens_unit_pricing", "catalog_price_proxy", "unknown"
 
     @property
     def is_known(self) -> bool:
-        return self.is_free or (self.expected_cost_usd is not None and self.provenance != "unknown")
+        return self.is_free or (
+            (self.expected_cost_usd is not None or self.catalog_price_proxy is not None)
+            and self.provenance != "unknown"
+        )
 
 
 class LatencyEvidence(BaseModel):
@@ -244,6 +283,8 @@ class RoutingDecision(BaseModel):
     tie_break_applied: bool = False
     tie_break_reason: Optional[str] = None
     incomplete_data_warning: Optional[str] = None
+    objective_policy_version: str = "r3.9_v1"
+    metric_normalization_version: str = "bounded_threshold_v1"
     timestamp: float = Field(default_factory=time.time)
 
     @property

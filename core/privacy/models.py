@@ -163,6 +163,17 @@ class EffectiveRoutingPolicy(BaseModel):
                     return True
         return False
 
+    def is_provider_permitted(self, provider_id: str, provider_def: Optional[Any] = None) -> bool:
+        """Check whether a provider is permitted under this effective privacy policy."""
+        from core.privacy.engine import PrivacyPolicyEngine
+
+        eligibility = PrivacyPolicyEngine.evaluate_provider_privacy(
+            provider_id=provider_id,
+            effective_policy=self,
+            provider_def=provider_def,
+        )
+        return eligibility.eligible
+
 
 class PrivacyEligibilityReason(str, Enum):
     """Exhaustive taxonomy of privacy eligibility outcomes and rejection codes."""

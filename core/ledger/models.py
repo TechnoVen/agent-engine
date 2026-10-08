@@ -73,6 +73,11 @@ class ModelRoutingTrace(BaseModel):
     final_score: Optional[float] = None
     selection_reason: Optional[str] = None
     tie_break_applied: bool = False
+    objective_policy_version: Optional[str] = None
+    metric_normalization_version: Optional[str] = None
+    is_price_proxy: bool = False
+    catalog_price_proxy: Optional[float] = None
+    price_proxy_policy_version: Optional[str] = None
 
     @property
     def provider_id(self) -> Optional[str]:

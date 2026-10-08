@@ -38,17 +38,24 @@ from core.execution.models import (
     current_timestamp_iso,
     generate_execution_id,
 )
+from core.context.models import ContentAuthority
 from core.execution.state import TERMINAL_STATES, ExecutionStateMachine
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from core.router.model_router import ResolvedModel
+from core.router.models import (
+    ExecutionRoutingPreferences,
+    RoutingObjectiveProfile,
+    RoutingPreferenceSource,
+)
 from core.safety.pending import PendingOperationRegistry
 from core.safety.policy import PolicyDecision, PolicyEngine
 from core.skills.boundary import CapabilityBoundary
 from core.skills.path import compute_effective_workspace_scopes
 from core.skills.models import Skill, SkillMetadata, SkillPermission, SkillSource
 from core.ledger.models import sanitize_sensitive_data, _SENSITIVE_KEY_PATTERN
+from core.privacy.models import NoEligibleModelUnderPrivacyPolicyError
 from core.storage import get_storage_backend
 from core.storage.base import StorageBackend
 from core.telemetry.cost import CostTracker
@@ -1120,7 +1127,6 @@ class ExecutionCoordinator:
                 DataRoutingClass,
                 DataRoutingPolicy,
                 EffectiveRoutingPolicy,
-                NoEligibleModelUnderPrivacyPolicyError,
             )
 
             # Resolve project privacy policy if configured
@@ -1140,9 +1146,13 @@ class ExecutionCoordinator:
                 except Exception as proj_err:
                     logger.debug("Failed to load project privacy policy: %s", proj_err)
 
-            # Resolve task policy from request inputs
+            # Resolve task policy from request attributes or request inputs
+            req_routing_pol = getattr(request, "routing_policy", None) or getattr(
+                request, "privacy_policy", None
+            )
             task_data_policy = (
-                request.inputs.get("data_routing_policy")
+                req_routing_pol
+                or request.inputs.get("data_routing_policy")
                 or request.inputs.get("privacy_policy")
                 or request.inputs.get("privacy_class")
                 or request.inputs.get("data_routing_class")
@@ -1150,7 +1160,8 @@ class ExecutionCoordinator:
 
             # Determine whether caller is trusted authority
             is_trusted_auth = bool(
-                request.inputs.get("is_trusted_authority")
+                req_routing_pol is not None
+                or request.inputs.get("is_trusted_authority")
                 or request.inputs.get("trusted_authority")
                 or request.inputs.get("ipc_authenticated")
                 or (request.inputs.get("actor") in ("local_operator", "trusted_operator", "admin"))
@@ -1163,17 +1174,111 @@ class ExecutionCoordinator:
             ):
                 is_trusted_auth = False
 
-            effective_policy: EffectiveRoutingPolicy = PrivacyPolicyEngine.resolve_effective_policy(
-                profile_policy=get_system_routing_policy(),
-                project_policy=project_data_policy,
-                task_policy=task_data_policy,
-                is_trusted_authority=is_trusted_auth,
-            )
+            if isinstance(req_routing_pol, EffectiveRoutingPolicy):
+                effective_policy = req_routing_pol
+            else:
+                effective_policy: EffectiveRoutingPolicy = (
+                    PrivacyPolicyEngine.resolve_effective_policy(
+                        profile_policy=get_system_routing_policy(),
+                        project_policy=project_data_policy,
+                        task_policy=task_data_policy,
+                        is_trusted_authority=is_trusted_auth,
+                    )
+                )
 
-            # Phase 2.6: Objective Resolution (Task R3.9)
-            routing_objective = request.inputs.get("routing_objective") or request.inputs.get(
-                "objective"
-            )
+            # Phase 2.6: Objective Resolution with Strict Authority Validation (Task R3.9)
+            routing_objective = None
+            pref_source = None
+            pref_authority = None
+
+            # 1. Typed ExecutionRequest.routing_preferences
+            if getattr(request, "routing_preferences", None) is not None:
+                r_pref = request.routing_preferences
+                if hasattr(r_pref, "is_trusted") and r_pref.is_trusted():
+                    prof = r_pref.objective_profile
+                    routing_objective = prof.value if hasattr(prof, "value") else str(prof)
+                    pref_source = getattr(r_pref.source, "value", str(r_pref.source))
+                    pref_authority = getattr(r_pref.authority, "value", str(r_pref.authority))
+                else:
+                    logger.warning(
+                        "Rejected untrusted request.routing_preferences (source=%s, authority=%s)",
+                        getattr(r_pref, "source", None),
+                        getattr(r_pref, "authority", None),
+                    )
+
+            # 2. Check inputs["routing_preferences"] dict with explicit authority validation
+            if not routing_objective and "routing_preferences" in request.inputs:
+                raw_pref = request.inputs.get("routing_preferences")
+                if isinstance(raw_pref, dict):
+                    try:
+                        pref_obj = ExecutionRoutingPreferences.model_validate(raw_pref)
+                        if pref_obj.is_trusted():
+                            routing_objective = pref_obj.objective_profile.value
+                            pref_source = pref_obj.source.value
+                            pref_authority = pref_obj.authority.value
+                        else:
+                            logger.warning(
+                                "Rejected untrusted inputs['routing_preferences']: %s", pref_obj
+                            )
+                    except Exception as e:
+                        logger.warning("Failed to validate inputs['routing_preferences']: %s", e)
+
+            # 3. Check legacy inputs["routing_objective"] ONLY if accompanied by trusted authority/provenance
+            if not routing_objective and (
+                "routing_objective" in request.inputs or "objective" in request.inputs
+            ):
+                raw_val = request.inputs.get("routing_objective") or request.inputs.get("objective")
+                input_authority = request.inputs.get("authority") or request.inputs.get(
+                    "content_authority"
+                )
+                input_source = request.inputs.get("source") or request.inputs.get("source_type")
+                actor = request.inputs.get("actor")
+
+                # Invalidate if sourced from untrusted content (retrieved document, tool output, model output)
+                is_untrusted_source = (
+                    input_authority
+                    in (
+                        "evidence",
+                        "untrusted_content",
+                        "untrusted",
+                        ContentAuthority.EVIDENCE.value,
+                    )
+                    or input_source
+                    in (
+                        "retrieved_document",
+                        "tool_output",
+                        "model_output",
+                        "web",
+                        "file",
+                        "skill_param",
+                    )
+                    or request.inputs.get("untrusted_content")
+                    or request.inputs.get("forged")
+                    or request.inputs.get("untrusted_objective")
+                )
+                if is_untrusted_source:
+                    logger.warning(
+                        "Ignored routing_objective from untrusted source/authority (%s, %s)",
+                        input_source,
+                        input_authority,
+                    )
+                elif actor in ("user", "test_suite", "operator", "admin") or input_authority in (
+                    "user_directive",
+                    "system_policy",
+                    ContentAuthority.USER_DIRECTIVE.value,
+                    ContentAuthority.SYSTEM_POLICY.value,
+                ):
+                    clean_val = str(raw_val).strip().lower()
+                    if clean_val in [p.value for p in RoutingObjectiveProfile]:
+                        routing_objective = clean_val
+                        pref_source = RoutingPreferenceSource.USER_DIRECTIVE.value
+                        pref_authority = ContentAuthority.USER_DIRECTIVE.value
+                else:
+                    logger.warning(
+                        "Ignored ambiguous routing_objective in inputs without trusted authority marker"
+                    )
+
+            # 4. Fallback to Project Configuration (trusted project settings)
             if not routing_objective and request.project_id:
                 try:
                     proj_doc = self.storage.get_project(request.project_id)
@@ -1181,12 +1286,16 @@ class ExecutionCoordinator:
                         settings_dict = proj_doc.get("settings") or {}
                         if isinstance(settings_dict, dict) and "routing_objective" in settings_dict:
                             routing_objective = settings_dict.get("routing_objective")
+                            pref_source = RoutingPreferenceSource.PROJECT_CONFIG.value
+                            pref_authority = ContentAuthority.SYSTEM_POLICY.value
                 except Exception as proj_err:
                     logger.debug("Failed to load project routing objective: %s", proj_err)
 
-            # Security invariant: Untrusted caller cannot forge or override objective
-            if request.inputs.get("forged") or request.inputs.get("untrusted_objective"):
+            # 5. Default profile
+            if not routing_objective:
                 routing_objective = "balanced"
+                pref_source = RoutingPreferenceSource.PROFILE_CONFIG.value
+                pref_authority = ContentAuthority.SYSTEM_POLICY.value
 
             # Phase 3: Routing & Tier Resolution
             state_machine.transition(ExecutionStatus.ROUTING)
@@ -1267,6 +1376,25 @@ class ExecutionCoordinator:
                         "final_score": rd.final_score,
                         "selection_reason": rd.selection_reason,
                         "tie_break_applied": rd.tie_break_applied,
+                        "objective_policy_version": getattr(
+                            rd, "objective_policy_version", "r3.9_v1"
+                        ),
+                        "metric_normalization_version": getattr(
+                            rd, "metric_normalization_version", "bounded_threshold_v1"
+                        ),
+                        "is_price_proxy": getattr(rd.winner.metrics.cost, "is_price_proxy", False)
+                        if hasattr(rd, "winner") and rd.winner
+                        else False,
+                        "catalog_price_proxy": getattr(
+                            rd.winner.metrics.cost, "catalog_price_proxy", None
+                        )
+                        if hasattr(rd, "winner") and rd.winner
+                        else None,
+                        "price_proxy_policy_version": getattr(
+                            rd.winner.metrics.cost, "price_proxy_policy_version", None
+                        )
+                        if hasattr(rd, "winner") and rd.winner
+                        else None,
                     }
                 )
             elif routing_objective:
@@ -2189,72 +2317,200 @@ class ExecutionCoordinator:
                     state_machine.current_sequence_num += 1
                     raise adapter_err
             elif self._dispatch_override:
-                res = self._dispatch_override(exec_context, tier, provider, model_name)
-                if hasattr(res, "__aiter__"):
-                    collected = []
-                    try:
-                        async for chunk in res:
-                            if token.is_cancelled:
-                                if hasattr(res, "aclose"):
-                                    await res.aclose()
-                                break
-                            chunk_text = (
-                                chunk
-                                if isinstance(chunk, str)
-                                else chunk.get("chunk", chunk.get("response", str(chunk)))
+                try:
+                    res = self._dispatch_override(exec_context, tier, provider, model_name)
+                    if hasattr(res, "__aiter__"):
+                        collected = []
+                        try:
+                            async for chunk in res:
+                                if token.is_cancelled:
+                                    if hasattr(res, "aclose"):
+                                        await res.aclose()
+                                    break
+                                chunk_text = (
+                                    chunk
+                                    if isinstance(chunk, str)
+                                    else chunk.get("chunk", chunk.get("response", str(chunk)))
+                                )
+                                collected.append(chunk_text)
+                                emit_chunk(chunk_text)
+                        except (asyncio.CancelledError, ExecutionCancelledError):
+                            token.cancel(
+                                reason=CancellationReason.CLIENT_DISCONNECT, actor="client"
                             )
-                            collected.append(chunk_text)
-                            emit_chunk(chunk_text)
-                    except (asyncio.CancelledError, ExecutionCancelledError):
-                        token.cancel(reason=CancellationReason.CLIENT_DISCONNECT, actor="client")
-                    if token.is_cancelled:
-                        return handle_cancellation("dispatch_override", "".join(collected))
-                    outputs = {"response": "".join(collected)}
-                elif hasattr(res, "__iter__") and not isinstance(res, (dict, list, str, bytes)):
-                    collected = []
-                    try:
-                        for chunk in res:
-                            if token.is_cancelled:
-                                if hasattr(res, "close"):
-                                    res.close()
-                                break
-                            chunk_text = (
-                                chunk
-                                if isinstance(chunk, str)
-                                else chunk.get("chunk", chunk.get("response", str(chunk)))
+                        if token.is_cancelled:
+                            return handle_cancellation("dispatch_override", "".join(collected))
+                        outputs = {"response": "".join(collected)}
+                    elif hasattr(res, "__iter__") and not isinstance(res, (dict, list, str, bytes)):
+                        collected = []
+                        try:
+                            for chunk in res:
+                                if token.is_cancelled:
+                                    if hasattr(res, "close"):
+                                        res.close()
+                                    break
+                                chunk_text = (
+                                    chunk
+                                    if isinstance(chunk, str)
+                                    else chunk.get("chunk", chunk.get("response", str(chunk)))
+                                )
+                                collected.append(chunk_text)
+                                emit_chunk(chunk_text)
+                        except (asyncio.CancelledError, ExecutionCancelledError):
+                            token.cancel(
+                                reason=CancellationReason.CLIENT_DISCONNECT, actor="client"
                             )
-                            collected.append(chunk_text)
-                            emit_chunk(chunk_text)
-                    except (asyncio.CancelledError, ExecutionCancelledError):
-                        token.cancel(reason=CancellationReason.CLIENT_DISCONNECT, actor="client")
-                    if token.is_cancelled:
-                        return handle_cancellation("dispatch_override", "".join(collected))
-                    outputs = {"response": "".join(collected)}
-                elif asyncio.iscoroutine(res):
-                    task = asyncio.create_task(res)
-                    token.add_callback(task.cancel)
-                    try:
-                        awaited = await task
-                    except (asyncio.CancelledError, ExecutionCancelledError):
-                        return handle_cancellation("dispatch_override")
-                    if token.is_cancelled:
-                        return handle_cancellation("dispatch_override")
-                    if isinstance(awaited, dict):
-                        outputs = awaited
+                        if token.is_cancelled:
+                            return handle_cancellation("dispatch_override", "".join(collected))
+                        outputs = {"response": "".join(collected)}
+                    elif asyncio.iscoroutine(res):
+                        task = asyncio.create_task(res)
+                        token.add_callback(task.cancel)
+                        try:
+                            awaited = await task
+                        except (asyncio.CancelledError, ExecutionCancelledError):
+                            return handle_cancellation("dispatch_override")
+                        if token.is_cancelled:
+                            return handle_cancellation("dispatch_override")
+                        if isinstance(awaited, dict):
+                            outputs = awaited
+                        else:
+                            outputs = {"response": str(awaited)}
+                        resp_text = str(outputs.get("response", ""))
+                        if chunks_emitted == 0 and resp_text:
+                            emit_chunk(resp_text)
                     else:
-                        outputs = {"response": str(awaited)}
-                    resp_text = str(outputs.get("response", ""))
-                    if chunks_emitted == 0 and resp_text:
-                        emit_chunk(resp_text)
-                else:
-                    if isinstance(res, dict):
-                        outputs = res
+                        if isinstance(res, dict):
+                            outputs = res
+                        else:
+                            outputs = {"response": str(res)}
+                        resp_text = str(outputs.get("response", ""))
+                        if chunks_emitted == 0 and resp_text:
+                            emit_chunk(resp_text)
+                    completion_tokens = estimate_tokens(str(outputs.get("response", "")))
+                except (asyncio.CancelledError, ExecutionCancelledError):
+                    raise
+                except Exception as prov_err:
+                    if chunks_emitted > 0:
+                        raise
+                    logger.warning(
+                        "Provider '%s/%s' dispatch override failed: %s",
+                        provider,
+                        model_name,
+                        prov_err,
+                    )
+                    self.model_router.circuit_breaker.record_failure(provider, prov_err)
+                    fb_candidates = []
+                    if (
+                        getattr(resolved, "routing_decision", None)
+                        and resolved.routing_decision.fallback_chain
+                    ):
+                        fb_candidates = [
+                            p for p in resolved.routing_decision.fallback_chain if p != provider
+                        ]
+                    elif getattr(resolved, "fallback_chain", None):
+                        fb_candidates = [p for p in resolved.fallback_chain if p != provider]
                     else:
-                        outputs = {"response": str(res)}
-                    resp_text = str(outputs.get("response", ""))
-                    if chunks_emitted == 0 and resp_text:
-                        emit_chunk(resp_text)
-                completion_tokens = estimate_tokens(str(outputs.get("response", "")))
+                        available = self.model_router.get_available_providers(
+                            task_type=request.task_type
+                        )
+                        fb_candidates = [p for p in available if p != provider]
+
+                    selected_fb_provider = None
+                    for cand_p in fb_candidates:
+                        if (
+                            effective_policy is not None
+                            and not effective_policy.is_provider_permitted(cand_p)
+                        ):
+                            continue
+                        if not self.model_router.circuit_breaker.can_attempt(cand_p):
+                            continue
+                        if hasattr(self.model_router, "provider_registry"):
+                            p_stat = self.model_router.provider_registry.get_provider_status(cand_p)
+                            if p_stat is not None and not p_stat.is_available:
+                                continue
+                        selected_fb_provider = cand_p
+                        break
+
+                    if selected_fb_provider:
+                        fb_provider = selected_fb_provider
+                        fb_model = self.model_router._get_default_model_for_provider(fb_provider)
+                        logger.info(
+                            "Failing over dispatch override to '%s/%s'", fb_provider, fb_model
+                        )
+                        combined_event_sink(
+                            ExecutionEvent(
+                                execution_id=exec_id,
+                                sequence_num=state_machine.current_sequence_num,
+                                event_type=ExecutionEventType.ROUTING_RESOLVED,
+                                payload={
+                                    "tier": tier.value if hasattr(tier, "value") else str(tier),
+                                    "provider": fb_provider,
+                                    "model": fb_model,
+                                    "is_fallback": True,
+                                    "fallback_reason": str(prov_err),
+                                    "failed_provider": provider,
+                                    "failed_model": model_name,
+                                },
+                            )
+                        )
+                        state_machine.current_sequence_num += 1
+                        fb_res = self._dispatch_override(exec_context, tier, fb_provider, fb_model)
+                        if hasattr(fb_res, "__aiter__"):
+                            collected = []
+                            async for chunk in fb_res:
+                                chunk_text = (
+                                    chunk
+                                    if isinstance(chunk, str)
+                                    else chunk.get("chunk", chunk.get("response", str(chunk)))
+                                )
+                                collected.append(chunk_text)
+                                emit_chunk(chunk_text)
+                            outputs = {"response": "".join(collected)}
+                        elif hasattr(fb_res, "__iter__") and not isinstance(
+                            fb_res, (dict, list, str, bytes)
+                        ):
+                            collected = []
+                            for chunk in fb_res:
+                                chunk_text = (
+                                    chunk
+                                    if isinstance(chunk, str)
+                                    else chunk.get("chunk", chunk.get("response", str(chunk)))
+                                )
+                                collected.append(chunk_text)
+                                emit_chunk(chunk_text)
+                            outputs = {"response": "".join(collected)}
+                        elif asyncio.iscoroutine(fb_res):
+                            awaited = await fb_res
+                            outputs = (
+                                awaited if isinstance(awaited, dict) else {"response": str(awaited)}
+                            )
+                            resp_text = str(outputs.get("response", ""))
+                            if chunks_emitted == 0 and resp_text:
+                                emit_chunk(resp_text)
+                        else:
+                            outputs = (
+                                fb_res if isinstance(fb_res, dict) else {"response": str(fb_res)}
+                            )
+                            resp_text = str(outputs.get("response", ""))
+                            if chunks_emitted == 0 and resp_text:
+                                emit_chunk(resp_text)
+                        provider = fb_provider
+                        model_name = fb_model
+                        execution.provider = provider
+                        execution.model = model_name
+                        completion_tokens = estimate_tokens(str(outputs.get("response", "")))
+                    else:
+                        if (
+                            effective_policy
+                            and effective_policy.effective_class == DataRoutingClass.LOCAL_ONLY
+                        ):
+                            raise NoEligibleModelUnderPrivacyPolicyError(
+                                f"NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY: Primary provider '{provider}' failed and cloud fallback forbidden under LOCAL_ONLY"
+                            )
+                        raise RuntimeError(
+                            f"NO_AVAILABLE_PROVIDER: Primary provider '{provider}' failed and no eligible fallback provider available"
+                        )
             else:
                 # 1. Deterministic evaluation check (deterministic-first routing and quality-adjusted cost routing)
                 det_result = self._eval_deterministic(request.prompt)
@@ -2342,13 +2598,58 @@ class ExecutionCoordinator:
                             "Provider '%s/%s' dispatch failed: %s", provider, model_name, prov_err
                         )
                         self.model_router.circuit_breaker.record_failure(provider, prov_err)
-                        # Attempt fallback
-                        available = self.model_router.get_available_providers(
-                            task_type=request.task_type
-                        )
-                        candidates = [p for p in available if p != provider]
-                        if candidates:
-                            fb_provider = candidates[0]
+                        # Attempt fallback with dynamic pre-dispatch re-evaluation (CTO Item 5)
+                        fb_candidates = []
+                        if (
+                            getattr(resolved, "routing_decision", None)
+                            and resolved.routing_decision.fallback_chain
+                        ):
+                            fb_candidates = [
+                                p for p in resolved.routing_decision.fallback_chain if p != provider
+                            ]
+                        elif getattr(resolved, "fallback_chain", None):
+                            fb_candidates = [p for p in resolved.fallback_chain if p != provider]
+                        else:
+                            available = self.model_router.get_available_providers(
+                                task_type=request.task_type
+                            )
+                            fb_candidates = [p for p in available if p != provider]
+
+                        # Re-evaluate hard eligibility before dispatching to each fallback candidate
+                        selected_fb_provider = None
+                        for cand_p in fb_candidates:
+                            # 1. Privacy Policy Recheck (Under LOCAL_ONLY, no cloud provider may ever be selected)
+                            if effective_policy is not None:
+                                if not effective_policy.is_provider_permitted(cand_p):
+                                    logger.info(
+                                        "Fallback candidate '%s' rejected by current privacy policy (%s)",
+                                        cand_p,
+                                        effective_policy.effective_class,
+                                    )
+                                    continue
+                            # 2. Circuit Breaker Recheck
+                            if not self.model_router.circuit_breaker.can_attempt(cand_p):
+                                logger.info(
+                                    "Fallback candidate '%s' rejected: circuit breaker OPEN",
+                                    cand_p,
+                                )
+                                continue
+                            # 3. Provider Availability Recheck
+                            if hasattr(self.model_router, "provider_registry"):
+                                p_stat = self.model_router.provider_registry.get_provider_status(
+                                    cand_p
+                                )
+                                if p_stat is not None and not p_stat.is_available:
+                                    logger.info(
+                                        "Fallback candidate '%s' rejected: provider UNAVAILABLE",
+                                        cand_p,
+                                    )
+                                    continue
+                            selected_fb_provider = cand_p
+                            break
+
+                        if selected_fb_provider:
+                            fb_provider = selected_fb_provider
                             fb_model = self.model_router._get_default_model_for_provider(
                                 fb_provider
                             )
@@ -2630,7 +2931,13 @@ class ExecutionCoordinator:
                 return handle_cancellation("interrupted")
             logger.exception("Execution '%s' encountered an unhandled error: %s", exec_id, err)
             err_str = str(err)
-            if "CROSS_PROJECT_VIOLATION" in err_str:
+            if "NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY" in err_str or isinstance(
+                err, NoEligibleModelUnderPrivacyPolicyError
+            ):
+                err_code = "NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY"
+            elif "NO_AVAILABLE_PROVIDER" in err_str:
+                err_code = "NO_AVAILABLE_PROVIDER"
+            elif "CROSS_PROJECT_VIOLATION" in err_str:
                 err_code = "CROSS_PROJECT_VIOLATION"
             elif any(k in err_str.lower() for k in ("timeout", "timed out", "deadline")):
                 err_code = "PROVIDER_TIMEOUT"

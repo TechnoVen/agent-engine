@@ -26,7 +26,6 @@ from core.execution.models import RoutingTier
 from core.model_registry.models import (
     ModelDefinition,
     ModelRequirements,
-    TriStateBool,
 )
 from core.privacy.engine import PrivacyPolicyEngine
 from core.privacy.models import (
@@ -202,6 +201,20 @@ class RoutingOptimizer:
                         )
                     )
                     continue
+            elif self.health_prober is not None:
+                probe = self.health_prober._cache.get(pid)
+                if probe is not None:
+                    probe_age = now - (probe.checked_at or 0.0)
+                    if probe_age <= 10.0 and not probe.online:
+                        rejections.append(
+                            RoutingRejection(
+                                model_id=mid,
+                                provider_id=pid,
+                                stage="HEALTH",
+                                reason=f"Provider '{pid}' health prober check failed: {probe.error or 'offline'}",
+                            )
+                        )
+                        continue
 
             # 4. Budget / Latency Ceiling Constraints
             if routing_obj.max_cost_dollars is not None and not model.pricing.is_free:
@@ -326,10 +339,15 @@ class RoutingOptimizer:
             if cost_ev.is_free:
                 cost_util = 1.0
             elif cost_ev.is_known and cost_ev.expected_cost_usd is not None:
-                # Invert cost: 0.0 is 1.0, ceiling is 0.0
+                # Invert request cost: 0.0 is 1.0, ceiling is 0.0
                 cost_norm = cost_ev.expected_cost_usd / max(
                     0.001, routing_obj.cost_norm_ceiling_usd
                 )
+                cost_util = max(0.0, min(1.0, 1.0 - cost_norm))
+            elif cost_ev.is_known and cost_ev.catalog_price_proxy is not None:
+                # Invert catalog price proxy: 0.0 is 1.0, ceiling is 0.0
+                proxy_ceiling = getattr(routing_obj, "price_proxy_norm_ceiling", 20.0)
+                cost_norm = cost_ev.catalog_price_proxy / max(0.1, proxy_ceiling)
                 cost_util = max(0.0, min(1.0, 1.0 - cost_norm))
             else:
                 # Unknown cost: conservative utility with uncertainty penalty
@@ -356,6 +374,9 @@ class RoutingOptimizer:
                 health_util = 1.0
             elif health_ev.is_degraded or health_ev.status == ProviderHealthStatus.DEGRADED:
                 health_util = 0.60  # Explicit health penalty
+            elif health_ev.status == ProviderHealthStatus.UNKNOWN:
+                health_util = 0.70  # Explicit penalty for unknown/stale health so stale HEALTHY is never an advantage
+                uncertainty_penalty += 0.05
             else:
                 health_util = 0.80
 
@@ -415,7 +436,7 @@ class RoutingOptimizer:
                 else (
                     c.metrics.cost.expected_cost_usd
                     if c.metrics.cost.expected_cost_usd is not None
-                    else 999.0
+                    else (c.metrics.cost.catalog_price_proxy or 999.0)
                 )
             )
             # Lower latency preferred
@@ -447,10 +468,20 @@ class RoutingOptimizer:
             second_s = ranked[1].score.total_score if ranked[1].score else 0.0
             if abs(first_s - second_s) < 1e-5:
                 tie_break_applied = True
+                first_c = (
+                    ranked[0].metrics.cost.expected_cost_usd
+                    if ranked[0].metrics.cost.expected_cost_usd is not None
+                    else (ranked[0].metrics.cost.catalog_price_proxy or 0.0)
+                )
+                second_c = (
+                    ranked[1].metrics.cost.expected_cost_usd
+                    if ranked[1].metrics.cost.expected_cost_usd is not None
+                    else (ranked[1].metrics.cost.catalog_price_proxy or 0.0)
+                )
                 tie_break_reason = (
                     f"Deterministic tie-break between '{ranked[0].canonical_id}' and '{ranked[1].canonical_id}': "
                     f"confidence ({ranked[0].metrics.quality.confidence:.2f} vs {ranked[1].metrics.quality.confidence:.2f}), "
-                    f"cost (${ranked[0].metrics.cost.expected_cost_usd or 0:.4f} vs ${ranked[1].metrics.cost.expected_cost_usd or 0:.4f}), "
+                    f"cost (${first_c:.4f} vs ${second_c:.4f}), "
                     f"canonical '{ranked[0].canonical_id}'"
                 )
 
@@ -486,6 +517,8 @@ class RoutingOptimizer:
             tie_break_applied=tie_break_applied,
             tie_break_reason=tie_break_reason,
             incomplete_data_warning=warning_str,
+            objective_policy_version="r3.9_v1",
+            metric_normalization_version="bounded_threshold_v1",
             timestamp=now,
         )
 
@@ -499,14 +532,22 @@ class RoutingOptimizer:
         task_type: Optional[str] = None,
         storage: Optional[Any] = None,
     ) -> QualityEvidence:
-        """Extract factual quality evidence without brand bias."""
+        """Extract factual quality evidence without brand or size bias."""
         task_family = task_type or "general"
 
-        # 1. Check empirical benchmarks from storage if provided
+        # 1. Check empirical benchmarks from storage if provided (task-family specific preferred)
         if storage is not None and hasattr(storage, "get_benchmarks"):
             try:
                 benchmarks = storage.get_benchmarks(task_type=task_type)
-                for b in benchmarks:
+
+                # Sort benchmarks to prioritize exact task_family match over general
+                def bench_priority(b):
+                    b_tf = b.get("task_family") or b.get("task_type") or "general"
+                    return 0 if b_tf == task_family else 1
+
+                sorted_benchmarks = sorted(benchmarks, key=bench_priority)
+
+                for b in sorted_benchmarks:
                     b_model = (b.get("model_name") or b.get("model") or "").strip().lower()
                     if b_model in (
                         model.model_id.lower(),
@@ -520,19 +561,22 @@ class RoutingOptimizer:
                         )
                         meta = b.get("metadata", {})
                         conf = float(b.get("confidence", 0.90))
+                        b_tf = b.get("task_family") or b.get("task_type") or task_family
                         return QualityEvidence(
                             score=succ,
-                            task_family=task_family,
+                            task_family=b_tf,
                             eval_id=str(b.get("id", "benchmark")),
+                            eval_version=str(b.get("version", "v1")),
                             sample_size=meta.get("sample_size"),
                             updated_at=b.get("created_at"),
+                            captured_at=b.get("captured_at") or b.get("created_at"),
                             provenance="eval_benchmark",
                             confidence=conf,
                         )
             except Exception as e:
                 logger.debug("Benchmark lookup failed: %s", e)
 
-        # 2. Check model metadata for curated quality score or rank
+        # 2. Check model metadata for curated quality score or rank (fallback evidence only)
         curated_rank = model.metadata.get("curated_quality_rank")
         if curated_rank is not None:
             try:
@@ -559,19 +603,7 @@ class RoutingOptimizer:
             except (ValueError, TypeError):
                 pass
 
-        # 3. Model capabilities fallback
-        if (
-            model.capabilities.reasoning == TriStateBool.TRUE
-            and model.capabilities.coding == TriStateBool.TRUE
-        ):
-            return QualityEvidence(
-                score=0.75,
-                task_family=task_family,
-                provenance="catalog",
-                confidence=0.50,
-            )
-
-        # 4. Unknown quality
+        # 3. Unknown quality (Never infer quality from model size, provider brand, or capabilities)
         return QualityEvidence(
             score=None,
             task_family=task_family,
@@ -582,27 +614,31 @@ class RoutingOptimizer:
     def _collect_cost_evidence(
         self,
         model: ModelDefinition,
-        input_tokens: int,
-        output_tokens: int,
+        input_tokens: Optional[int] = None,
+        output_tokens: Optional[int] = None,
     ) -> CostEvidence:
-        """Extract request-level token pricing facts."""
+        """Extract request-level token pricing facts or honest catalog price proxy."""
         if model.pricing is None:
             return CostEvidence(
                 expected_cost_usd=None,
+                catalog_price_proxy=None,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 is_free=False,
+                is_price_proxy=False,
                 provenance="unknown",
             )
 
         if model.pricing.is_free:
             return CostEvidence(
                 expected_cost_usd=0.0,
+                catalog_price_proxy=0.0,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 input_cost_per_1m=0.0,
                 output_cost_per_1m=0.0,
                 is_free=True,
+                is_price_proxy=False,
                 provenance="free_local",
             )
 
@@ -610,23 +646,49 @@ class RoutingOptimizer:
         out_price = model.pricing.output_cost_per_million or in_price
 
         if in_price is not None and out_price is not None:
-            cost_usd = (input_tokens * in_price + output_tokens * out_price) / 1_000_000.0
-            return CostEvidence(
-                expected_cost_usd=round(cost_usd, 6),
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                input_cost_per_1m=in_price,
-                output_cost_per_1m=out_price,
-                is_free=False,
-                provenance="measured_tokens_unit_pricing",
-            )
+            # If explicit token estimates exist, compute request-aware expected cost
+            if (
+                input_tokens is not None
+                and input_tokens > 0
+                and output_tokens is not None
+                and output_tokens > 0
+            ):
+                cost_usd = (input_tokens * in_price + output_tokens * out_price) / 1_000_000.0
+                return CostEvidence(
+                    expected_cost_usd=round(cost_usd, 6),
+                    catalog_price_proxy=None,
+                    is_price_proxy=False,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    input_cost_per_1m=in_price,
+                    output_cost_per_1m=out_price,
+                    is_free=False,
+                    provenance="estimated_tokens_unit_pricing",
+                )
+            else:
+                # Without request token estimates, compute catalog price proxy
+                price_proxy = round(0.75 * in_price + 0.25 * out_price, 4)
+                return CostEvidence(
+                    expected_cost_usd=None,
+                    catalog_price_proxy=price_proxy,
+                    price_proxy_policy_version="v1_0.75_0.25",
+                    is_price_proxy=True,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    input_cost_per_1m=in_price,
+                    output_cost_per_1m=out_price,
+                    is_free=False,
+                    provenance="catalog_price_proxy",
+                )
 
         # Unknown pricing: missing is never zero
         return CostEvidence(
             expected_cost_usd=None,
+            catalog_price_proxy=None,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             is_free=False,
+            is_price_proxy=False,
             provenance="unknown",
         )
 
@@ -721,9 +783,22 @@ class RoutingOptimizer:
         if self.circuit_breaker is not None:
             circuit = self.circuit_breaker.get_state(pid).value
 
+        now = time.time()
         status = ProviderHealthStatus.HEALTHY
         if health_map and pid in health_map:
             status = health_map[pid]
+        elif self.health_prober is not None:
+            probe = self.health_prober._cache.get(pid)
+            if probe is not None:
+                probe_age = now - (probe.checked_at or 0.0)
+                if probe_age > 10.0:
+                    status = ProviderHealthStatus.UNKNOWN
+                elif not probe.online:
+                    status = ProviderHealthStatus.UNAVAILABLE
+                elif probe.latency_ms > 4000.0:
+                    status = ProviderHealthStatus.DEGRADED
+                else:
+                    status = ProviderHealthStatus.HEALTHY
 
         is_degraded = status == ProviderHealthStatus.DEGRADED
         return HealthEvidence(
@@ -731,7 +806,7 @@ class RoutingOptimizer:
             is_degraded=is_degraded,
             degraded_reason="Latency or failure rate elevated" if is_degraded else None,
             circuit_state=circuit,
-            checked_at=time.time(),
+            checked_at=now,
         )
 
     def _infer_tier(self, model: ModelDefinition) -> RoutingTier:
