@@ -52,6 +52,7 @@ import {
   LocalRecommendationResponse,
   TaskRequirements,
   DownloadStatus,
+  ModelEconomicsSummary,
 } from '../types';
 
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
@@ -2045,6 +2046,34 @@ class SidecarClient {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || `Failed to fetch installed models: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async getModelEconomics(filters?: {
+    taskFamily?: string;
+    providerId?: string;
+    modelId?: string;
+    evidenceSource?: string;
+    evaluatorVersion?: string;
+    effectivePrivacyClass?: string;
+  }): Promise<ModelEconomicsSummary[]> {
+    const params = new URLSearchParams();
+    if (filters?.taskFamily) params.append('task_family', filters.taskFamily);
+    if (filters?.providerId) params.append('provider_id', filters.providerId);
+    if (filters?.modelId) params.append('model_id', filters.modelId);
+    if (filters?.evidenceSource) params.append('evidence_source', filters.evidenceSource);
+    if (filters?.evaluatorVersion) params.append('evaluator_version', filters.evaluatorVersion);
+    if (filters?.effectivePrivacyClass) params.append('effective_privacy_class', filters.effectivePrivacyClass);
+    const qs = params.toString();
+    const url = `${this.base}/v1/models/economics${qs ? `?${qs}` : ''}`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch model economics: HTTP ${res.status}`);
     }
     return await res.json();
   }

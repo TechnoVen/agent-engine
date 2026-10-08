@@ -1084,13 +1084,57 @@ export interface DownloadStatus {
   verified_at?: number | null;
   catalog_version?: string;
 }
+export type TaskOutcome = 'SUCCESS' | 'FAILURE' | 'PARTIAL' | 'UNKNOWN';
 
+export type EvidenceSource = 'GOLDEN_EVAL' | 'PRODUCTION_OBSERVATION' | 'BENCHMARK_RUN';
 
+export type EvidenceSufficiencyStatus =
+  | 'SUFFICIENT_EVIDENCE'
+  | 'INSUFFICIENT_EVIDENCE'
+  | 'NO_SUCCESS_EVIDENCE';
 
+export interface Money {
+  amount_micros: number;
+  currency: string;
+}
 
+export interface EconomicsCohortKey {
+  initial_model_identity_str: string;
+  task_family: string;
+  evaluator_version: string;
+  routing_policy_version: string;
+  fallback_policy_version: string;
+  effective_privacy_class: string;
+  evidence_source: EvidenceSource;
+}
 
-
-
-
+export interface ModelEconomicsSummary {
+  cohort_key: EconomicsCohortKey;
+  initial_model_identity: {
+    provider_id: string;
+    model_id: string;
+    variant?: string;
+  };
+  initial_provider_id: string;
+  task_family: string;
+  logical_tasks_count: number;
+  total_attempts_count: number;
+  verified_successes: number;
+  failures: number;
+  partials: number;
+  unknowns: number;
+  total_cost: Money;
+  mean_task_cost: Money;
+  observed_cost_per_verified_success?: Money | null;
+  expected_cost_per_success?: Money | null;
+  status: EvidenceSufficiencyStatus;
+  currency: string;
+  evaluator_version: string;
+  routing_policy_version: string;
+  fallback_policy_version: string;
+  effective_privacy_class: string;
+  evidence_source: EvidenceSource;
+  sample_freshness?: number | null;
+}
 
 

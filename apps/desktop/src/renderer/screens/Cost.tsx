@@ -21,6 +21,7 @@ import {
   DistillationCandidate,
 } from '../types';
 import { sidecarClient } from '../api/client';
+import { ModelEconomicsComparison } from '../components/ModelEconomicsComparison';
 
 export interface CostScreenProps {
   onSelectMode: (mode: Mode) => void;
@@ -688,6 +689,9 @@ export const Cost: React.FC<CostScreenProps> = () => {
             </div>
           </form>
         </div>
+
+        {/* Model Economics & Whole-Chain Cost-Per-Success Comparison */}
+        <ModelEconomicsComparison />
       </div>
     </div>
   );

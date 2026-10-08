@@ -75,6 +75,7 @@ class RoutingOptimizer:
         estimated_input_tokens: int = 1000,
         estimated_output_tokens: int = 500,
         provider_health_map: Optional[Dict[str, ProviderHealthStatus]] = None,
+        economics_service: Optional[Any] = None,
     ) -> RoutingDecision:
         """Execute the complete constrained multi-objective optimization pipeline.
 
@@ -101,7 +102,7 @@ class RoutingOptimizer:
             effective_policy.effective_class.value
             if effective_policy
             else DataRoutingClass.ANY_CONFIGURED.value
-        )
+        ).upper()
         policy_source = effective_policy.source.value if effective_policy else "default"
 
         rejections: List[RoutingRejection] = []
@@ -306,6 +307,10 @@ class RoutingOptimizer:
                 model,
                 input_tokens=estimated_input_tokens,
                 output_tokens=estimated_output_tokens,
+                routing_obj=routing_obj,
+                task_type=task_type,
+                effective_privacy_class=eff_privacy_class,
+                economics_service=economics_service,
             )
 
             # 3. Latency Evidence
@@ -338,6 +343,11 @@ class RoutingOptimizer:
             # Cost utility
             if cost_ev.is_free:
                 cost_util = 1.0
+            elif cost_ev.is_cost_per_success and cost_ev.cost_per_success_usd is not None:
+                # Invert cost per success: 0.0 is 1.0, ceiling is 0.0
+                cps_ceiling = getattr(routing_obj, "cps_norm_ceiling_usd", 0.10)
+                cost_norm = cost_ev.cost_per_success_usd / max(0.001, cps_ceiling)
+                cost_util = max(0.0, min(1.0, 1.0 - cost_norm))
             elif cost_ev.is_known and cost_ev.expected_cost_usd is not None:
                 # Invert request cost: 0.0 is 1.0, ceiling is 0.0
                 cost_norm = cost_ev.expected_cost_usd / max(
@@ -434,9 +444,14 @@ class RoutingOptimizer:
                 0.0
                 if c.metrics.cost.is_free
                 else (
-                    c.metrics.cost.expected_cost_usd
-                    if c.metrics.cost.expected_cost_usd is not None
-                    else (c.metrics.cost.catalog_price_proxy or 999.0)
+                    c.metrics.cost.cost_per_success_usd
+                    if c.metrics.cost.is_cost_per_success
+                    and c.metrics.cost.cost_per_success_usd is not None
+                    else (
+                        c.metrics.cost.expected_cost_usd
+                        if c.metrics.cost.expected_cost_usd is not None
+                        else (c.metrics.cost.catalog_price_proxy or 999.0)
+                    )
                 )
             )
             # Lower latency preferred
@@ -616,12 +631,59 @@ class RoutingOptimizer:
         model: ModelDefinition,
         input_tokens: Optional[int] = None,
         output_tokens: Optional[int] = None,
+        routing_obj: Optional[RoutingObjective] = None,
+        task_type: Optional[str] = None,
+        effective_privacy_class: Optional[str] = None,
+        economics_service: Optional[Any] = None,
     ) -> CostEvidence:
-        """Extract request-level token pricing facts or honest catalog price proxy."""
+        """Extract request-level token pricing facts, empirical cost-per-success, or catalog price proxy."""
+        r_obj = routing_obj or RoutingObjective()
+        cost_metric_pref = getattr(r_obj, "cost_metric", "COST_PER_SUCCESS_WHEN_SUFFICIENT")
+        metric_version = getattr(r_obj, "cost_metric_policy_version", "v1_cps_when_sufficient")
+
+        # 1. Check empirical Cost-Per-Success (Directive 14 & 15)
+        if cost_metric_pref == "COST_PER_SUCCESS_WHEN_SUFFICIENT" and economics_service is not None:
+            eff_priv = effective_privacy_class or "ANY_CONFIGURED"
+            cps_est = None
+            if hasattr(economics_service, "get_expected_cps"):
+                cps_est = economics_service.get_expected_cps(
+                    model_identity=model.identity,
+                    task_family=task_type or "general",
+                    effective_privacy_class=eff_priv,
+                )
+            if (
+                cps_est is not None
+                and hasattr(cps_est, "status")
+                and (
+                    cps_est.status == "SUFFICIENT_EVIDENCE"
+                    or getattr(cps_est.status, "value", None) == "SUFFICIENT_EVIDENCE"
+                )
+            ):
+                return CostEvidence(
+                    expected_cost_usd=None,
+                    catalog_price_proxy=None,
+                    cost_metric="COST_PER_SUCCESS_WHEN_SUFFICIENT",
+                    cost_metric_policy_version=metric_version,
+                    cost_per_success_usd=cps_est.estimated_cps.as_usd,
+                    cost_per_success_status="SUFFICIENT_EVIDENCE",
+                    cost_per_success_sample_count=cps_est.sample_count,
+                    cost_per_success_provenance=cps_est.provenance,
+                    is_cost_per_success=True,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    is_free=cps_est.estimated_cps.amount_micros == 0,
+                    is_price_proxy=False,
+                    provenance="empirical_cost_per_success",
+                )
+
         if model.pricing is None:
             return CostEvidence(
                 expected_cost_usd=None,
                 catalog_price_proxy=None,
+                cost_metric="REQUEST_COST_OR_PRICE_PROXY",
+                cost_metric_policy_version=metric_version,
+                cost_per_success_status="INSUFFICIENT_EVIDENCE",
+                cost_per_success_provenance="fallback_r3_9_missing_pricing",
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 is_free=False,
@@ -633,6 +695,10 @@ class RoutingOptimizer:
             return CostEvidence(
                 expected_cost_usd=0.0,
                 catalog_price_proxy=0.0,
+                cost_metric="REQUEST_COST_OR_PRICE_PROXY",
+                cost_metric_policy_version=metric_version,
+                cost_per_success_status="INSUFFICIENT_EVIDENCE",
+                cost_per_success_provenance="fallback_r3_9_free_local",
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 input_cost_per_1m=0.0,
@@ -657,6 +723,10 @@ class RoutingOptimizer:
                 return CostEvidence(
                     expected_cost_usd=round(cost_usd, 6),
                     catalog_price_proxy=None,
+                    cost_metric="REQUEST_COST_OR_PRICE_PROXY",
+                    cost_metric_policy_version=metric_version,
+                    cost_per_success_status="INSUFFICIENT_EVIDENCE",
+                    cost_per_success_provenance="fallback_r3_9_request_estimate",
                     is_price_proxy=False,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
@@ -672,6 +742,10 @@ class RoutingOptimizer:
                     expected_cost_usd=None,
                     catalog_price_proxy=price_proxy,
                     price_proxy_policy_version="v1_0.75_0.25",
+                    cost_metric="REQUEST_COST_OR_PRICE_PROXY",
+                    cost_metric_policy_version=metric_version,
+                    cost_per_success_status="INSUFFICIENT_EVIDENCE",
+                    cost_per_success_provenance="fallback_r3_9_catalog_proxy",
                     is_price_proxy=True,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
@@ -685,6 +759,10 @@ class RoutingOptimizer:
         return CostEvidence(
             expected_cost_usd=None,
             catalog_price_proxy=None,
+            cost_metric="REQUEST_COST_OR_PRICE_PROXY",
+            cost_metric_policy_version=metric_version,
+            cost_per_success_status="INSUFFICIENT_EVIDENCE",
+            cost_per_success_provenance="fallback_r3_9_unknown",
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             is_free=False,

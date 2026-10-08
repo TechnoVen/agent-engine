@@ -10,10 +10,15 @@ import logging
 import time
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 
 # Core domain imports
 from core.cache import get_semantic_cache
+from core.economics import (
+    EvidenceSource,
+    ModelEconomicsSummary,
+    get_economics_service,
+)
 from core.eval import EvalSample, ModelEvalReport, ModelEvalSuite, get_golden_dataset
 from core.model_download import DownloadStatus, get_download_manager
 from core.model_recommendation import (
@@ -37,6 +42,7 @@ from core.safety import get_policy_engine
 from services.python.server.container import (
     get_storage_backend,
 )
+from services.python.server.dependencies import verify_ipc_token
 from services.python.server.schemas import *
 
 logger = logging.getLogger("agent_engine.api.models")
@@ -435,3 +441,34 @@ async def list_installed_models():
     """List verified local models ready for managed inference execution."""
     mgr = get_download_manager()
     return mgr.list_installed_models()
+
+
+@router.get("/models/economics", response_model=List[ModelEconomicsSummary])
+async def get_models_economics(
+    request: Request,
+    task_family: Optional[str] = Query(None, description="Filter by task family"),
+    provider_id: Optional[str] = Query(None, description="Filter by provider ID"),
+    model_id: Optional[str] = Query(None, description="Filter by model ID"),
+    evidence_source: Optional[str] = Query(None, description="Filter by evidence source"),
+    evaluator_version: Optional[str] = Query(None, description="Filter by evaluator version"),
+    effective_privacy_class: Optional[str] = Query(
+        None, description="Filter by effective privacy class"
+    ),
+):
+    """Retrieve model economics summaries with whole-chain cost-per-success metrics."""
+    verify_ipc_token(request)
+    service = get_economics_service()
+    src_enum = None
+    if evidence_source:
+        try:
+            src_enum = EvidenceSource(evidence_source.upper())
+        except ValueError:
+            pass
+    return service.list_economics(
+        task_family=task_family,
+        provider_id=provider_id,
+        model_id=model_id,
+        evidence_source=src_enum,
+        evaluator_version=evaluator_version,
+        effective_privacy_class=effective_privacy_class,
+    )

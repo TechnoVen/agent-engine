@@ -84,6 +84,9 @@ class RoutingObjective(BaseModel):
     cost_norm_ceiling_usd: float = 0.05  # $0.05 per request is utility 0.0
     price_proxy_norm_ceiling: float = 20.0  # $20 blended catalog price per 1M is utility 0.0
     latency_norm_ceiling_ms: float = 5000.0  # 5000ms is utility 0.0
+    cost_metric: str = "COST_PER_SUCCESS_WHEN_SUFFICIENT"
+    cost_metric_policy_version: str = "v1_cps_when_sufficient"
+    cps_norm_ceiling_usd: float = 0.10  # $0.10 per verified success is utility 0.0
 
     @classmethod
     def from_profile(
@@ -174,17 +177,28 @@ class CostEvidence(BaseModel):
     catalog_price_proxy: Optional[float] = None
     price_proxy_policy_version: Optional[str] = None
     is_price_proxy: bool = False
+    cost_metric: str = "REQUEST_COST_OR_PRICE_PROXY"
+    cost_metric_policy_version: Optional[str] = None
+    cost_per_success_usd: Optional[float] = None
+    cost_per_success_status: Optional[str] = None
+    cost_per_success_sample_count: int = 0
+    cost_per_success_provenance: Optional[str] = None
+    is_cost_per_success: bool = False
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     input_cost_per_1m: Optional[float] = None
     output_cost_per_1m: Optional[float] = None
     is_free: bool = False
-    provenance: str = "unknown"  # "free_local", "measured_tokens_unit_pricing", "estimated_tokens_unit_pricing", "catalog_price_proxy", "unknown"
+    provenance: str = "unknown"  # "free_local", "measured_tokens_unit_pricing", "estimated_tokens_unit_pricing", "catalog_price_proxy", "empirical_cost_per_success", "unknown"
 
     @property
     def is_known(self) -> bool:
         return self.is_free or (
-            (self.expected_cost_usd is not None or self.catalog_price_proxy is not None)
+            (
+                self.expected_cost_usd is not None
+                or self.catalog_price_proxy is not None
+                or self.cost_per_success_usd is not None
+            )
             and self.provenance != "unknown"
         )
 

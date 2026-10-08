@@ -787,17 +787,36 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/projects/models.py"
     - "core/ledger/models.py"
     - "core/ledger/service.py"
+- id: R3.10
+  title: "Cost-per-success integration"
+  task_status: done
+  capability_maturity: S1
+  migration: INTEGRATE
+  owner: "Runtime & Model Architecture"
+  depends_on: ["R3.1", "R3.2", "R3.8", "R3.9"]
+  evidence:
+    - "core/economics/models.py"
+    - "core/economics/service.py"
+    - "core/economics/golden_eval.py"
+    - "core/economics/__init__.py"
+    - "core/router/models.py"
+    - "core/router/objective.py"
     - "services/python/server/routers/models.py"
-    - "tests/test_r3_routing_objective.py"
-  notes: "S1 — Implemented and implementation-tested (Final closure commit 7261270). Completed Quality/cost/latency routing objective (Task R3.9): (1) Permanently replaced legacy 90/9/1 and hardcoded priority routing with deterministic multi-attribute utility calculation over four canonical profiles: balanced, cost_first, latency_first, quality_first. (2) Strict multi-stage constraint pipeline: Stage 1 PRIVACY (R3.8 fail-closed; prohibited candidates never enter scoring), Stage 2 CAPABILITY (R3.2 requirements gating; ineligibles never enter scoring), Stage 3 HEALTH (R3.1 availability/circuits gating; unavailables never enter scoring). (3) Unit-aware pricing math in USD per 1M tokens: factual free local execution ($0.0); unknown pricing receives UNKNOWN penalty (never fake $0.00). (4) Fresh observed latency preferred over static catalog; unknown latency receives UNKNOWN penalty (never fake fastest); zero active network benchmarks during routing. (5) Evidenced quality grounded in real evaluated task performance or curated quality policy with uncertainty penalties for missing or low-confidence data. (6) Strict, deterministic 6-stage tie-breaking ending in canonical_id, mathematically invariant under arbitrary candidate order shuffling. (7) Verified fallback chain: only eligible, surviving candidates populate fallback chain (zero prohibited cloud models under LOCAL_ONLY). (8) Complete ledger explainability: durable ModelRoutingTrace captures weights, candidate metrics, rejections, final score, selection reason, and tie-break flag with zero secrets or credentials. (9) Trusted configuration precedence: routing objective extracted strictly from trusted request inputs or project settings; prompt injection attempts have zero effect. (10) Strict boundary: stops before R3.10; zero cost-per-success, retry count, or adaptive weights learning. 32/32 precision tests passing, 181/181 R3 tests passing, 989/989 full regression passing."
+    - "apps/desktop/src/renderer/types/index.ts"
+    - "apps/desktop/src/renderer/api/client.ts"
+    - "apps/desktop/src/renderer/components/ModelEconomicsComparison.tsx"
+    - "apps/desktop/src/renderer/screens/Cost.tsx"
+    - "tests/test_r3_model_economics.py"
+  notes: "S1 — Implemented and implementation-tested. Completed Cost-per-success integration (Task R3.10): (1) Whole logical-task chain economics: AttemptEconomicsRecord distinct from LogicalTaskEconomicsRecord; full chain spend attributed strictly to initial routing decision without double counting. (2) Empirical Cost-Per-Success (CPS) formula: total_spend / verified_successes with zero synthetic floors or division by epsilon; returns None and NO_SUCCESS_EVIDENCE when verified_successes == 0. (3) 4-state task outcomes: SUCCESS, FAILURE, PARTIAL, UNKNOWN; COMPLETED execution status != SUCCESS; UNKNOWN is not success; PARTIAL reported separately. (4) Exact monetary arithmetic: canonical Money type with integer amount_micros (USD), rejecting mixed currency aggregation and float drift. (5) Multidimensional cohort segmentation: EconomicsCohortKey isolates task_family, evaluator_version, routing_policy_version, fallback_policy_version, effective_privacy_class, and evidence_source (GOLDEN_EVAL vs PRODUCTION). (6) Evidence sufficiency policy: logical task count threshold (>= 5 logical tasks) controls promotion from INSUFFICIENT to SUFFICIENT. (7) Routing integration: RoutingOptimizer COST_FIRST and BALANCED incorporate empirical CPS when SUFFICIENT with cps_norm_ceiling_usd ceiling; falls back gracefully to catalog pricing when INSUFFICIENT without error. (8) Provenance and explainability: CostEvidence durable logging with is_cost_per_success and cost_per_success_status. (9) Explicit human corrections (HumanCorrectionEvent) tracked without heuristic guessing. (10) Authenticated API (GET /v1/models/economics) and Desktop comparison UI with zero secret leakage. 22/22 precision tests passing, 203/203 R3 tests passing, 1011/1011 full regression passing."
 ```
 
 ---
 
 ## 8. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `989 passed, 3 warnings` (`uv run pytest -q`)
-- **Combined R3 Model Layer Suites:** `181 passed in 27.20s` (`uv run pytest tests/test_r3_*.py`)
+- **Full Regression Suite:** `1011 passed, 3 warnings` (`uv run pytest -q`)
+- **Combined R3 Model Layer Suites:** `203 passed in 27.79s` (`uv run pytest tests/test_r3_*.py`)
+- **R3.10 Cost-Per-Success Suite:** `22 passed in 3.95s` (`uv run pytest tests/test_r3_model_economics.py`)
 - **R3.9 Quality/Cost/Latency Suite:** `32 passed in 3.76s` (`uv run pytest tests/test_r3_routing_objective.py`)
 - **R3.1 Canonical Provider Registry Suite:** `27 passed in 3.32s` (`uv run pytest tests/test_r3_provider_registry.py`)
 - **R3.2 Model Capability Registry Suite:** `16 passed in 3.16s` (`uv run pytest tests/test_r3_model_registry.py`)
