@@ -1052,6 +1052,37 @@ export interface LocalRecommendationResponse {
   warning?: string | null;
 }
 
+export type DownloadState =
+  | 'not_present'
+  | 'downloading'
+  | 'paused'
+  | 'verifying'
+  | 'verified'
+  | 'failed';
+
+export interface DownloadStatus {
+  artifact_id: string;
+  model_identity?: {
+    provider_id: string;
+    model_id: string;
+    variant?: string;
+  };
+  state: DownloadState;
+  bytes_downloaded: number;
+  total_bytes_expected: number;
+  progress_ratio: number;
+  etag?: string | null;
+  expected_sha256: string;
+  observed_sha256?: string | null;
+  error_message?: string | null;
+  resumable: boolean;
+  file_path?: string | null;
+  started_at?: number | null;
+  updated_at: number;
+  completed_at?: number | null;
+}
+
+
 
 
 

@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 # Core domain imports
 from core.cache import get_semantic_cache
 from core.eval import EvalSample, ModelEvalReport, ModelEvalSuite, get_golden_dataset
+from core.model_download import DownloadStatus, get_download_manager
 from core.model_recommendation import (
     CatalogModelEntry,
     LocalModelCatalog,
@@ -22,6 +23,7 @@ from core.model_recommendation import (
     TaskRequirements,
     recommend_local_models,
 )
+from core.model_registry.models import ModelIdentity
 from core.resources import get_resource_manager
 from core.router import (
     DEFAULT_TIER_MODELS,
@@ -323,3 +325,61 @@ async def get_model_catalog():
     """Retrieve the curated local model catalog."""
     catalog = LocalModelCatalog()
     return catalog.get_all_models()
+
+
+class StartModelDownloadRequest(BaseModel):
+    model_id: str
+    provider_id: str = "llamacpp"
+
+
+@router.post(
+    "/models/downloads", response_model=DownloadStatus, status_code=status.HTTP_202_ACCEPTED
+)
+async def start_model_download(req: StartModelDownloadRequest):
+    """Start or resume a catalog-driven model download with single-flight locking."""
+    catalog = LocalModelCatalog()
+    ident = ModelIdentity(provider_id=req.provider_id, model_id=req.model_id)
+    descriptor = catalog.get_artifact_descriptor(ident)
+    if not descriptor:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model '{req.model_id}' not found in curated local catalog. Arbitrary downloads rejected.",
+        )
+    mgr = get_download_manager()
+    try:
+        return mgr.start_download(descriptor)
+    except Exception as e:
+        logger.error("Failed to start model download: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start model download: {str(e)}",
+        )
+
+
+@router.get("/models/downloads", response_model=List[DownloadStatus])
+async def list_model_downloads():
+    """List all managed model download states and partial tasks."""
+    mgr = get_download_manager()
+    return mgr.list_downloads()
+
+
+@router.get("/models/downloads/{artifact_id}", response_model=DownloadStatus)
+async def get_model_download_status(artifact_id: str):
+    """Inspect progress and verification state of a specific artifact."""
+    mgr = get_download_manager()
+    return mgr.get_status(artifact_id)
+
+
+@router.post("/models/downloads/{artifact_id}/cancel")
+async def cancel_model_download(artifact_id: str):
+    """Signal an active model download to safely pause and flush partial progress."""
+    mgr = get_download_manager()
+    success = mgr.cancel_download(artifact_id)
+    return {"artifact_id": artifact_id, "cancelled": success}
+
+
+@router.get("/models/installed", response_model=List[DownloadStatus])
+async def list_installed_models():
+    """List verified local models ready for managed inference execution."""
+    mgr = get_download_manager()
+    return mgr.list_installed_models()

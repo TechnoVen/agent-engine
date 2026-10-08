@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from core.model_download.models import ModelArtifactDescriptor
 from core.model_registry.models import ModelIdentity, TriStateBool
 
 
@@ -162,6 +163,7 @@ class CatalogModelEntry(BaseModel):
     quality_rank: int = 1  # Curated capability rank [1..10], strictly integer
     quality_rank_provenance: NumericFactProvenance = NumericFactProvenance.CURATED_POLICY
     quality_rank_source: str = "Agent Engine Curated Quality Policy v2026.10.1"
+    artifact_descriptor: Optional[ModelArtifactDescriptor] = None
     provenance: RequirementsProvenance = RequirementsProvenance.TRUSTED_CATALOG
     catalog_version: str = "2026.10.1"
     updated_at: str = "2026-10-08T00:00:00Z"

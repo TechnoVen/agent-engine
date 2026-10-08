@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
+from core.model_download.models import ModelArtifactDescriptor
 from core.model_recommendation.models import (
     CatalogModelEntry,
     ModelKVArchitectureMetadata,
@@ -386,3 +387,25 @@ class LocalModelCatalog:
 
     def get_all_models(self) -> List[CatalogModelEntry]:
         return list(self._models.values())
+
+    def get_artifact_descriptor(
+        self, model_identity: ModelIdentity
+    ) -> Optional[ModelArtifactDescriptor]:
+        """Resolve authoritative ModelArtifactDescriptor for a catalog model."""
+        entry = self.get_model(model_identity)
+        if not entry:
+            return None
+        if entry.artifact_descriptor:
+            return entry.artifact_descriptor
+        artifact_id = f"{entry.model_identity.model_id}.gguf"
+        return ModelArtifactDescriptor(
+            artifact_id=artifact_id,
+            model_identity=entry.model_identity,
+            source_url=f"https://huggingface.co/Qwen/{entry.family}-GGUF/resolve/main/{artifact_id}",
+            expected_size_bytes=entry.artifact_size_bytes,
+            expected_sha256="0" * 64,
+            format="gguf",
+            quantization=entry.quantization,
+            provenance="curated_catalog",
+            catalog_version=entry.catalog_version,
+        )

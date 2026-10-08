@@ -73,6 +73,27 @@ class ModelArtifactValidator:
         if not resolved.is_file():
             raise ModelValidationError(f"Model path '{resolved}' is not a regular file.")
 
+        # 3b. Check for partial or unverified model download artifact
+        if resolved.name.endswith(".partial"):
+            raise ModelValidationError(
+                f"Model file '{resolved}' is an incomplete (.partial) download artifact."
+            )
+
+        meta_p = resolved.with_name(f"{resolved.name}.meta.json")
+        if meta_p.exists():
+            try:
+                import json
+
+                with open(meta_p, "r", encoding="utf-8") as mf:
+                    meta_data = json.load(mf)
+                state = meta_data.get("state")
+                if state and state != "verified":
+                    raise ModelValidationError(
+                        f"Model artifact '{resolved.name}' is in unverified state '{state}'; only VERIFIED artifacts permitted."
+                    )
+            except (json.JSONDecodeError, OSError):
+                pass
+
         # 4. Read permission check
         if not os.access(resolved, os.R_OK):
             raise ModelValidationError(

@@ -716,19 +716,40 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "apps/desktop/src/renderer/screens/Settings.tsx"
     - "tests/test_r3_model_recommendation.py"
   notes: "S1 — Implemented and implementation-tested. Completed Local Model Catalog and Recommendation final closure: (1) Numeric fact provenance model (NumericFactProvenance) distinguishing declared facts, inspected facts, measured facts, derived estimates, curated heuristics, and curated policy. (2) Removed unsourced benchmark claims; replaced with curated recommendation policy rank (1..10) explicitly sourced to Curated Quality Policy. (3) Architecture-aware KV-cache overhead scaling monotonically with context length via ModelKVArchitectureMetadata (layers, heads, head_dim, element_bytes=2) and truthful unknown handling. (4) Unambiguous integer bytes for memory calculations with explicit MiB/GiB reporting. (5) Explicit stale resource snapshot policy (auto-refresh, graceful fallback with warning, resource_captured_at and resource_stale exposed). (6) Headroom denominator strictly defined as usable_before_model = available_ram - OS - AE - runtime_base with headroom_ratio = remaining / usable_before_model. (7) Realistic accelerator requirements: models capable of CPU execution do not mandate GPU; zero-GPU hosts eligible for CPU-capable models. (8) Deterministic tie-breaking ending in canonical_id, strictly invariant under shuffled catalog ordering. (9) Pure side-effect-free execution: zero model downloading, zero process spawning, zero configuration mutations. (10) Privacy-safe explainability: transparent audit trail exposing byte memory and core counts with strictly zero hostnames, usernames, home paths, or hardware serials. (11) Behavior-complete desktop UI component (LocalModelRecommendations.tsx) integrated in Settings.tsx with Fast/Balanced/Best Local cards, freshness badge, no-safe-model state, expandable audit details, and zero side effects. (12) Mandatory IPC token authentication enforced on /v1/models/recommendations and /v1/models/catalog. 14/14 precision tests passing, 100/100 R3 suites passing, 908/908 full regression passing."
+- id: R3.6
+  title: "Managed model download and verification"
+  task_status: done
+  capability_maturity: S1
+  migration: CREATE
+  owner: "Runtime & Model Architecture"
+  depends_on: ["R3.4", "R3.5"]
+  evidence:
+    - "core/model_download/__init__.py"
+    - "core/model_download/models.py"
+    - "core/model_download/network.py"
+    - "core/model_download/storage.py"
+    - "core/model_download/manager.py"
+    - "core/model_recommendation/catalog.py"
+    - "core/inference/validation.py"
+    - "services/python/server/routers/models.py"
+    - "apps/desktop/src/renderer/types/index.ts"
+    - "apps/desktop/src/renderer/api/client.ts"
+    - "tests/test_r3_model_download.py"
+  notes: "S1 — Implemented and implementation-tested. Managed model download and verification engine: (1) Catalog-driven downloads with authoritative ModelArtifactDescriptor specifications. (2) Strict SSRF network protection with DNS resolution pre-flight rejecting private IP ranges (RFC 1918), loopback, link-local, cloud metadata (169.254.169.254), non-HTTPS schemes (unless test-permitted), credentials embedded in URLs, and redirects to private targets. (3) Agent Engine controlled storage isolated under ~/.agent_engine/models/ with .partial staging, path traversal prevention, and filename sanitization. (4) Resumable downloads via HTTP Range and ETag headers, with safe reset to byte 0 if server ignores Range (HTTP 200). (5) Incremental streaming in bounded 64 KiB chunks with O(1) memory and streaming SHA-256 calculation. (6) Disk capacity pre-flight check requiring artifact size + 1 GiB safety reserve and runaway size bounding aborting after 5 MiB excess. (7) Fail-closed checksum verification: matching digest promotes atomically to VERIFIED; mismatch quarantines corrupted artifact and marks FAILED. (8) Single-flight per-artifact locking preventing duplicate concurrent downloads. (9) Cancellation and crash recovery leaving verifiable PAUSED state. (10) R3.4 supervisor integration: ModelArtifactValidator rejects .partial files and non-verified metadata artifacts. (11) Authenticated REST API endpoints (/v1/models/downloads, /v1/models/downloads/{id}, cancel, /v1/models/installed) protected with IPC token auth. (12) Desktop TypeScript client bindings and types. 15/15 precision tests passing, 115/115 R3 suites passing, 923/923 full regression passing."
 ```
 
 ---
 
 ## 8. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `908 passed, 3 warnings in 126.39s` (`uv run pytest -q`)
-- **Combined R3 Model Layer Suites:** `100 passed in 34.42s` (`uv run pytest tests/test_r3_*.py`)
+- **Full Regression Suite:** `923 passed, 3 warnings` (`uv run pytest -q`)
+- **Combined R3 Model Layer Suites:** `115 passed in 26.45s` (`uv run pytest tests/test_r3_*.py`)
 - **R3.1 Canonical Provider Registry Suite:** `27 passed in 3.32s` (`uv run pytest tests/test_r3_provider_registry.py`)
 - **R3.2 Model Capability Registry Suite:** `16 passed in 3.16s` (`uv run pytest tests/test_r3_model_registry.py`)
 - **R3.3 Resource Manager Suite:** `18 passed in 5.95s` (`uv run pytest tests/test_r3_resource_manager.py`)
 - **R3.4 Managed Local Inference Supervisor Suite:** `25 passed in 20.38s` (`uv run pytest tests/test_r3_local_supervisor.py`)
 - **R3.5 Local Model Catalog & Recommendation Suite:** `14 passed in 4.13s` (`uv run pytest tests/test_r3_model_recommendation.py`)
+- **R3.6 Managed Model Download & Verification Suite:** `15 passed in 8.34s` (`uv run pytest tests/test_r3_model_download.py`)
 - **R2 Checkpoint and Rollback Suite:** `35 passed in 3.93s` (`uv run pytest tests/test_r2_checkpoint_service.py`)
 - **R2 Diagnostics Redaction Suite:** `27 passed in 3.91s` (`uv run pytest tests/test_r2_diagnostics_redaction.py`)
 - **R2 Safe Staged Patch Application Suite:** `25 passed in 2.85s` (`uv run pytest tests/test_r2_patch_service.py`)

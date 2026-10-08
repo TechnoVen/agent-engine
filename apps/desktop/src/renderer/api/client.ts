@@ -51,6 +51,7 @@ import {
   CatalogModelEntry,
   LocalRecommendationResponse,
   TaskRequirements,
+  DownloadStatus,
 } from '../types';
 
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
@@ -1975,6 +1976,75 @@ class SidecarClient {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || `Failed to fetch local model catalog: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async startModelDownload(
+    modelId: string,
+    providerId: string = 'llamacpp'
+  ): Promise<DownloadStatus> {
+    const res = await fetch(`${this.base}/v1/models/downloads`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ model_id: modelId, provider_id: providerId }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to start model download: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async getModelDownloads(): Promise<DownloadStatus[]> {
+    const res = await fetch(`${this.base}/v1/models/downloads`, {
+      method: 'GET',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch model downloads: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async getModelDownloadStatus(artifactId: string): Promise<DownloadStatus> {
+    const res = await fetch(`${this.base}/v1/models/downloads/${encodeURIComponent(artifactId)}`, {
+      method: 'GET',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch download status: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async cancelModelDownload(
+    artifactId: string
+  ): Promise<{ artifact_id: string; cancelled: boolean }> {
+    const res = await fetch(
+      `${this.base}/v1/models/downloads/${encodeURIComponent(artifactId)}/cancel`,
+      {
+        method: 'POST',
+        headers: this.getHeaders(),
+      }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to cancel model download: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async getInstalledModels(): Promise<DownloadStatus[]> {
+    const res = await fetch(`${this.base}/v1/models/installed`, {
+      method: 'GET',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch installed models: HTTP ${res.status}`);
     }
     return await res.json();
   }
