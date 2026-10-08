@@ -348,14 +348,15 @@ class PolicyEngine:
             perms_set.add(SkillPermission.EXECUTE)
 
         if any(
-            k in t_lower for k in ("write", "edit", "create_file", "replace", "patch", "modify")
+            k in t_lower
+            for k in ("write", "edit", "create_file", "replace", "patch", "modify", "download")
         ):
             perms_set.add(SkillPermission.WRITE_LOCAL)
 
-        elif any(k in t_lower for k in ("read", "view", "list_dir", "cat", "search")):
+        if any(k in t_lower for k in ("read", "view", "list_dir", "cat", "search")):
             perms_set.add(SkillPermission.READ)
 
-        elif any(k in t_lower for k in ("http", "fetch", "curl", "download", "network", "url")):
+        if any(k in t_lower for k in ("http", "fetch", "curl", "download", "network", "url")):
             perms_set.add(SkillPermission.NETWORK)
 
         elif any(k in t_lower for k in ("slack", "teams", "discord", "message", "chat")):

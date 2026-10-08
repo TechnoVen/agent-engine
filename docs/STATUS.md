@@ -731,25 +731,26 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/model_download/manager.py"
     - "core/model_recommendation/catalog.py"
     - "core/inference/validation.py"
+    - "core/safety/policy.py"
     - "services/python/server/routers/models.py"
     - "apps/desktop/src/renderer/types/index.ts"
     - "apps/desktop/src/renderer/api/client.ts"
     - "tests/test_r3_model_download.py"
-  notes: "S1 — Implemented and implementation-tested. Managed model download and verification engine: (1) Catalog-driven downloads with authoritative ModelArtifactDescriptor specifications. (2) Strict SSRF network protection with DNS resolution pre-flight rejecting private IP ranges (RFC 1918), loopback, link-local, cloud metadata (169.254.169.254), non-HTTPS schemes (unless test-permitted), credentials embedded in URLs, and redirects to private targets. (3) Agent Engine controlled storage isolated under ~/.agent_engine/models/ with .partial staging, path traversal prevention, and filename sanitization. (4) Resumable downloads via HTTP Range and ETag headers, with safe reset to byte 0 if server ignores Range (HTTP 200). (5) Incremental streaming in bounded 64 KiB chunks with O(1) memory and streaming SHA-256 calculation. (6) Disk capacity pre-flight check requiring artifact size + 1 GiB safety reserve and runaway size bounding aborting after 5 MiB excess. (7) Fail-closed checksum verification: matching digest promotes atomically to VERIFIED; mismatch quarantines corrupted artifact and marks FAILED. (8) Single-flight per-artifact locking preventing duplicate concurrent downloads. (9) Cancellation and crash recovery leaving verifiable PAUSED state. (10) R3.4 supervisor integration: ModelArtifactValidator rejects .partial files and non-verified metadata artifacts. (11) Authenticated REST API endpoints (/v1/models/downloads, /v1/models/downloads/{id}, cancel, /v1/models/installed) protected with IPC token auth. (12) Desktop TypeScript client bindings and types. 15/15 precision tests passing, 115/115 R3 suites passing, 923/923 full regression passing."
+  notes: "S1 — Implemented and implementation-tested. Completed Managed Model Download and Verification final download-safety closure: (1) Anti-SSRF and DNS rebinding immunity with socket-level IP pinning (PinningHTTPAdapter, PinningPoolManager, PinningHTTPConnection, PinningHTTPSConnection) validating all candidate IPs from socket.getaddrinfo and connecting directly to the validated IP while preserving the hostname for TLS SNI and certificate verification. (2) Ambient proxy isolation (session.trust_env = False) rejecting HTTP_PROXY, HTTPS_PROXY, and ALL_PROXY environment variables. (3) Storage authority and path restriction (validate_model_root) rejecting system roots, home root, ~/Downloads, ~/Desktop, /tmp, and workspace source tree; disallowing custom roots in production mode without explicit dev/test authorization; enforcing 0700 directory and 0600 file permissions. (4) Post-verification integrity recomputation in ModelArtifactValidator, checking on-disk SHA-256 before runtime launch and rejecting tampered files with ModelValidationError. (5) Atomic no-clobber promotion (atomic_promote) via hardlink and parent directory fsync; conflicting existing destination files raise ArtifactConflictError without overwriting. (6) Startup reconciliation (reconcile_startup_state) recovering factual truth across mid-download, post-fsync, verifying, and uncommitted placement crashes. (7) Full-artifact resumed checksum verification pre-hashing existing partial files and detecting corrupted partials upon resume. (8) Authoritative PolicyEngine gating on download initiation requiring SkillPermission.NETWORK and SkillPermission.WRITE_LOCAL, returning structured HTTP 403 with zero network, filesystem, or lock side-effects on policy denial. (9) Streamed socket actual-byte ceiling enforcement aborting runaway downloads. (10) Factual resumable and partial_present status semantics with catalog versioning (catalog_version='2026.10.1'). 24/24 precision tests passing, 124/124 R3 suites passing, 932/932 full regression passing."
 ```
 
 ---
 
 ## 8. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `923 passed, 3 warnings` (`uv run pytest -q`)
-- **Combined R3 Model Layer Suites:** `115 passed in 26.45s` (`uv run pytest tests/test_r3_*.py`)
+- **Full Regression Suite:** `932 passed, 3 warnings` (`uv run pytest -q`)
+- **Combined R3 Model Layer Suites:** `124 passed in 29.28s` (`uv run pytest tests/test_r3_*.py`)
 - **R3.1 Canonical Provider Registry Suite:** `27 passed in 3.32s` (`uv run pytest tests/test_r3_provider_registry.py`)
 - **R3.2 Model Capability Registry Suite:** `16 passed in 3.16s` (`uv run pytest tests/test_r3_model_registry.py`)
 - **R3.3 Resource Manager Suite:** `18 passed in 5.95s` (`uv run pytest tests/test_r3_resource_manager.py`)
 - **R3.4 Managed Local Inference Supervisor Suite:** `25 passed in 20.38s` (`uv run pytest tests/test_r3_local_supervisor.py`)
 - **R3.5 Local Model Catalog & Recommendation Suite:** `14 passed in 4.13s` (`uv run pytest tests/test_r3_model_recommendation.py`)
-- **R3.6 Managed Model Download & Verification Suite:** `15 passed in 8.34s` (`uv run pytest tests/test_r3_model_download.py`)
+- **R3.6 Managed Model Download & Verification Suite:** `24 passed in 10.06s` (`uv run pytest tests/test_r3_model_download.py`)
 - **R2 Checkpoint and Rollback Suite:** `35 passed in 3.93s` (`uv run pytest tests/test_r2_checkpoint_service.py`)
 - **R2 Diagnostics Redaction Suite:** `27 passed in 3.91s` (`uv run pytest tests/test_r2_diagnostics_redaction.py`)
 - **R2 Safe Staged Patch Application Suite:** `25 passed in 2.85s` (`uv run pytest tests/test_r2_patch_service.py`)

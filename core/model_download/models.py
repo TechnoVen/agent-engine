@@ -59,8 +59,11 @@ class DownloadStatus(BaseModel):
     expected_sha256: str = ""
     observed_sha256: Optional[str] = None
     error_message: Optional[str] = None
+    partial_present: bool = False
     resumable: bool = False
     file_path: Optional[str] = None
     started_at: Optional[float] = None
     updated_at: float = Field(default_factory=time.time)
     completed_at: Optional[float] = None
+    verified_at: Optional[float] = None
+    catalog_version: str = "2026.10.1"

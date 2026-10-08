@@ -81,18 +81,46 @@ class ModelArtifactValidator:
 
         meta_p = resolved.with_name(f"{resolved.name}.meta.json")
         if meta_p.exists():
-            try:
-                import json
+            import json
 
+            meta_data = None
+            try:
                 with open(meta_p, "r", encoding="utf-8") as mf:
                     meta_data = json.load(mf)
+            except (json.JSONDecodeError, OSError) as err:
+                raise ModelValidationError(
+                    f"Corrupted metadata file '{meta_p.name}' for model '{resolved.name}': {err}"
+                ) from err
+
+            if meta_data:
                 state = meta_data.get("state")
                 if state and state != "verified":
                     raise ModelValidationError(
                         f"Model artifact '{resolved.name}' is in unverified state '{state}'; only VERIFIED artifacts permitted."
                     )
-            except (json.JSONDecodeError, OSError):
-                pass
+
+                expected_sha256 = meta_data.get("expected_sha256")
+                if expected_sha256:
+                    meta_size = meta_data.get("total_bytes_expected")
+                    curr_size = resolved.stat().st_size
+                    if meta_size is not None and curr_size != meta_size:
+                        raise ModelValidationError(
+                            f"Model artifact '{resolved.name}' size ({curr_size}) differs from verified record ({meta_size})."
+                        )
+
+                    # Recompute SHA-256 to establish truthful content identity
+                    import hashlib
+
+                    hasher = hashlib.sha256()
+                    with open(resolved, "rb") as mf_f:
+                        while chunk := mf_f.read(64 * 1024):
+                            hasher.update(chunk)
+                    observed_digest = hasher.hexdigest().lower()
+                    if observed_digest != expected_sha256.lower().strip():
+                        raise ModelValidationError(
+                            f"Model artifact '{resolved.name}' integrity compromised: observed SHA-256 "
+                            f"'{observed_digest}' does not match verified expected digest '{expected_sha256}'."
+                        )
 
         # 4. Read permission check
         if not os.access(resolved, os.R_OK):

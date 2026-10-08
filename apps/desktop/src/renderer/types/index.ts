@@ -1075,11 +1075,14 @@ export interface DownloadStatus {
   expected_sha256: string;
   observed_sha256?: string | null;
   error_message?: string | null;
+  partial_present?: boolean;
   resumable: boolean;
   file_path?: string | null;
   started_at?: number | null;
   updated_at: number;
   completed_at?: number | null;
+  verified_at?: number | null;
+  catalog_version?: string;
 }
 
 

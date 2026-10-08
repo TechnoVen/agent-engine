@@ -36,8 +36,95 @@ class StorageSecurityError(Exception):
     """Raised when an artifact ID attempts directory traversal or storage escape."""
 
 
+class ArtifactConflictError(StorageSecurityError):
+    """Raised when destination path already contains a conflicting model artifact."""
+
+
 class InsufficientDiskSpaceError(Exception):
     """Raised when available storage capacity is insufficient to host requested model."""
+
+
+def is_override_authorized() -> bool:
+    """Check if AGENT_ENGINE_MODELS_DIR override is explicitly authorized."""
+    env_mode = os.getenv("AGENT_ENGINE_ENV", "").lower()
+    dev_flag = os.getenv("AGENT_ENGINE_DEV_MODE", "").lower()
+    allow_flag = os.getenv("AGENT_ENGINE_ALLOW_UNVERIFIED_MODELS_DIR", "").lower()
+    return (
+        env_mode in ("dev", "development", "test")
+        or dev_flag in ("1", "true", "yes")
+        or allow_flag in ("1", "true", "yes")
+    )
+
+
+def validate_model_root(candidate: Path, is_env_override: bool = False) -> Path:
+    """Canonicalize and strictly validate that model root cannot escape or target sensitive paths."""
+    resolved = candidate.expanduser().resolve()
+    cand_str = str(resolved)
+
+    # 1. Reject root or top-level system paths
+    for sys_root in (
+        "/",
+        "/etc",
+        "/usr",
+        "/bin",
+        "/sbin",
+        "/var",
+        "/System",
+        "/Library",
+        "/proc",
+        "/sys",
+        "/dev",
+    ):
+        if cand_str == sys_root or (
+            cand_str.startswith(sys_root + "/") and not cand_str.startswith(("/home/", "/Users/"))
+        ):
+            raise StorageSecurityError(
+                f"Model root '{candidate}' targets forbidden system path '{sys_root}'."
+            )
+
+    # 2. Reject home directory root directly
+    home_res = Path.home().resolve()
+    if resolved == home_res:
+        raise StorageSecurityError(
+            f"Model root '{candidate}' cannot be the user home directory root."
+        )
+
+    # 3. Environment override specific restrictions
+    if is_env_override:
+        # Check operator authority
+        if not is_override_authorized():
+            raise StorageSecurityError(
+                f"Rejected AGENT_ENGINE_MODELS_DIR='{candidate}': model root overrides are strictly "
+                "disabled in production mode. Set AGENT_ENGINE_ALLOW_UNVERIFIED_MODELS_DIR=true or "
+                "enable dev mode to authorize operator storage overrides."
+            )
+
+        # Disallow Downloads or Desktop
+        for forbidden_sub in ("Downloads", "Desktop"):
+            forbidden_p = (home_res / forbidden_sub).resolve()
+            if resolved == forbidden_p or resolved.is_relative_to(forbidden_p):
+                raise StorageSecurityError(
+                    f"Model root '{candidate}' cannot reside in '{forbidden_sub}'."
+                )
+
+        # Disallow /tmp or temporary directories in env override
+        if cand_str.startswith(("/tmp", "/var/tmp", "/dev/shm")):
+            raise StorageSecurityError(
+                f"Model root '{candidate}' cannot reside in temporary directories (/tmp)."
+            )
+
+        # Disallow project repository / workspace tree
+        try:
+            cwd = Path.cwd().resolve()
+        except Exception:
+            cwd = None
+
+        if cwd and (resolved == cwd or resolved.is_relative_to(cwd)):
+            raise StorageSecurityError(
+                f"Model root '{candidate}' cannot reside within the project source tree."
+            )
+
+    return resolved
 
 
 class ModelStorageManager:
@@ -49,11 +136,11 @@ class ModelStorageManager:
         safety_reserve_bytes: int = DEFAULT_DISK_SAFETY_RESERVE_BYTES,
     ) -> None:
         if models_dir is not None:
-            self._models_dir = Path(models_dir).expanduser().resolve()
+            self._models_dir = validate_model_root(Path(models_dir), is_env_override=False)
         else:
             env_override = os.environ.get("AGENT_ENGINE_MODELS_DIR")
             if env_override:
-                self._models_dir = Path(env_override).expanduser().resolve()
+                self._models_dir = validate_model_root(Path(env_override), is_env_override=True)
             else:
                 self._models_dir = DEFAULT_MODELS_DIR.resolve()
 
@@ -65,8 +152,13 @@ class ModelStorageManager:
         return self._models_dir
 
     def ensure_directory(self) -> None:
-        """Create the managed model root directory securely."""
+        """Create the managed model root directory securely with restricted 0700 permissions."""
         self._models_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            if os.name == "posix":
+                self._models_dir.chmod(0o700)
+        except OSError:
+            pass
 
     def sanitize_artifact_id(self, artifact_id: str) -> str:
         """Enforce strict naming rules and reject path traversal attempts."""
@@ -145,15 +237,85 @@ class ModelStorageManager:
                 f"available {avail_gib} GiB, but requires {need_gib} GiB + {res_gib} GiB safety reserve."
             )
 
-    def atomic_promote(self, partial_path: Path, final_path: Path) -> None:
-        """Atomically promote verified partial file to final model destination."""
+    def atomic_promote(
+        self,
+        partial_path: Path,
+        final_path: Path,
+        expected_sha256: Optional[str] = None,
+    ) -> None:
+        """Atomically promote verified partial file to final destination without silently clobbering existing files."""
         if not partial_path.exists():
             raise FileNotFoundError(f"Partial file does not exist: {partial_path}")
 
-        # Atomic replacement on POSIX and Windows (Python 3.3+)
-        os.replace(partial_path, final_path)
+        # 1. Immediate destination-state check
+        if final_path.exists():
+            if expected_sha256:
+                import hashlib
 
-        # Flush parent directory metadata on POSIX
+                hasher = hashlib.sha256()
+                with open(final_path, "rb") as ff:
+                    while chunk := ff.read(64 * 1024):
+                        hasher.update(chunk)
+                if hasher.hexdigest().lower() == expected_sha256.lower().strip():
+                    logger.info(
+                        "Final artifact %s already exists with matching SHA-256; safely reusing.",
+                        final_path.name,
+                    )
+                    try:
+                        os.unlink(partial_path)
+                    except OSError:
+                        pass
+                    return
+            raise ArtifactConflictError(
+                f"Cannot promote model artifact: destination '{final_path}' already exists and differs."
+            )
+
+        # 2. Atomic no-clobber final placement using os.link on POSIX
+        linked = False
+        if hasattr(os, "link"):
+            try:
+                os.link(partial_path, final_path)
+                try:
+                    os.unlink(partial_path)
+                except OSError:
+                    pass
+                linked = True
+            except FileExistsError:
+                # Race condition: destination created concurrently
+                if expected_sha256:
+                    import hashlib
+
+                    hasher = hashlib.sha256()
+                    with open(final_path, "rb") as ff:
+                        while chunk := ff.read(64 * 1024):
+                            hasher.update(chunk)
+                    if hasher.hexdigest().lower() == expected_sha256.lower().strip():
+                        try:
+                            os.unlink(partial_path)
+                        except OSError:
+                            pass
+                        return
+                raise ArtifactConflictError(
+                    f"Concurrent conflict: destination '{final_path}' was created during promotion."
+                )
+            except OSError:
+                pass
+
+        if not linked:
+            if final_path.exists():
+                raise ArtifactConflictError(
+                    f"Destination '{final_path}' already exists; refusing to clobber."
+                )
+            os.replace(partial_path, final_path)
+
+        # 3. Ensure restricted file mode 0o600 on final artifact
+        try:
+            if os.name == "posix":
+                final_path.chmod(0o600)
+        except OSError:
+            pass
+
+        # 4. Flush parent directory metadata on POSIX
         if hasattr(os, "sync") and os.name == "posix":
             try:
                 parent_fd = os.open(str(self._models_dir), os.O_RDONLY)
@@ -172,6 +334,11 @@ class ModelStorageManager:
         quarantine_path = partial_path.with_name(f"{partial_path.name}.corrupt_{timestamp}")
         try:
             os.replace(partial_path, quarantine_path)
+            try:
+                if os.name == "posix":
+                    quarantine_path.chmod(0o600)
+            except OSError:
+                pass
             logger.warning("Quarantined corrupt partial to %s", quarantine_path)
             return quarantine_path
         except Exception as e:
@@ -179,13 +346,30 @@ class ModelStorageManager:
             return None
 
     def save_metadata(self, status: DownloadStatus) -> None:
-        """Persist download status metadata to .meta.json file."""
+        """Persist download status metadata to .meta.json file with 0600 permissions and fsync."""
         meta_p = self.get_meta_path(status.artifact_id)
         temp_p = meta_p.with_suffix(".tmp")
         try:
             with open(temp_p, "w", encoding="utf-8") as f:
                 json.dump(status.model_dump(), f, indent=2)
+                f.flush()
+                if hasattr(os, "fsync"):
+                    os.fsync(f.fileno())
+            try:
+                if os.name == "posix":
+                    temp_p.chmod(0o600)
+            except OSError:
+                pass
             os.replace(temp_p, meta_p)
+            if hasattr(os, "sync") and os.name == "posix":
+                try:
+                    parent_fd = os.open(str(self._models_dir), os.O_RDONLY)
+                    try:
+                        os.fsync(parent_fd)
+                    finally:
+                        os.close(parent_fd)
+                except Exception:
+                    pass
         except Exception as e:
             logger.error("Failed to save metadata for %s: %s", status.artifact_id, e)
 

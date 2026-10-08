@@ -120,11 +120,135 @@ class SSRFProtection:
             ip_str = sockaddr[0]
             cls.validate_ip_address(ip_str, allow_loopback_for_test=allow_loopback_for_test)
 
-        return url
+        return cls.resolve_and_validate_target(
+            url,
+            allow_http_for_test=allow_http_for_test,
+            allow_loopback_for_test=allow_loopback_for_test,
+        )[0]
+
+    @classmethod
+    def resolve_and_validate_target(
+        cls,
+        url: str,
+        allow_http_for_test: bool = False,
+        allow_loopback_for_test: bool = False,
+    ) -> tuple[str, str, str]:
+        """Validate URL scheme, credentials, and resolve hostname to validate every candidate IP.
+
+        Returns:
+            tuple of (validated_url, hostname, pinned_ip) where pinned_ip is guaranteed to have passed validation.
+        """
+        parsed = urlparse(url)
+
+        # 1. Scheme validation
+        allowed_schemes = ("https", "http") if allow_http_for_test else ("https",)
+        if parsed.scheme.lower() not in allowed_schemes:
+            raise InvalidURLError(
+                f"URL scheme '{parsed.scheme}' is not permitted. Only HTTPS is allowed."
+            )
+
+        # 2. Reject credentials in URL
+        if parsed.username or parsed.password:
+            raise InvalidURLError(
+                "Credentials embedded in model download URLs are strictly forbidden."
+            )
+
+        hostname = parsed.hostname
+        if not hostname:
+            raise InvalidURLError(f"Download URL '{url}' lacks a valid hostname.")
+
+        # 3. Resolve hostname and validate ALL returned IP addresses against SSRF policy
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        try:
+            addr_info = socket.getaddrinfo(hostname, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        except socket.gaierror as err:
+            raise NetworkSecurityError(f"Failed to resolve hostname '{hostname}': {err}") from err
+
+        if not addr_info:
+            raise NetworkSecurityError(f"No IP addresses resolved for hostname '{hostname}'.")
+
+        validated_ips: list[str] = []
+        for entry in addr_info:
+            sockaddr = entry[4]
+            ip_str = sockaddr[0]
+            cls.validate_ip_address(ip_str, allow_loopback_for_test=allow_loopback_for_test)
+            validated_ips.append(ip_str)
+
+        # Select the first fully-validated IP address to pin the socket connection to
+        pinned_ip = validated_ips[0]
+        return url, hostname, pinned_ip
+
+
+from requests.adapters import HTTPAdapter
+from urllib3.connection import HTTPConnection, HTTPSConnection
+from urllib3.poolmanager import PoolManager
+
+
+class PinningHTTPConnection(HTTPConnection):
+    """HTTPConnection that binds its socket strictly to a pre-validated IP address."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        pinned = getattr(self, "_pinned_ip_map", {})
+        if self.host in pinned:
+            self._dns_host = pinned[self.host]
+
+
+class PinningHTTPSConnection(HTTPSConnection):
+    """HTTPSConnection that connects strictly to pre-validated IP while preserving hostname for TLS SNI/verification."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        pinned = getattr(self, "_pinned_ip_map", {})
+        if self.host in pinned:
+            self._dns_host = pinned[self.host]
+            if not self.server_hostname:
+                self.server_hostname = self.host
+
+
+class PinningPoolManager(PoolManager):
+    """urllib3 PoolManager configured to inject Pinning connection classes."""
+
+    def __init__(self, pinned_ips: dict[str, str], *args, **kwargs):
+        self._pinned_ips = pinned_ips
+        super().__init__(*args, **kwargs)
+
+    def _new_pool(self, scheme, host, port, request_context=None):
+        pool = super()._new_pool(scheme, host, port, request_context=request_context)
+        if scheme == "https":
+            pool.ConnectionCls = type(
+                "ConfiguredPinningHTTPSConn",
+                (PinningHTTPSConnection,),
+                {"_pinned_ip_map": self._pinned_ips},
+            )
+        elif scheme == "http":
+            pool.ConnectionCls = type(
+                "ConfiguredPinningHTTPConn",
+                (PinningHTTPConnection,),
+                {"_pinned_ip_map": self._pinned_ips},
+            )
+        return pool
+
+
+class PinningHTTPAdapter(HTTPAdapter):
+    """Requests adapter enforcing socket-level connection to pre-validated IPs."""
+
+    def __init__(self, pinned_ips: dict[str, str], **kwargs):
+        self.pinned_ips = pinned_ips
+        super().__init__(**kwargs)
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        self.poolmanager = PinningPoolManager(
+            self.pinned_ips,
+            num_pools=connections,
+            maxsize=maxsize,
+            block=block,
+            **pool_kwargs,
+        )
 
 
 class SafeStreamingDownloader:
-    """Performs HTTP streaming downloads with redirect revalidation and chunking."""
+    """Performs HTTP streaming downloads with anti-SSRF DNS pinning, redirect revalidation, and proxy isolation."""
 
     def __init__(
         self,
@@ -140,23 +264,44 @@ class SafeStreamingDownloader:
         self.connect_timeout = connect_timeout_seconds
         self.read_timeout = read_timeout_seconds
 
+    def create_session(self) -> requests.Session:
+        """Create an isolated requests.Session with trust_env=False to prevent proxy bypass."""
+        session = requests.Session()
+        session.trust_env = False
+        return session
+
+    @property
+    def session(self) -> requests.Session:
+        """Provide a reference session for inspection and isolation verification."""
+        return self.create_session()
+
     def open_stream(
         self,
         url: str,
         range_start: Optional[int] = None,
         if_range_etag: Optional[str] = None,
     ) -> requests.Response:
-        """Open a streaming HTTP connection with manual redirect validation and Range support."""
+        """Open a streaming HTTP connection with DNS-pinned socket connections and redirect validation."""
         current_url = url
         redirect_count = 0
+        pinned_ips: dict[str, str] = {}
+
+        # 1. Isolate transport from environment proxies (HTTP_PROXY, HTTPS_PROXY, ALL_PROXY)
+        session = self.create_session()
+
+        # 2. Mount custom DNS-pinning adapter
+        adapter = PinningHTTPAdapter(pinned_ips)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
 
         while redirect_count <= self.max_redirects:
-            # 1. Validate current URL before connection
-            SSRFProtection.validate_url(
+            # 3. Resolve and validate target host before connection
+            _, host, pinned_ip = SSRFProtection.resolve_and_validate_target(
                 current_url,
                 allow_http_for_test=self.allow_http_for_test,
                 allow_loopback_for_test=self.allow_loopback_for_test,
             )
+            pinned_ips[host] = pinned_ip
 
             headers: dict[str, str] = {
                 "User-Agent": "AgentEngine-ModelDownloader/0.5",
@@ -167,8 +312,7 @@ class SafeStreamingDownloader:
                 if if_range_etag:
                     headers["If-Range"] = if_range_etag
 
-            session = requests.Session()
-            # Disable automatic redirect following so we can inspect and re-validate every hop
+            # Disable automatic redirect following to inspect and re-validate every hop
             response = session.get(
                 current_url,
                 headers=headers,
@@ -193,12 +337,13 @@ class SafeStreamingDownloader:
                     "Following verified redirect hop %d to %s", redirect_count + 1, redirect_target
                 )
 
-                # Re-validate target URL immediately (fail closed if target is private/loopback)
-                SSRFProtection.validate_url(
+                # Re-validate target URL immediately (fail closed if target is private/loopback/metadata)
+                _, redir_host, redir_ip = SSRFProtection.resolve_and_validate_target(
                     redirect_target,
                     allow_http_for_test=self.allow_http_for_test,
                     allow_loopback_for_test=self.allow_loopback_for_test,
                 )
+                pinned_ips[redir_host] = redir_ip
 
                 response.close()
                 current_url = redirect_target

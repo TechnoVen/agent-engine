@@ -18,9 +18,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import threading
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from core.model_download.models import (
     DownloadState,
@@ -29,6 +30,7 @@ from core.model_download.models import (
 )
 from core.model_download.network import SafeStreamingDownloader
 from core.model_download.storage import (
+    ArtifactConflictError,
     InsufficientDiskSpaceError,
     ModelStorageManager,
 )
@@ -55,10 +57,12 @@ class ModelDownloadManager:
         storage_manager: Optional[ModelStorageManager] = None,
         downloader: Optional[SafeStreamingDownloader] = None,
         max_allowed_size_bytes: int = MAX_ALLOWED_MODEL_SIZE_BYTES,
+        policy_engine: Optional[Any] = None,
     ) -> None:
         self.storage = storage_manager or ModelStorageManager()
         self.downloader = downloader or SafeStreamingDownloader()
         self.max_allowed_size_bytes = max_allowed_size_bytes
+        self.policy_engine = policy_engine
 
         self._lock = threading.Lock()
         self._artifact_locks: Dict[str, threading.Lock] = {}
@@ -66,14 +70,138 @@ class ModelDownloadManager:
         self._cancel_events: Dict[str, threading.Event] = {}
         self._statuses: Dict[str, DownloadStatus] = {}
 
+        # Reconcile filesystem state on initialization
+        self.reconcile_startup_state()
+
     def _get_artifact_lock(self, artifact_id: str) -> threading.Lock:
         with self._lock:
             if artifact_id not in self._artifact_locks:
                 self._artifact_locks[artifact_id] = threading.Lock()
             return self._artifact_locks[artifact_id]
 
+    def reconcile_startup_state(self) -> None:
+        """Reconcile persisted metadata with factual filesystem reality upon Agent Engine startup."""
+        models_dir = self.storage.models_dir
+        if not models_dir.exists():
+            return
+
+        seen_artifacts: set[str] = set()
+
+        # 1. Process all metadata files
+        for meta_file in models_dir.glob("*.meta.json"):
+            aid = meta_file.name[: -len(".meta.json")]
+            seen_artifacts.add(aid)
+            meta = self.storage.load_metadata(aid)
+            if not meta:
+                continue
+
+            final_p = self.storage.get_final_path(aid)
+            partial_p = self.storage.get_partial_path(aid)
+
+            if final_p.exists() and final_p.is_file():
+                curr_size = final_p.stat().st_size
+                if meta.total_bytes_expected > 0 and curr_size != meta.total_bytes_expected:
+                    meta.state = DownloadState.FAILED
+                    meta.error_message = f"File size on disk ({curr_size}) differs from expected ({meta.total_bytes_expected})."
+                    self.storage.save_metadata(meta)
+                elif meta.expected_sha256:
+                    hasher = hashlib.sha256()
+                    with open(final_p, "rb") as ff:
+                        while chunk := ff.read(CHUNK_SIZE):
+                            hasher.update(chunk)
+                    obs = hasher.hexdigest().lower()
+                    if obs == meta.expected_sha256.lower().strip():
+                        meta.state = DownloadState.VERIFIED
+                        meta.observed_sha256 = obs
+                        meta.file_path = str(final_p)
+                        meta.bytes_downloaded = curr_size
+                        meta.progress_ratio = 1.0
+                        meta.partial_present = False
+                        meta.resumable = False
+                        meta.verified_at = meta.verified_at or time.time()
+                        self.storage.save_metadata(meta)
+                    else:
+                        meta.state = DownloadState.FAILED
+                        meta.error_message = f"File hash on disk ({obs}) differs from expected ({meta.expected_sha256})."
+                        self.storage.save_metadata(meta)
+            elif partial_p.exists() and partial_p.is_file():
+                part_size = partial_p.stat().st_size
+                if meta.total_bytes_expected > 0 and part_size > meta.total_bytes_expected:
+                    self.storage.quarantine_corrupted_partial(partial_p)
+                    meta.state = DownloadState.FAILED
+                    meta.error_message = (
+                        "Partial file exceeded expected size; quarantined on startup."
+                    )
+                    meta.partial_present = False
+                    meta.resumable = False
+                    self.storage.save_metadata(meta)
+                else:
+                    meta.state = DownloadState.PAUSED
+                    meta.bytes_downloaded = part_size
+                    meta.partial_present = True
+                    meta.resumable = bool(meta.etag)
+                    meta.progress_ratio = (
+                        part_size / meta.total_bytes_expected
+                        if meta.total_bytes_expected > 0
+                        else 0.0
+                    )
+                    self.storage.save_metadata(meta)
+            else:
+                if meta.state in (
+                    DownloadState.VERIFIED,
+                    DownloadState.DOWNLOADING,
+                    DownloadState.PAUSED,
+                ):
+                    meta.state = DownloadState.NOT_PRESENT
+                    meta.partial_present = False
+                    meta.resumable = False
+                    self.storage.save_metadata(meta)
+
+        # 2. Check for final artifacts that exist without metadata (e.g. crash after placement before metadata commit)
+        for gguf_file in models_dir.glob("*.gguf"):
+            aid = gguf_file.name
+            if aid in seen_artifacts:
+                continue
+            from core.model_recommendation.catalog import LocalModelCatalog
+
+            descriptor = None
+            catalog_inst = LocalModelCatalog()
+            for entry in catalog_inst.get_all_models():
+                try:
+                    desc = catalog_inst.get_artifact_descriptor(entry.model_identity)
+                    if desc and desc.artifact_id == aid:
+                        descriptor = desc
+                        break
+                except Exception:
+                    pass
+
+            if descriptor:
+                curr_size = gguf_file.stat().st_size
+                if curr_size == descriptor.expected_size_bytes:
+                    hasher = hashlib.sha256()
+                    with open(gguf_file, "rb") as ff:
+                        while chunk := ff.read(CHUNK_SIZE):
+                            hasher.update(chunk)
+                    obs = hasher.hexdigest().lower()
+                    if obs == descriptor.expected_sha256.lower().strip():
+                        recovered_status = DownloadStatus(
+                            artifact_id=aid,
+                            model_identity=descriptor.model_identity,
+                            state=DownloadState.VERIFIED,
+                            bytes_downloaded=curr_size,
+                            total_bytes_expected=curr_size,
+                            progress_ratio=1.0,
+                            expected_sha256=descriptor.expected_sha256,
+                            observed_sha256=obs,
+                            file_path=str(gguf_file),
+                            completed_at=time.time(),
+                            verified_at=time.time(),
+                        )
+                        self.storage.save_metadata(recovered_status)
+                        logger.info("Recovered uncommitted verified artifact %s on startup", aid)
+
     def get_status(self, artifact_id: str) -> DownloadStatus:
-        """Inspect current download and verification status of a model artifact."""
+        """Inspect current download and verification status of a model artifact with factual truth reconciliation."""
         clean_id = self.storage.sanitize_artifact_id(artifact_id)
         with self._lock:
             if clean_id in self._statuses:
@@ -85,51 +213,81 @@ class ModelDownloadManager:
         partial_p = self.storage.get_partial_path(clean_id)
 
         if final_p.exists() and final_p.is_file():
-            if meta and meta.state == DownloadState.VERIFIED:
+            if meta and meta.expected_sha256:
+                hasher = hashlib.sha256()
+                with open(final_p, "rb") as ff:
+                    while chunk := ff.read(CHUNK_SIZE):
+                        hasher.update(chunk)
+                obs = hasher.hexdigest().lower()
+                if obs != meta.expected_sha256.lower().strip():
+                    failed_st = meta.model_copy()
+                    failed_st.state = DownloadState.FAILED
+                    failed_st.error_message = (
+                        f"File hash on disk ({obs}) differs from expected ({meta.expected_sha256})."
+                    )
+                    return failed_st
+
                 status = meta.model_copy()
+                status.state = DownloadState.VERIFIED
                 status.file_path = str(final_p)
+                status.partial_present = False
+                status.resumable = False
                 return status
-            # Exists on disk as final file: treat as verified if non-empty
+
             size = final_p.stat().st_size
             return DownloadStatus(
                 artifact_id=clean_id,
-                model_identity=meta.model_identity if meta else None,  # type: ignore
+                model_identity=meta.model_identity if meta else None,
                 state=DownloadState.VERIFIED,
                 bytes_downloaded=size,
                 total_bytes_expected=size,
                 progress_ratio=1.0,
                 file_path=str(final_p),
                 expected_sha256=meta.expected_sha256 if meta else "",
+                partial_present=False,
+                resumable=False,
             )
 
         if partial_p.exists() and partial_p.is_file():
             partial_size = partial_p.stat().st_size
             if meta:
-                meta.state = DownloadState.PAUSED
-                meta.bytes_downloaded = partial_size
-                meta.resumable = True
-                meta.progress_ratio = (
+                resumable_factual = bool(
+                    meta.etag and (0 < partial_size <= (meta.total_bytes_expected or 1))
+                )
+                status = meta.model_copy()
+                status.state = DownloadState.PAUSED
+                status.bytes_downloaded = partial_size
+                status.partial_present = True
+                status.resumable = resumable_factual
+                status.progress_ratio = (
                     partial_size / meta.total_bytes_expected
                     if meta.total_bytes_expected > 0
                     else 0.0
                 )
-                return meta
+                return status
             return DownloadStatus(
                 artifact_id=clean_id,
-                model_identity=None,  # type: ignore
+                model_identity=None,
                 state=DownloadState.PAUSED,
                 bytes_downloaded=partial_size,
                 total_bytes_expected=partial_size,
-                resumable=True,
+                partial_present=True,
+                resumable=False,
             )
 
         if meta:
+            if meta.state in (DownloadState.VERIFIED, DownloadState.PAUSED):
+                meta.state = DownloadState.NOT_PRESENT
+                meta.partial_present = False
+                meta.resumable = False
             return meta
 
         return DownloadStatus(
             artifact_id=clean_id,
-            model_identity=None,  # type: ignore
+            model_identity=None,
             state=DownloadState.NOT_PRESENT,
+            partial_present=False,
+            resumable=False,
         )
 
     def list_downloads(self) -> List[DownloadStatus]:
@@ -161,6 +319,33 @@ class ModelDownloadManager:
     ) -> DownloadStatus:
         """Start or resume a model download task with single-flight concurrency protection."""
         aid = self.storage.sanitize_artifact_id(descriptor.artifact_id)
+
+        # PolicyEngine evaluation gate before locking, network, or filesystem activity
+        if self.policy_engine is not None:
+            decision = self.policy_engine.evaluate(
+                tool_name="model_download",
+                tool_args={
+                    "model_id": descriptor.model_identity.model_id
+                    if descriptor.model_identity
+                    else aid,
+                    "artifact_id": aid,
+                    "download_url": descriptor.source_url,
+                    "destination_filename": getattr(descriptor, "destination_filename", aid),
+                },
+                context={
+                    "operation": "model_download",
+                    "artifact_id": aid,
+                },
+            )
+            if decision.is_denied:
+                raise PermissionError(
+                    f"Policy blocked model download: {decision.reason or 'Access denied'}"
+                )
+            if decision.requires_approval:
+                raise PermissionError(
+                    f"Policy requires approval for model download: {decision.reason or 'Approval required'}"
+                )
+
         artifact_lock = self._get_artifact_lock(aid)
 
         with artifact_lock:
@@ -324,8 +509,10 @@ class ModelDownloadManager:
                     while True:
                         if cancel_event.is_set():
                             out_f.flush()
+                            os.fsync(out_f.fileno())
                             resp.close()
                             status.state = DownloadState.PAUSED
+                            status.partial_present = True
                             status.resumable = True
                             status.updated_at = time.time()
                             self.storage.save_metadata(status)
@@ -351,10 +538,11 @@ class ModelDownloadManager:
                         )
                         status.updated_at = time.time()
 
-                        # Bound runaway downloads
-                        if status.bytes_downloaded > descriptor.expected_size_bytes + (
-                            5 * 1024 * 1024
-                        ):
+                        # Bound runaway downloads: abort immediately on bytes actually read from socket
+                        allowance = min(
+                            5 * 1024 * 1024, max(512, descriptor.expected_size_bytes // 20)
+                        )
+                        if status.bytes_downloaded > descriptor.expected_size_bytes + allowance:
                             resp.close()
                             raise DownloadManagerError(
                                 f"Downloaded byte count ({status.bytes_downloaded}) significantly "
@@ -362,13 +550,31 @@ class ModelDownloadManager:
                             )
 
                     out_f.flush()
+                    os.fsync(out_f.fileno())
                 except (DownloadManagerError, InsufficientDiskSpaceError):
                     raise
+                except OSError as os_err:
+                    try:
+                        out_f.flush()
+                    except Exception:
+                        pass
+                    resp.close()
+                    status.state = DownloadState.FAILED
+                    status.error_message = f"Disk I/O error during download: {os_err}"
+                    status.updated_at = time.time()
+                    self.storage.save_metadata(status)
+                    logger.error("Disk I/O error for %s: %s", aid, os_err)
+                    return
                 except Exception as stream_err:
-                    out_f.flush()
+                    try:
+                        out_f.flush()
+                        os.fsync(out_f.fileno())
+                    except Exception:
+                        pass
                     resp.close()
                     # Network interruption: leave state as PAUSED (resumable)
                     status.state = DownloadState.PAUSED
+                    status.partial_present = True
                     status.resumable = True
                     status.error_message = f"Network interrupted during transfer: {stream_err}"
                     status.updated_at = time.time()
@@ -386,6 +592,7 @@ class ModelDownloadManager:
             # 4. Check for cancellation right at finish
             if cancel_event.is_set():
                 status.state = DownloadState.PAUSED
+                status.partial_present = True
                 status.resumable = True
                 self.storage.save_metadata(status)
                 return
@@ -393,6 +600,7 @@ class ModelDownloadManager:
             # Check if transfer ended prematurely before full expected bytes
             if status.bytes_downloaded < descriptor.expected_size_bytes:
                 status.state = DownloadState.PAUSED
+                status.partial_present = True
                 status.resumable = True
                 status.error_message = (
                     f"Transfer incomplete: received {status.bytes_downloaded} of "
@@ -408,13 +616,6 @@ class ModelDownloadManager:
                 )
                 return
 
-            # 4. Check for cancellation right at finish
-            if cancel_event.is_set():
-                status.state = DownloadState.PAUSED
-                status.resumable = True
-                self.storage.save_metadata(status)
-                return
-
             # 5. Transition to VERIFYING
             status.state = DownloadState.VERIFYING
             status.updated_at = time.time()
@@ -424,6 +625,8 @@ class ModelDownloadManager:
             actual_size = partial_path.stat().st_size
             if actual_size != descriptor.expected_size_bytes:
                 status.state = DownloadState.FAILED
+                status.partial_present = False
+                status.resumable = False
                 status.error_message = (
                     f"Size verification failed: expected {descriptor.expected_size_bytes} bytes, "
                     f"got {actual_size} bytes."
@@ -440,6 +643,8 @@ class ModelDownloadManager:
 
             if observed_digest != expected_digest:
                 status.state = DownloadState.FAILED
+                status.partial_present = False
+                status.resumable = False
                 status.error_message = (
                     f"Checksum mismatch: expected SHA-256 {expected_digest}, "
                     f"observed {observed_digest}."
@@ -450,13 +655,24 @@ class ModelDownloadManager:
                 return
 
             # 8. Promote atomically to final destination
-            self.storage.atomic_promote(partial_path, final_path)
+            try:
+                self.storage.atomic_promote(partial_path, final_path)
+            except ArtifactConflictError as conf_err:
+                status.state = DownloadState.FAILED
+                status.error_message = f"Promotion conflict: {conf_err}"
+                status.updated_at = time.time()
+                self.storage.save_metadata(status)
+                logger.error("Promotion conflict for %s: %s", aid, conf_err)
+                return
 
             status.state = DownloadState.VERIFIED
             status.file_path = str(final_path)
             status.completed_at = time.time()
+            status.verified_at = time.time()
+            status.catalog_version = "2026.10.1"
             status.updated_at = time.time()
             status.progress_ratio = 1.0
+            status.partial_present = False
             status.resumable = False
             self.storage.save_metadata(status)
             logger.info("Successfully downloaded and verified %s (%s)", aid, observed_digest)
@@ -467,6 +683,16 @@ class ModelDownloadManager:
             status.updated_at = time.time()
             self.storage.save_metadata(status)
             logger.error("Disk space error downloading %s: %s", aid, err)
+        except DownloadManagerError as err:
+            if partial_path.exists():
+                self.storage.quarantine_corrupted_partial(partial_path)
+            status.state = DownloadState.FAILED
+            status.partial_present = False
+            status.resumable = False
+            status.error_message = str(err)
+            status.updated_at = time.time()
+            self.storage.save_metadata(status)
+            logger.error("Download manager error downloading %s: %s", aid, err)
         except Exception as ex:
             status.state = DownloadState.FAILED
             status.error_message = f"Download failed: {str(ex)}"

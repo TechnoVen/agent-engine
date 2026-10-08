@@ -31,6 +31,7 @@ from core.router import (
     ExecutionTier,
     StepProfile,
 )
+from core.safety import get_policy_engine
 
 # Services container, schemas, errors, transport, dependencies
 from services.python.server.container import (
@@ -345,9 +346,59 @@ async def start_model_download(req: StartModelDownloadRequest):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Model '{req.model_id}' not found in curated local catalog. Arbitrary downloads rejected.",
         )
+    policy_engine = get_policy_engine()
+    decision = policy_engine.evaluate(
+        tool_name="model_download",
+        tool_args={
+            "model_id": req.model_id,
+            "provider_id": req.provider_id,
+            "artifact_id": descriptor.artifact_id,
+            "download_url": descriptor.source_url,
+            "destination_filename": getattr(
+                descriptor, "destination_filename", descriptor.artifact_id
+            ),
+        },
+        context={
+            "operation": "model_download",
+            "model_id": req.model_id,
+        },
+    )
+    if decision.is_denied:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "POLICY_BLOCKED",
+                "reason": decision.reason or "Model download blocked by safety policy.",
+                "policy_id": decision.matched_rule,
+                "risk_score": decision.risk_score,
+                "suggestion": decision.suggestion,
+            },
+        )
+    if decision.requires_approval:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "APPROVAL_REQUIRED",
+                "reason": decision.reason or "Model download requires approval.",
+                "policy_id": decision.matched_rule,
+                "risk_score": decision.risk_score,
+                "suggestion": decision.suggestion,
+            },
+        )
+
     mgr = get_download_manager()
     try:
         return mgr.start_download(descriptor)
+    except PermissionError as pe:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "POLICY_BLOCKED",
+                "reason": str(pe),
+            },
+        )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Failed to start model download: %s", e)
         raise HTTPException(
