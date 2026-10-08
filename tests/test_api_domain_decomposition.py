@@ -76,9 +76,9 @@ def test_all_19_domain_routers_registered():
 
 
 def test_route_count_and_paths_match():
-    """3. Verify total route counts across all domain routers equal exactly 162 (including R3.3 /resources)."""
+    """3. Verify total route counts across all domain routers equal exactly 164 (including R3.3 /resources and R3.5 /models/recommendations, /models/catalog)."""
     total_routes = sum(len(getattr(routers, name).router.routes) for name in routers.__all__)
-    assert total_routes == 162, f"Expected 162 routes across domain routers, got {total_routes}"
+    assert total_routes == 164, f"Expected 164 routes across domain routers, got {total_routes}"
 
 
 def test_chat_router_endpoint_accessible(client):
@@ -334,8 +334,8 @@ def test_api_facade_has_no_route_decorators_or_hidden_logic_and_unique_routes():
     all_route_signatures.append(("GET", "/healthz"))
 
     assert (
-        len(all_route_signatures) == 163
-    ), f"Expected 163 total route operations, got {len(all_route_signatures)}"
+        len(all_route_signatures) == 165
+    ), f"Expected 165 total route operations, got {len(all_route_signatures)}"
     assert (
-        len(set(all_route_signatures)) == 163
+        len(set(all_route_signatures)) == 165
     ), f"Detected duplicate route registrations: {len(all_route_signatures) - len(set(all_route_signatures))}"

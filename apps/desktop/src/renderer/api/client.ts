@@ -48,6 +48,9 @@ import {
   WorkflowRun,
   WorkflowValidationResult,
   PendingGateInfo,
+  CatalogModelEntry,
+  LocalRecommendationResponse,
+  TaskRequirements,
 } from '../types';
 
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
@@ -1932,6 +1935,46 @@ class SidecarClient {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || `Failed to redirect gate: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async getRecommendedLocalModels(
+    params?: Partial<TaskRequirements>
+  ): Promise<LocalRecommendationResponse> {
+    const searchParams = new URLSearchParams();
+    if (params) {
+      if (params.task_type) searchParams.set('task_type', params.task_type);
+      if (params.coding !== undefined) searchParams.set('coding', String(params.coding));
+      if (params.reasoning !== undefined) searchParams.set('reasoning', String(params.reasoning));
+      if (params.vision !== undefined) searchParams.set('vision', String(params.vision));
+      if (params.tools !== undefined) searchParams.set('tools', String(params.tools));
+      if (params.structured_output !== undefined) searchParams.set('structured_output', String(params.structured_output));
+      if (params.min_context_tokens !== undefined) searchParams.set('min_context_tokens', String(params.min_context_tokens));
+      if (params.require_local_only !== undefined) searchParams.set('require_local_only', String(params.require_local_only));
+      if (params.required_accelerator) searchParams.set('required_accelerator', params.required_accelerator);
+    }
+    const query = searchParams.toString();
+    const url = `${this.base}/v1/models/recommendations${query ? `?${query}` : ''}`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch model recommendations: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async getLocalModelCatalog(): Promise<CatalogModelEntry[]> {
+    const res = await fetch(`${this.base}/v1/models/catalog`, {
+      method: 'GET',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch local model catalog: HTTP ${res.status}`);
     }
     return await res.json();
   }

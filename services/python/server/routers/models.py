@@ -7,13 +7,21 @@ Part of Task R1.14 (Split Monolithic API by Domain).
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
 
 # Core domain imports
 from core.cache import get_semantic_cache
 from core.eval import EvalSample, ModelEvalReport, ModelEvalSuite, get_golden_dataset
+from core.model_recommendation import (
+    CatalogModelEntry,
+    LocalModelCatalog,
+    LocalRecommendationResponse,
+    TaskRequirements,
+    recommend_local_models,
+)
+from core.resources import get_resource_manager
 from core.router import (
     DEFAULT_TIER_MODELS,
     ExecutionRouter,
@@ -256,3 +264,46 @@ async def get_router_tiers_endpoint():
         tiers=tiers_map,
         law_1_guidelines=guidelines,
     )
+
+
+@router.get("/models/recommendations", response_model=LocalRecommendationResponse)
+async def get_model_recommendations(
+    task_type: Optional[str] = Query(None, description="Task type or domain"),
+    coding: bool = Query(False, description="Require coding capability"),
+    reasoning: bool = Query(False, description="Require reasoning capability"),
+    vision: bool = Query(False, description="Require vision capability"),
+    tools: bool = Query(False, description="Require tool calling capability"),
+    structured_output: bool = Query(False, description="Require structured output capability"),
+    min_context_tokens: int = Query(2048, ge=512, description="Minimum required context tokens"),
+    require_local_only: bool = Query(True, description="Enforce local-only models"),
+    required_accelerator: Optional[str] = Query(None, description="Required accelerator type"),
+):
+    """Retrieve deterministic local model recommendations (Fast, Balanced, Best Local) based on host hardware."""
+    try:
+        manager = get_resource_manager()
+        snapshot = manager.get_snapshot()
+        reqs = TaskRequirements(
+            task_type=task_type,
+            coding=coding,
+            reasoning=reasoning,
+            vision=vision,
+            tools=tools,
+            structured_output=structured_output,
+            min_context_tokens=min_context_tokens,
+            require_local_only=require_local_only,
+            required_accelerator=required_accelerator,
+        )
+        return recommend_local_models(snapshot=snapshot, requirements=reqs)
+    except Exception as e:
+        logger.error("Failed to generate model recommendations: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate model recommendations: {str(e)}",
+        )
+
+
+@router.get("/models/catalog", response_model=List[CatalogModelEntry])
+async def get_model_catalog():
+    """Retrieve the curated local model catalog."""
+    catalog = LocalModelCatalog()
+    return catalog.get_all_models()

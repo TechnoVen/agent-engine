@@ -695,18 +695,38 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "core/execution/kernel_lm_adapter.py"
     - "tests/test_r3_local_supervisor.py"
   notes: "S1 — Implemented and implementation-tested. Completed Managed Local Inference Supervisor final closure: (1) Safe session isolation via start_new_session=True (POSIX) and CREATE_NEW_PROCESS_GROUP (Windows), completely eliminating unsafe Python preexec_fn across all production code. (2) Clean-machine runtime provenance owned strictly by Agent Engine private store (~/.agent_engine/runtimes/llamacpp/llama-server) or packaged desktop resources (zero Ollama or system PATH dependency). (3) AGENT_ENGINE_LLAMA_BIN operator override strictly gated behind AGENT_ENGINE_ALLOW_UNVERIFIED_BINARY=true or dev mode; rejected in default/production mode. (4) Local endpoint protection (--api-key) with documented same-UID process threat model; token masked via repr=False, sanitized in argv, ring buffer logs, and never persisted to ledger. (5) Deterministic canary prompt ('Repeat this exact code word once: AE_E2E_K7M4' at temperature=0) verified in real clean-machine model completion; ledger records provider_id='llamacpp', canonical ModelIdentity, endpoint_class='local_managed', and execution_id. (6) Port collision bounded retry (max 3 retries) catching PortCollisionError, terminating own child handle, and never adopting or terminating foreign processes. (7) Runtime bundle integrity manifest (core/inference/manifest.py) enforcing exact SHA-256 byte integrity across main binary and required sibling libraries (.so, .dylib, .dll); 1-byte alteration, unversioned binaries, and wrong platform artifacts strictly rejected. (8) Controlled runtime provisioning (core/inference/installer.py) proving fresh install from empty private store to verified canary completion and 0 orphan processes. (9) Precise terminology: SHA-256 + trusted expected digest proves byte integrity; publisher authenticity and trust roots reserved for R2.13. 25/25 precision tests passing, 894/894 full regression passing."
+
+- id: R3.5
+  title: "Local model catalog and recommendation"
+  task_status: done
+  capability_maturity: S1
+  migration: CREATE
+  owner: "Runtime & Model Architecture"
+  depends_on: ["R3.2", "R3.3", "R3.4"]
+  evidence:
+    - "core/model_recommendation/__init__.py"
+    - "core/model_recommendation/models.py"
+    - "core/model_recommendation/policy.py"
+    - "core/model_recommendation/catalog.py"
+    - "core/model_recommendation/engine.py"
+    - "services/python/server/routers/models.py"
+    - "apps/desktop/src/renderer/types/index.ts"
+    - "apps/desktop/src/renderer/api/client.ts"
+    - "tests/test_r3_model_recommendation.py"
+  notes: "S1 — Implemented and implementation-tested. Completed Local Model Catalog and Recommendation: (1) Curated, versioned, timestamped catalog of vetted local GGUF models for llama.cpp (Llama 3.2 1B/3B, Qwen 2.5 Coder 1.5B/3B/7B, Qwen 2.5 14B/32B) with factual minimum and recommended memory requirements, quantization, context limits, and capabilities. (2) Explicit safety reserves: OS reserve (1.5GB), Agent Engine reserve (512MB), llama.cpp base runtime reserve (512MB), discrete VRAM reserve (256MB), and dynamic KV cache context overhead scaling. (3) Available vs Total Memory: Never computes feasibility against total installed RAM alone; calculates strictly against OS-reported available RAM minus safety reserves, guaranteeing >=5%–35% headroom and never consuming 100% of memory. (4) Unified memory single-pool invariant: on Apple Silicon and APUs, RAM and GPU memory share one pool and are NEVER summed; dedicated VRAM is strictly None. (5) Three separate domain concepts: CapabilityEligibility (task functional filter), HardwareFitResult (factual physical feasibility), and LocalModelRecommendation (deterministic performance tiers). (6) UNKNOWN safety rule: missing facts or UNKNOWN probe status yields HardwareFitState.UNKNOWN and is never presented as a safe default recommendation. (7) Deterministic tier selection: Fast (smallest footprint with >=35% headroom), Balanced (optimal capability/efficiency with >=20% headroom), Best Local (strongest capable fitting model); when no candidate fits, tier returns None without hallucinating. (8) Pure side-effect-free execution: zero model downloading, zero process spawning, zero configuration mutations. (9) Privacy-safe explainability: transparent audit trail exposing byte memory and core counts with strictly zero hostnames, usernames, home paths, or hardware serials. (10) REST API endpoints GET /v1/models/recommendations and GET /v1/models/catalog; desktop TypeScript types and client integration. 14/14 precision tests passing, 100/100 R3 suites passing, 908/908 full regression passing."
 ```
 
 ---
 
 ## 8. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `892 passed, 3 warnings in 160.90s` (`uv run pytest -q`)
-- **Combined R3 Model Layer Suites:** `84 passed in 23.67s` (`uv run pytest tests/test_r3_provider_registry.py tests/test_r3_model_registry.py tests/test_r3_resource_manager.py tests/test_r3_local_supervisor.py`)
+- **Full Regression Suite:** `908 passed, 3 warnings in 126.39s` (`uv run pytest -q`)
+- **Combined R3 Model Layer Suites:** `100 passed in 34.42s` (`uv run pytest tests/test_r3_*.py`)
 - **R3.1 Canonical Provider Registry Suite:** `27 passed in 3.32s` (`uv run pytest tests/test_r3_provider_registry.py`)
 - **R3.2 Model Capability Registry Suite:** `16 passed in 3.16s` (`uv run pytest tests/test_r3_model_registry.py`)
 - **R3.3 Resource Manager Suite:** `18 passed in 5.95s` (`uv run pytest tests/test_r3_resource_manager.py`)
-- **R3.4 Managed Local Inference Supervisor Suite:** `23 passed in 19.58s` (`uv run pytest tests/test_r3_local_supervisor.py`)
+- **R3.4 Managed Local Inference Supervisor Suite:** `25 passed in 20.38s` (`uv run pytest tests/test_r3_local_supervisor.py`)
+- **R3.5 Local Model Catalog & Recommendation Suite:** `14 passed in 4.13s` (`uv run pytest tests/test_r3_model_recommendation.py`)
 - **R2 Checkpoint and Rollback Suite:** `35 passed in 3.93s` (`uv run pytest tests/test_r2_checkpoint_service.py`)
 - **R2 Diagnostics Redaction Suite:** `27 passed in 3.91s` (`uv run pytest tests/test_r2_diagnostics_redaction.py`)
 - **R2 Safe Staged Patch Application Suite:** `25 passed in 2.85s` (`uv run pytest tests/test_r2_patch_service.py`)
@@ -723,12 +743,13 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
   - `uv run ruff format --check`: passed on all modified files
 - **Desktop Tauri & Frontend Workspace:**
 
-  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.82s`)
-  - `pnpm -r build`: passed (`12.6s`)
+  - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.77s`)
+  - `pnpm -r build`: passed (`5.58s`)
 - **Documented Upstream Warnings (3 known upstream warnings, 0 new unexplained/project-owned warnings):**
   1. `StarletteDeprecationWarning: Using httpx with starlette.testclient is deprecated; install httpx2 instead.` (Origin: `fastapi/testclient.py:1` — Upstream FastAPI/Starlette testclient deprecation notice; non-runtime).
   2. `DeprecationWarning: The anyio.abc.BlockingPortal alias is deprecated, use anyio.from_thread.BlockingPortal instead.` (Origin: `starlette/testclient.py:53` — Upstream Starlette/AnyIO import alias notice; non-runtime).
   3. `DeprecationWarning: 'asyncio.iscoroutinefunction' is deprecated and slated for removal in Python 3.16; use inspect.iscoroutinefunction() instead` (Origin: `chromadb/telemetry/opentelemetry/__init__.py:128` — Upstream ChromaDB telemetry compatibility notice for Python 3.16+; non-blocking on current Python 3.10–3.14).
+
 
 
 

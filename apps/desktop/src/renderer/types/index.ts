@@ -894,6 +894,126 @@ export interface PendingGateInfo {
   created_at: string;
 }
 
+// ============================================================================
+// Local Model Catalog & Recommendation Types (Task R3.5)
+// ============================================================================
+
+export type HardwareFitState = 'fits' | 'fits_with_limits' | 'does_not_fit' | 'unknown';
+
+export type RequirementsProvenance =
+  | 'inspected_artifact'
+  | 'trusted_catalog'
+  | 'model_metadata'
+  | 'estimate'
+  | 'unknown';
+
+export type RecommendationTier = 'fast' | 'balanced' | 'best_local';
+
+export interface TaskRequirements {
+  task_type?: string;
+  coding?: boolean;
+  reasoning?: boolean;
+  vision?: boolean;
+  tools?: boolean;
+  structured_output?: boolean;
+  min_context_tokens?: number;
+  require_local_only?: boolean;
+  required_accelerator?: string;
+}
+
+export interface CapabilityEligibility {
+  eligible: boolean;
+  missing_capabilities: string[];
+  rejection_reasons: string[];
+  evaluated_at: number;
+}
+
+export interface HardwareFitResult {
+  state: HardwareFitState;
+  safe_ram_available_bytes: number;
+  required_ram_bytes: number;
+  ram_headroom_bytes: number;
+  ram_headroom_ratio: number;
+  vram_fit_state?: HardwareFitState;
+  available_vram_bytes?: number | null;
+  required_vram_bytes?: number | null;
+  vram_headroom_bytes?: number | null;
+  is_unified_memory: boolean;
+  accelerator_compatible: boolean;
+  backend_used: string;
+  provenance: RequirementsProvenance;
+  rejection_reasons: string[];
+  explanation: string;
+}
+
+export interface CatalogModelEntry {
+  model_identity: {
+    provider_id: string;
+    model_id: string;
+    variant?: string;
+  };
+  family: string;
+  architecture: string;
+  parameter_size: string;
+  parameter_count_billions: number;
+  quantization: string;
+  managed_runtime: string;
+  artifact_size_bytes: number;
+  min_ram_bytes: number;
+  recommended_ram_bytes: number;
+  min_vram_bytes?: number | null;
+  recommended_vram_bytes?: number | null;
+  supported_backends: string[];
+  supported_architectures: string[];
+  context_window_limit: number;
+  capabilities: Record<string, string>;
+  quality_score: number;
+  provenance: RequirementsProvenance;
+  catalog_version: string;
+  updated_at: string;
+}
+
+export interface LocalModelRecommendation {
+  tier: RecommendationTier;
+  model_identity: {
+    provider_id: string;
+    model_id: string;
+    variant?: string;
+  };
+  fit_result: HardwareFitResult;
+  reason: string;
+  model_entry: CatalogModelEntry;
+}
+
+export interface RecommendationExplanation {
+  selected_tier: RecommendationTier;
+  model_identity: {
+    provider_id: string;
+    model_id: string;
+    variant?: string;
+  };
+  hardware_fit: HardwareFitResult;
+  snapshot_timestamp: number;
+  stale_telemetry: boolean;
+  factual_resources_used: Record<string, any>;
+  requirements_used: Record<string, any>;
+  reserves_used: Record<string, number>;
+  provenance: RequirementsProvenance;
+  rejection_reasons: Record<string, string[]>;
+}
+
+export interface LocalRecommendationResponse {
+  fast?: LocalModelRecommendation | null;
+  balanced?: LocalModelRecommendation | null;
+  best_local?: LocalModelRecommendation | null;
+  explanations: Record<string, RecommendationExplanation>;
+  rejection_summary: Record<string, string[]>;
+  evaluated_candidates_count: number;
+  snapshot_timestamp: number;
+  stale_telemetry: boolean;
+}
+
+
 
 
 
