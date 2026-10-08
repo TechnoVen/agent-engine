@@ -146,6 +146,9 @@ class ExecutionLedgerService:
         is_fallback = False
         fallback_chain: List[str] = []
         fallback_history: List[Dict[str, Any]] = []
+        effective_privacy_class: Optional[str] = None
+        policy_source: Optional[str] = None
+        privacy_rejections: List[Dict[str, Any]] = []
 
         for ev in raw_events:
             ev_type = ev.get("event_type")
@@ -160,6 +163,10 @@ class ExecutionLedgerService:
                     fallback_chain = payload.get("fallback_chain", [])
                     if payload.get("fallback_history"):
                         fallback_history.extend(payload["fallback_history"])
+                    effective_privacy_class = payload.get("effective_privacy_class")
+                    policy_source = payload.get("policy_source")
+                    if payload.get("privacy_rejections"):
+                        privacy_rejections.extend(payload["privacy_rejections"])
                 else:
                     # Subsequent routing resolution is a runtime fallback
                     is_fallback = True
@@ -177,6 +184,9 @@ class ExecutionLedgerService:
             is_fallback=is_fallback,
             fallback_chain=fallback_chain,
             fallback_history=fallback_history,
+            effective_privacy_class=effective_privacy_class,
+            policy_source=policy_source,
+            privacy_rejections=privacy_rejections,
         )
 
         # 7. Reconstruct Context Provenance

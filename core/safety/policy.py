@@ -548,3 +548,53 @@ class PolicyEngine:
                 required_permissions=[SkillPermission.EXECUTE],
                 approval_ttl_seconds=self.default_approval_ttl_seconds,
             )
+
+    def evaluate_data_routing(
+        self,
+        effective_policy: Any,
+        provider_id: str,
+        model_id: Optional[str] = None,
+        model_def: Optional[Any] = None,
+    ) -> PolicyDecision:
+        """Evaluate provider and model compliance with an effective data routing policy (Task R3.8).
+
+        Enforces that LOCAL_ONLY never routes to remote cloud providers, and APPROVED_CLOUD
+        only routes to explicitly authorized targets.
+        """
+        from core.privacy.engine import PrivacyPolicyEngine
+        from core.privacy.models import EffectiveRoutingPolicy
+
+        if not isinstance(effective_policy, EffectiveRoutingPolicy):
+            return PolicyDecision(
+                decision="allow",
+                risk_score=0.0,
+                risk_level="low",
+                reason="No active data routing policy.",
+            )
+
+        if model_def is not None:
+            eligibility = PrivacyPolicyEngine.evaluate_model_privacy(model_def, effective_policy)
+        else:
+            eligibility = PrivacyPolicyEngine.evaluate_provider_privacy(
+                provider_id, effective_policy
+            )
+
+        if not eligibility.eligible:
+            reasons_str = ", ".join(r.value for r in eligibility.rejection_reasons)
+            return PolicyDecision(
+                decision="block",
+                risk_score=1.0,
+                risk_level="critical",
+                matched_rule="DATA_ROUTING_PRIVACY_POLICY",
+                reason=f"Privacy policy '{effective_policy.effective_class.value}' violation: {reasons_str}",
+                suggestion="Select an eligible local model or update data-routing policy with trusted authority.",
+                required_permissions=[SkillPermission.NETWORK],
+            )
+
+        return PolicyDecision(
+            decision="allow",
+            risk_score=0.0,
+            risk_level="low",
+            matched_rule="DATA_ROUTING_PRIVACY_POLICY",
+            reason=f"Execution complies with privacy policy '{effective_policy.effective_class.value}'.",
+        )

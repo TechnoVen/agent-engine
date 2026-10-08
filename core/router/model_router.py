@@ -4,12 +4,19 @@ import os
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import dspy
 from dotenv import load_dotenv
 
 from core.execution.models import RoutingTier
+from core.privacy.engine import PrivacyPolicyEngine
+from core.privacy.models import (
+    DataRoutingClass,
+    EffectiveRoutingPolicy,
+    NoEligibleModelUnderPrivacyPolicyError,
+)
+
 from core.router.circuit_breaker import CircuitBreaker
 from core.router.config import RouterConfigFile, load_router_config
 from core.router.health import HealthProber, ProbeResult
@@ -37,6 +44,9 @@ class ResolvedModel:
     estimated_cost_per_1k_tokens: float = 0.0
     fallback_chain: List[str] = field(default_factory=list)
     is_fallback: bool = False
+    effective_privacy_class: Optional[str] = None
+    policy_source: Optional[str] = None
+    privacy_rejections: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class ModelRouter:
@@ -139,10 +149,16 @@ class ModelRouter:
         status["circuit_breakers"] = self.circuit_breaker.get_status()
         return status
 
-    def get_available_providers(self, task_type: str | None = None) -> list[str]:
+    def get_available_providers(
+        self,
+        task_type: str | None = None,
+        effective_policy: Optional[EffectiveRoutingPolicy] = None,
+        rejection_collector: Optional[List[Dict[str, Any]]] = None,
+    ) -> list[str]:
         """
         Return an ordered list of providers available for invocation,
-        filtering out providers whose circuit breaker is OPEN.
+        filtering out providers whose circuit breaker is OPEN and those
+        disallowed by the effective data routing privacy policy (Task R3.8).
         """
         status = self.get_status()
         candidates: list[str]
@@ -153,7 +169,26 @@ class ModelRouter:
 
         available: list[str] = []
         for p in candidates:
-            # Fast fail: skip providers with OPEN circuit breaker immediately
+            # 1. Privacy filtering (Task R3.8) before circuit or availability check
+            if effective_policy is not None:
+                elig = PrivacyPolicyEngine.evaluate_provider_privacy(p, effective_policy)
+                if not elig.eligible:
+                    if rejection_collector is not None:
+                        rejection_collector.append(
+                            {
+                                "provider": p,
+                                "reasons": [r.value for r in elig.rejection_reasons],
+                            }
+                        )
+                    logger.debug(
+                        "Skipping provider '%s': prohibited by privacy policy '%s' (%s)",
+                        p,
+                        effective_policy.effective_class.value,
+                        elig.rejection_reasons,
+                    )
+                    continue
+
+            # 2. Fast fail: skip providers with OPEN circuit breaker immediately
             if not self.circuit_breaker.can_attempt(p):
                 logger.debug("Skipping provider '%s': circuit breaker is OPEN", p)
                 continue
@@ -164,6 +199,10 @@ class ModelRouter:
         # If task preferences yielded no available providers, fall back to general priority
         if not available and task_type:
             for p in self.provider_priority:
+                if effective_policy is not None:
+                    elig = PrivacyPolicyEngine.evaluate_provider_privacy(p, effective_policy)
+                    if not elig.eligible:
+                        continue
                 if self.circuit_breaker.can_attempt(p) and (
                     status.get(f"{p}_live", False) or status.get(f"{p}_key_present", False)
                 ):
@@ -207,11 +246,19 @@ class ModelRouter:
         requested_model: Optional[str] = None,
         requested_tier: Optional[RoutingTier] = None,
         task_type: Optional[str] = None,
+        effective_policy: Optional[EffectiveRoutingPolicy] = None,
     ) -> ResolvedModel:
         """
-        Resolve provider, model, and routing tier (Task R1.5).
-        Respects circuit breaker status and performs transparent fallback chain traversal.
+        Resolve provider, model, and routing tier (Task R1.5 & Task R3.8).
+        Respects circuit breaker status, enforces effective privacy policy constraints before scoring,
+        and guarantees zero cloud fallback under LOCAL_ONLY.
         """
+        effective_privacy_class = (
+            effective_policy.effective_class.value if effective_policy else None
+        )
+        policy_source = effective_policy.source.value if effective_policy else None
+        privacy_rejections: List[Dict[str, Any]] = []
+
         # 1. Explicit model request
         if requested_model:
             pref = requested_model.lower().strip()
@@ -254,12 +301,28 @@ class ModelRouter:
                 else:
                     tier = RoutingTier.MID
 
+            # Pre-scoring privacy check on requested provider (Task R3.8)
+            if effective_policy is not None and provider != "local":
+                elig = PrivacyPolicyEngine.evaluate_provider_privacy(provider, effective_policy)
+                if not elig.eligible:
+                    reasons_list = [r.value for r in elig.rejection_reasons]
+                    privacy_rejections.append({"provider": provider, "reasons": reasons_list})
+                    raise NoEligibleModelUnderPrivacyPolicyError(
+                        f"NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY: Requested model/provider '{provider}' "
+                        f"is prohibited under privacy policy '{effective_policy.effective_class.value}' ({', '.join(reasons_list)})",
+                        rejection_details=privacy_rejections,
+                    )
+
             # Circuit breaker check on requested provider
             if not self.circuit_breaker.can_attempt(provider):
                 logger.warning(
                     "Circuit OPEN for requested provider '%s'; resolving fallback", provider
                 )
-                available = self.get_available_providers(task_type=task_type)
+                available = self.get_available_providers(
+                    task_type=task_type,
+                    effective_policy=effective_policy,
+                    rejection_collector=privacy_rejections,
+                )
                 fallbacks = [p for p in available if p != provider]
                 if fallbacks:
                     fb_provider = fallbacks[0]
@@ -276,6 +339,18 @@ class ModelRouter:
                         ),
                         fallback_chain=[provider, fb_provider],
                         is_fallback=True,
+                        effective_privacy_class=effective_privacy_class,
+                        policy_source=policy_source,
+                        privacy_rejections=privacy_rejections,
+                    )
+                if (
+                    effective_policy
+                    and effective_policy.effective_class == DataRoutingClass.LOCAL_ONLY
+                ):
+                    raise NoEligibleModelUnderPrivacyPolicyError(
+                        f"NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY: Circuit OPEN for local provider '{provider}' "
+                        "and cloud fallback forbidden under LOCAL_ONLY",
+                        rejection_details=privacy_rejections,
                     )
                 return ResolvedModel(
                     provider_id=provider,
@@ -285,6 +360,9 @@ class ModelRouter:
                     capabilities=[],
                     fallback_chain=[provider],
                     is_fallback=False,
+                    effective_privacy_class=effective_privacy_class,
+                    policy_source=policy_source,
+                    privacy_rejections=privacy_rejections,
                 )
 
             return ResolvedModel(
@@ -296,6 +374,9 @@ class ModelRouter:
                 estimated_cost_per_1k_tokens=self._estimate_cost_per_1k(provider, requested_model),
                 fallback_chain=[provider],
                 is_fallback=False,
+                effective_privacy_class=effective_privacy_class,
+                policy_source=policy_source,
+                privacy_rejections=privacy_rejections,
             )
 
         # 2. Explicit tier request without explicit model
@@ -308,6 +389,9 @@ class ModelRouter:
                     reason="tier_code",
                     capabilities=["deterministic"],
                     fallback_chain=["local"],
+                    effective_privacy_class=effective_privacy_class,
+                    policy_source=policy_source,
+                    privacy_rejections=privacy_rejections,
                 )
             elif requested_tier == RoutingTier.CACHE:
                 return ResolvedModel(
@@ -317,22 +401,84 @@ class ModelRouter:
                     reason="tier_cache",
                     capabilities=["caching"],
                     fallback_chain=["local"],
+                    effective_privacy_class=effective_privacy_class,
+                    policy_source=policy_source,
+                    privacy_rejections=privacy_rejections,
                 )
             elif requested_tier == RoutingTier.LOCAL:
-                prov = "ollama" if self.circuit_breaker.can_attempt("ollama") else "llamacpp"
-                model = (
-                    "qwen2.5-coder:3b" if prov == "ollama" else "qwen2.5-coder-3b-instruct-q4_k_m"
-                )
+                status = self.get_status()
+                candidates_local = ["llamacpp"]
+                if (
+                    effective_policy
+                    and effective_policy.effective_class != DataRoutingClass.LOCAL_ONLY
+                ):
+                    candidates_local.append("ollama")
+                elif not effective_policy:
+                    candidates_local.append("ollama")
+
+                available_local = [
+                    p
+                    for p in candidates_local
+                    if self.circuit_breaker.can_attempt(p)
+                    and (status.get(f"{p}_live", False) or status.get(f"{p}_key_present", False))
+                ]
+                if not available_local:
+                    if (
+                        effective_policy
+                        and effective_policy.effective_class == DataRoutingClass.LOCAL_ONLY
+                    ):
+                        raise NoEligibleModelUnderPrivacyPolicyError(
+                            "NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY: Local runtime unavailable and cloud fallback forbidden under LOCAL_ONLY",
+                            rejection_details=[{"provider": "llamacpp", "status": "unavailable"}],
+                        )
+                    prov = "llamacpp"
+                    model = "qwen2.5-coder-3b-instruct-q4_k_m"
+                else:
+                    prov = available_local[0]
+                    model = (
+                        "qwen2.5-coder:3b"
+                        if prov == "ollama"
+                        else "qwen2.5-coder-3b-instruct-q4_k_m"
+                    )
+
                 return ResolvedModel(
                     provider_id=prov,
                     model_id=model,
                     routing_tier=RoutingTier.LOCAL,
                     reason="tier_local",
                     capabilities=["local_inference"],
-                    fallback_chain=[prov],
+                    fallback_chain=available_local or [prov],
+                    effective_privacy_class=effective_privacy_class,
+                    policy_source=policy_source,
+                    privacy_rejections=privacy_rejections,
                 )
             elif requested_tier == RoutingTier.FRONTIER:
+                if (
+                    effective_policy
+                    and effective_policy.effective_class == DataRoutingClass.LOCAL_ONLY
+                ):
+                    raise NoEligibleModelUnderPrivacyPolicyError(
+                        "NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY: Frontier tier requires cloud models which are forbidden under LOCAL_ONLY",
+                        rejection_details=[
+                            {"tier": "frontier", "reason": "remote_tier_forbidden_under_local_only"}
+                        ],
+                    )
                 prov = "openai" if self.circuit_breaker.can_attempt("openai") else "anthropic"
+                if (
+                    effective_policy
+                    and effective_policy.effective_class == DataRoutingClass.APPROVED_CLOUD
+                ):
+                    if not effective_policy.is_target_approved(prov):
+                        prov = (
+                            "anthropic"
+                            if effective_policy.is_target_approved("anthropic")
+                            else "openai"
+                        )
+                        if not effective_policy.is_target_approved(prov):
+                            raise NoEligibleModelUnderPrivacyPolicyError(
+                                f"NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY: Frontier provider '{prov}' not approved under APPROVED_CLOUD",
+                                rejection_details=[{"provider": prov, "reason": "not_approved"}],
+                            )
                 model = "gpt-4o" if prov == "openai" else "claude-3-5-sonnet"
                 return ResolvedModel(
                     provider_id=prov,
@@ -342,9 +488,35 @@ class ModelRouter:
                     capabilities=["high_reasoning", "complex_context"],
                     estimated_cost_per_1k_tokens=0.005,
                     fallback_chain=[prov],
+                    effective_privacy_class=effective_privacy_class,
+                    policy_source=policy_source,
+                    privacy_rejections=privacy_rejections,
                 )
             else:
+                if (
+                    effective_policy
+                    and effective_policy.effective_class == DataRoutingClass.LOCAL_ONLY
+                ):
+                    raise NoEligibleModelUnderPrivacyPolicyError(
+                        "NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY: Mid tier requires cloud models which are forbidden under LOCAL_ONLY",
+                        rejection_details=[
+                            {"tier": "mid", "reason": "remote_tier_forbidden_under_local_only"}
+                        ],
+                    )
                 prov = "gemini" if self.circuit_breaker.can_attempt("gemini") else "openai"
+                if (
+                    effective_policy
+                    and effective_policy.effective_class == DataRoutingClass.APPROVED_CLOUD
+                ):
+                    if not effective_policy.is_target_approved(prov):
+                        prov = (
+                            "openai" if effective_policy.is_target_approved("openai") else "gemini"
+                        )
+                        if not effective_policy.is_target_approved(prov):
+                            raise NoEligibleModelUnderPrivacyPolicyError(
+                                f"NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY: Mid provider '{prov}' not approved under APPROVED_CLOUD",
+                                rejection_details=[{"provider": prov, "reason": "not_approved"}],
+                            )
                 model = "gemini-2.0-flash" if prov == "gemini" else "gpt-4o-mini"
                 return ResolvedModel(
                     provider_id=prov,
@@ -354,11 +526,31 @@ class ModelRouter:
                     capabilities=["general_chat", "completion"],
                     estimated_cost_per_1k_tokens=0.00015,
                     fallback_chain=[prov],
+                    effective_privacy_class=effective_privacy_class,
+                    policy_source=policy_source,
+                    privacy_rejections=privacy_rejections,
                 )
 
         # 3. Default resolution
-        available = self.get_available_providers(task_type=task_type)
+        available = self.get_available_providers(
+            task_type=task_type,
+            effective_policy=effective_policy,
+            rejection_collector=privacy_rejections,
+        )
         if not available:
+            if effective_policy and effective_policy.effective_class == DataRoutingClass.LOCAL_ONLY:
+                raise NoEligibleModelUnderPrivacyPolicyError(
+                    "NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY: No local model available and cloud fallback forbidden under LOCAL_ONLY",
+                    rejection_details=privacy_rejections,
+                )
+            if (
+                effective_policy
+                and effective_policy.effective_class == DataRoutingClass.APPROVED_CLOUD
+            ):
+                raise NoEligibleModelUnderPrivacyPolicyError(
+                    "NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY: No approved cloud or local provider available under APPROVED_CLOUD",
+                    rejection_details=privacy_rejections,
+                )
             return ResolvedModel(
                 provider_id="none",
                 model_id="none",
@@ -367,6 +559,9 @@ class ModelRouter:
                 capabilities=[],
                 fallback_chain=[],
                 is_fallback=False,
+                effective_privacy_class=effective_privacy_class,
+                policy_source=policy_source,
+                privacy_rejections=privacy_rejections,
             )
 
         primary = available[0]
@@ -381,6 +576,9 @@ class ModelRouter:
             estimated_cost_per_1k_tokens=self._estimate_cost_per_1k(primary, model),
             fallback_chain=available,
             is_fallback=False,
+            effective_privacy_class=effective_privacy_class,
+            policy_source=policy_source,
+            privacy_rejections=privacy_rejections,
         )
 
     def create_lm(

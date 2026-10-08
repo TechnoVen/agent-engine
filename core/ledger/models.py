@@ -63,6 +63,13 @@ class ModelRoutingTrace(BaseModel):
     is_fallback: bool = False
     fallback_chain: List[str] = Field(default_factory=list)
     fallback_history: List[Dict[str, Any]] = Field(default_factory=list)
+    effective_privacy_class: Optional[str] = None
+    policy_source: Optional[str] = None
+    privacy_rejections: List[Dict[str, Any]] = Field(default_factory=list)
+
+    @property
+    def provider_id(self) -> Optional[str]:
+        return self.actual_provider
 
 
 class ContextProvenance(BaseModel):

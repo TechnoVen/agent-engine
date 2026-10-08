@@ -506,12 +506,15 @@ class ExecutionCoordinator:
             "cancelled_at": cancelled_at,
         }
 
-    def _resolve_routing(self, request: ExecutionRequest) -> Any:
-        """Resolve routing tier, provider, and concrete model name using ModelRouter."""
+    def _resolve_routing(
+        self, request: ExecutionRequest, effective_policy: Optional[Any] = None
+    ) -> Any:
+        """Resolve routing tier, provider, and concrete model name using ModelRouter (Task R1.5 & Task R3.8)."""
         return self.model_router.resolve_model(
             requested_model=request.model_preference,
             requested_tier=request.target_tier,
             task_type=request.task_type,
+            effective_policy=effective_policy,
         )
 
     @staticmethod
@@ -1104,9 +1107,87 @@ class ExecutionCoordinator:
                 cancel_on_disconnect=request.cancel_on_disconnect,
             )
 
+            # Phase 2.5: Privacy & Data-Routing Policy Resolution (Task R3.8)
+            from core.privacy.engine import PrivacyPolicyEngine, get_system_routing_policy
+            from core.privacy.models import (
+                DataRoutingClass,
+                DataRoutingPolicy,
+                EffectiveRoutingPolicy,
+                NoEligibleModelUnderPrivacyPolicyError,
+            )
+
+            # Resolve project privacy policy if configured
+            project_data_policy = None
+            if request.project_id:
+                try:
+                    proj_doc = self.storage.get_project(request.project_id)
+                    if proj_doc and isinstance(proj_doc, dict):
+                        settings_dict = proj_doc.get("settings") or {}
+                        if (
+                            isinstance(settings_dict, dict)
+                            and "data_routing_policy" in settings_dict
+                        ):
+                            pol_data = settings_dict["data_routing_policy"]
+                            if pol_data:
+                                project_data_policy = DataRoutingPolicy.model_validate(pol_data)
+                except Exception as proj_err:
+                    logger.debug("Failed to load project privacy policy: %s", proj_err)
+
+            # Resolve task policy from request inputs
+            task_data_policy = (
+                request.inputs.get("data_routing_policy")
+                or request.inputs.get("privacy_policy")
+                or request.inputs.get("privacy_class")
+                or request.inputs.get("data_routing_class")
+            )
+
+            # Determine whether caller is trusted authority
+            is_trusted_auth = bool(
+                request.inputs.get("is_trusted_authority")
+                or request.inputs.get("trusted_authority")
+                or request.inputs.get("ipc_authenticated")
+                or (request.inputs.get("actor") in ("local_operator", "trusted_operator", "admin"))
+            )
+            # Untrusted sources cannot relax privacy class
+            if (
+                request.inputs.get("renderer_only")
+                or request.inputs.get("forged")
+                or request.inputs.get("untrusted")
+            ):
+                is_trusted_auth = False
+
+            effective_policy: EffectiveRoutingPolicy = PrivacyPolicyEngine.resolve_effective_policy(
+                profile_policy=get_system_routing_policy(),
+                project_policy=project_data_policy,
+                task_policy=task_data_policy,
+                is_trusted_authority=is_trusted_auth,
+            )
+
             # Phase 3: Routing & Tier Resolution
             state_machine.transition(ExecutionStatus.ROUTING)
-            resolved: ResolvedModel = self._resolve_routing(request)
+            try:
+                resolved: ResolvedModel = self._resolve_routing(
+                    request, effective_policy=effective_policy
+                )
+            except NoEligibleModelUnderPrivacyPolicyError as priv_err:
+                reason = f"NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY: {priv_err.message}"
+                state_machine.transition(
+                    ExecutionStatus.FAILED,
+                    reason=reason,
+                    error_code="NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY",
+                    error_message=reason,
+                )
+                self.storage.update_execution(exec_id, execution.model_dump())
+                return ExecutionResult(
+                    execution_id=exec_id,
+                    status=ExecutionStatus.FAILED,
+                    error=reason,
+                    error_code="NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY",
+                    routing_tier=request.target_tier,
+                    model_used=None,
+                    provider_used=None,
+                )
+
             tier = resolved.routing_tier
             provider = resolved.provider_id
             model_name = resolved.model_id
@@ -1129,17 +1210,48 @@ class ExecutionCoordinator:
                         "fallback_reason": resolved.reason if resolved.is_fallback else None,
                         "reason": resolved.reason,
                         "context_provenance": context_provenance,
+                        "effective_privacy_class": effective_policy.effective_class.value,
+                        "policy_source": effective_policy.source.value,
+                        "privacy_rejections": getattr(resolved, "privacy_rejections", []),
                     },
                 )
             )
             state_machine.current_sequence_num += 1
 
             if provider == "none":
-                reason = "NO_AVAILABLE_PROVIDER: No LLM provider available in fallback chain. All circuits OPEN or offline."
+                is_privacy_failure = bool(
+                    "PRIVACY" in (resolved.reason or "").upper()
+                    or (
+                        effective_policy
+                        and effective_policy.effective_class == DataRoutingClass.LOCAL_ONLY
+                        and (
+                            "LOCAL" in (resolved.reason or "").upper()
+                            or "INELIGIBLE" in (resolved.reason or "").upper()
+                        )
+                    )
+                )
+                err_code = (
+                    "NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY"
+                    if is_privacy_failure
+                    else "NO_AVAILABLE_PROVIDER"
+                )
+
+                if is_privacy_failure:
+                    reason = (
+                        f"{err_code}: {resolved.reason}"
+                        if resolved.reason
+                        else f"{err_code}: No eligible provider available."
+                    )
+                else:
+                    reason = (
+                        f"NO_AVAILABLE_PROVIDER: No LLM provider available in fallback chain. All circuits OPEN or offline. ({resolved.reason})"
+                        if resolved.reason
+                        else "NO_AVAILABLE_PROVIDER: No LLM provider available in fallback chain. All circuits OPEN or offline."
+                    )
                 state_machine.transition(
                     ExecutionStatus.FAILED,
                     reason=reason,
-                    error_code="NO_AVAILABLE_PROVIDER",
+                    error_code=err_code,
                     error_message=reason,
                 )
                 self.storage.update_execution(exec_id, execution.model_dump())
@@ -1147,7 +1259,7 @@ class ExecutionCoordinator:
                     execution_id=exec_id,
                     status=ExecutionStatus.FAILED,
                     error=reason,
-                    error_code="NO_AVAILABLE_PROVIDER",
+                    error_code=err_code,
                     routing_tier=tier,
                     model_used=model_name,
                     provider_used=provider,
@@ -1290,6 +1402,35 @@ class ExecutionCoordinator:
                     ]
                     policy_decision.decision = "stage"
                     policy_decision.reason = f"Skill '{skill_id}' requires human approval for consequential permissions: {violating}"
+
+            # Phase 4.1: PolicyEngine Data-Routing Check (Task R3.8)
+            if hasattr(self.policy_engine, "evaluate_data_routing"):
+                routing_decision = self.policy_engine.evaluate_data_routing(
+                    effective_policy=effective_policy,
+                    provider_id=provider,
+                    model_id=model_name,
+                )
+            else:
+                routing_decision = PolicyDecision(
+                    decision="allow", risk_score=0.0, risk_level="low"
+                )
+            if routing_decision.is_denied:
+                state_machine.transition(
+                    ExecutionStatus.BLOCKED,
+                    reason=routing_decision.reason,
+                    error_code="PRIVACY_POLICY_BLOCKED",
+                    error_message=routing_decision.reason,
+                )
+                self.storage.update_execution(exec_id, execution.model_dump())
+                return ExecutionResult(
+                    execution_id=exec_id,
+                    status=ExecutionStatus.BLOCKED,
+                    error=routing_decision.reason,
+                    error_code="PRIVACY_POLICY_BLOCKED",
+                    routing_tier=tier,
+                    model_used=model_name,
+                    provider_used=provider,
+                )
 
             if policy_decision.decision in ("block", "deny") or policy_decision.is_denied:
                 state_machine.transition(
@@ -1474,6 +1615,51 @@ class ExecutionCoordinator:
             # Cancellation check before running
             if token.is_cancelled:
                 return handle_cancellation("pre_dispatch")
+
+            # Phase 6.9: Defense-in-Depth Dispatch-Time Privacy Guard (Task R3.8)
+            # Re-verifies effective privacy policy immediately before dispatch to guarantee
+            # zero remote network egress under LOCAL_ONLY even if router was bypassed or misconfigured.
+            if provider != "local" and tier not in (RoutingTier.CODE, RoutingTier.CACHE):
+                dispatch_eligibility = PrivacyPolicyEngine.evaluate_provider_privacy(
+                    provider, effective_policy
+                )
+                if not dispatch_eligibility.eligible:
+                    reasons_str = ", ".join(r.value for r in dispatch_eligibility.rejection_reasons)
+                    guard_reason = (
+                        f"PRIVACY_POLICY_BLOCKED: Dispatch boundary blocked provider '{provider}' "
+                        f"under '{effective_policy.effective_class.value}' policy ({reasons_str})"
+                    )
+                    logger.error(guard_reason)
+                    state_machine.transition(
+                        ExecutionStatus.BLOCKED,
+                        reason=guard_reason,
+                        error_code="PRIVACY_POLICY_BLOCKED",
+                        error_message=guard_reason,
+                    )
+                    ev_blocked = ExecutionEvent(
+                        execution_id=exec_id,
+                        sequence_num=state_machine.current_sequence_num,
+                        event_type=ExecutionEventType.ERROR,
+                        payload={
+                            "error_code": "PRIVACY_POLICY_BLOCKED",
+                            "error": guard_reason,
+                            "provider": provider,
+                            "effective_privacy_class": effective_policy.effective_class.value,
+                            "policy_source": effective_policy.source.value,
+                        },
+                    )
+                    combined_event_sink(ev_blocked)
+                    state_machine.current_sequence_num += 1
+                    self.storage.update_execution(exec_id, execution.model_dump())
+                    return ExecutionResult(
+                        execution_id=exec_id,
+                        status=ExecutionStatus.BLOCKED,
+                        error=guard_reason,
+                        error_code="PRIVACY_POLICY_BLOCKED",
+                        routing_tier=tier,
+                        model_used=model_name,
+                        provider_used=provider,
+                    )
 
             # Phase 7: Execution Dispatch
             state_machine.transition(ExecutionStatus.RUNNING)

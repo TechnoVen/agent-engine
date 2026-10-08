@@ -463,3 +463,49 @@ async def export_safety_audit_logs(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=safety_audit_logs.csv"},
     )
+
+
+# ==============================================================================
+# Privacy and Data-Routing Policy Endpoints (Task R3.8)
+# ==============================================================================
+from services.python.server.routers.privacy import (
+    DataRoutingPolicyRequest,
+    ProjectPrivacyPolicyRequest,
+    ProjectPrivacyPolicyResponse,
+    SystemPrivacyPolicyResponse,
+    get_project_privacy_policy as _get_project_privacy_policy,
+    get_system_privacy_policy as _get_system_privacy_policy,
+    update_project_privacy_policy as _update_project_privacy_policy,
+    update_system_privacy_policy as _update_system_privacy_policy,
+)
+
+
+@router.get("/privacy/policy", response_model=SystemPrivacyPolicyResponse)
+async def get_system_privacy_policy():
+    """Retrieve the current system/profile data routing policy and its effective state."""
+    return await _get_system_privacy_policy()
+
+
+@router.put("/privacy/policy", response_model=SystemPrivacyPolicyResponse)
+async def update_system_privacy_policy(
+    req: DataRoutingPolicyRequest,
+    request: Request,
+):
+    """Update the system/profile data routing policy."""
+    return await _update_system_privacy_policy(req, request)
+
+
+@router.get("/projects/{project_id}/privacy", response_model=ProjectPrivacyPolicyResponse)
+async def get_project_privacy_policy(project_id: str):
+    """Retrieve effective data routing policy for a canonical project."""
+    return await _get_project_privacy_policy(project_id)
+
+
+@router.put("/projects/{project_id}/privacy", response_model=ProjectPrivacyPolicyResponse)
+async def update_project_privacy_policy(
+    project_id: str,
+    req: ProjectPrivacyPolicyRequest,
+    request: Request,
+):
+    """Update data routing policy for a specific canonical project."""
+    return await _update_project_privacy_policy(project_id, req, request)

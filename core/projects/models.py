@@ -11,6 +11,8 @@ import uuid
 from typing import Any, Dict, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
+from core.privacy.models import DataRoutingPolicy
+
 
 def generate_project_id() -> str:
     return f"proj_{uuid.uuid4().hex[:12]}"
@@ -28,6 +30,7 @@ class ProjectSettings(BaseModel):
     budget_ceiling_usd: float = 100.0
     isolation_mode: str = "standard"  # "standard", "worktree", "read_only"
     custom_rules: Dict[str, Any] = Field(default_factory=dict)
+    data_routing_policy: Optional[DataRoutingPolicy] = None
 
 
 class Project(BaseModel):
