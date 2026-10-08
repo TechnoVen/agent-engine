@@ -34,6 +34,18 @@ class HardwareFitState(str, Enum):
     UNKNOWN = "unknown"
 
 
+class NumericFactProvenance(str, Enum):
+    """Authority and verification origin of numerical facts."""
+
+    DECLARED_FACT = "declared_fact"  # Vendor / publisher stated specification
+    INSPECTED_FACT = "inspected_fact"  # Directly extracted from GGUF binary header
+    MEASURED_FACT = "measured_fact"  # Measured empirically in testing
+    DERIVED_ESTIMATE = "derived_estimate"  # Computed via mathematical formula (e.g. KV cache)
+    CURATED_HEURISTIC = "curated_heuristic"  # Conservative engineering recommendation
+    CURATED_POLICY = "curated_policy"  # Policy-assigned tier or ranking
+    UNKNOWN = "unknown"  # Unverified / indeterminate
+
+
 class RequirementsProvenance(str, Enum):
     """Authority and origin of hardware requirement facts."""
 
@@ -50,6 +62,17 @@ class RecommendationTier(str, Enum):
     FAST = "fast"
     BALANCED = "balanced"
     BEST_LOCAL = "best_local"
+
+
+class ModelKVArchitectureMetadata(BaseModel):
+    """Model architecture parameters required to calculate exact KV cache memory scaling."""
+
+    num_layers: int
+    num_kv_heads: int
+    head_dim: int
+    cache_element_bytes: int = 2  # FP16 KV cache in llama.cpp (2 bytes per element)
+    provenance: NumericFactProvenance = NumericFactProvenance.DECLARED_FACT
+    source: str = "official_model_config"
 
 
 class TaskRequirements(BaseModel):
@@ -80,9 +103,15 @@ class HardwareFitResult(BaseModel):
 
     state: HardwareFitState
     safe_ram_available_bytes: int
-    required_ram_bytes: int
-    ram_headroom_bytes: int
-    ram_headroom_ratio: float  # [0.0, 1.0] safe headroom fraction
+    usable_before_model_bytes: int  # Exact denominator: available_ram - OS - AE - runtime_base
+    required_ram_bytes: int  # model resident min_ram + KV cache context bytes
+    ram_headroom_bytes: int  # usable_before_model_bytes - required_ram_bytes
+    ram_headroom_ratio: (
+        float  # [0.0, 1.0] exact headroom fraction: ram_headroom_bytes / usable_before_model_bytes
+    )
+    memory_unit: str = "bytes"
+    kv_context_bytes: int = 0
+    kv_context_provenance: NumericFactProvenance = NumericFactProvenance.DERIVED_ESTIMATE
     vram_fit_state: Optional[HardwareFitState] = None
     available_vram_bytes: Optional[int] = None
     required_vram_bytes: Optional[int] = None
@@ -103,13 +132,23 @@ class CatalogModelEntry(BaseModel):
     architecture: str  # e.g., "qwen2", "llama"
     parameter_size: str  # e.g., "1.5B", "3B", "7B", "14B"
     parameter_count_billions: float  # e.g., 1.5, 3.0, 7.0
+    parameter_count_provenance: NumericFactProvenance = NumericFactProvenance.DECLARED_FACT
     quantization: str  # e.g., "Q4_K_M"
     managed_runtime: str = "llamacpp"
+    memory_unit: str = "bytes"
     artifact_size_bytes: int
+    artifact_size_provenance: NumericFactProvenance = NumericFactProvenance.MEASURED_FACT
+    artifact_size_source: str = "measured_gguf_release_file"
     min_ram_bytes: int
+    min_ram_provenance: NumericFactProvenance = NumericFactProvenance.CURATED_HEURISTIC
+    min_ram_source: str = "curated_catalog_policy_v2026.10.1"
     recommended_ram_bytes: int
+    recommended_ram_provenance: NumericFactProvenance = NumericFactProvenance.CURATED_HEURISTIC
+    recommended_ram_source: str = "curated_catalog_policy_v2026.10.1"
+    accelerator_required: bool = False  # Hard requirement only if True; CPU-capable otherwise
     min_vram_bytes: Optional[int] = None
     recommended_vram_bytes: Optional[int] = None
+    min_vram_bytes_if_gpu_required: Optional[int] = None
     supported_backends: List[str] = Field(
         default_factory=lambda: ["cpu", "cuda", "metal", "rocm", "vulkan"]
     )
@@ -117,8 +156,12 @@ class CatalogModelEntry(BaseModel):
         default_factory=lambda: ["x86_64", "arm64", "aarch64"]
     )
     context_window_limit: int = 32768
+    context_window_provenance: NumericFactProvenance = NumericFactProvenance.DECLARED_FACT
+    kv_metadata: Optional[ModelKVArchitectureMetadata] = None
     capabilities: Dict[str, TriStateBool] = Field(default_factory=dict)
-    quality_score: float = 0.5  # Static benchmark capability score [0.0, 1.0]
+    quality_rank: int = 1  # Curated capability rank [1..10], strictly integer
+    quality_rank_provenance: NumericFactProvenance = NumericFactProvenance.CURATED_POLICY
+    quality_rank_source: str = "Agent Engine Curated Quality Policy v2026.10.1"
     provenance: RequirementsProvenance = RequirementsProvenance.TRUSTED_CATALOG
     catalog_version: str = "2026.10.1"
     updated_at: str = "2026-10-08T00:00:00Z"
@@ -160,3 +203,6 @@ class LocalRecommendationResponse(BaseModel):
     evaluated_candidates_count: int = 0
     snapshot_timestamp: float = 0.0
     stale_telemetry: bool = False
+    resource_captured_at: float = 0.0
+    resource_stale: bool = False
+    warning: Optional[str] = None

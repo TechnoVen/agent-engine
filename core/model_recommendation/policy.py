@@ -17,11 +17,13 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
+from core.model_recommendation.models import ModelKVArchitectureMetadata
+
 # Default safety reserves in bytes
-DEFAULT_OS_RESERVE_BYTES = int(1.5 * 1024 * 1024 * 1024)  # 1.5 GB
-DEFAULT_AGENT_ENGINE_RESERVE_BYTES = 512 * 1024 * 1024  # 512 MB
-DEFAULT_RUNTIME_BASE_RESERVE_BYTES = 512 * 1024 * 1024  # 512 MB
-DEFAULT_DISCRETE_VRAM_RESERVE_BYTES = 256 * 1024 * 1024  # 256 MB
+DEFAULT_OS_RESERVE_BYTES = int(1.5 * 1024 * 1024 * 1024)  # 1.5 GiB
+DEFAULT_AGENT_ENGINE_RESERVE_BYTES = 512 * 1024 * 1024  # 512 MiB
+DEFAULT_RUNTIME_BASE_RESERVE_BYTES = 512 * 1024 * 1024  # 512 MiB
+DEFAULT_DISCRETE_VRAM_RESERVE_BYTES = 256 * 1024 * 1024  # 256 MiB
 
 
 class ReservePolicy(BaseModel):
@@ -32,27 +34,61 @@ class ReservePolicy(BaseModel):
     runtime_base_reserve_bytes: int = Field(default=DEFAULT_RUNTIME_BASE_RESERVE_BYTES, ge=0)
     discrete_vram_reserve_bytes: int = Field(default=DEFAULT_DISCRETE_VRAM_RESERVE_BYTES, ge=0)
 
-    # Minimum safe headroom ratios (headroom_bytes / safe_available_bytes)
+    # Minimum safe headroom ratios (remaining_bytes / usable_before_model_bytes)
     min_headroom_fast_ratio: float = 0.35  # >= 35% safe headroom for FAST tier
     min_headroom_balanced_ratio: float = 0.20  # >= 20% safe headroom for BALANCED tier
     min_headroom_best_ratio: float = 0.05  # >= 5% safe headroom for BEST_LOCAL tier
+
+
+def calculate_model_kv_cache_bytes(
+    metadata: Optional[ModelKVArchitectureMetadata],
+    context_tokens: int,
+) -> int:
+    """Calculate exact model-specific KV cache bytes based on transformer architecture.
+
+    Formula:
+      2 (key + value) * num_layers * num_kv_heads * head_dim * cache_element_bytes * context_tokens
+    Increases strictly monotonically with context length.
+    If metadata is None, returns 0 (handled as unknown architecture).
+    """
+    if metadata is None:
+        return 0
+    tokens = max(512, context_tokens)
+    return (
+        2
+        * metadata.num_layers
+        * metadata.num_kv_heads
+        * metadata.head_dim
+        * metadata.cache_element_bytes
+        * tokens
+    )
 
 
 def calculate_kv_context_overhead(
     context_tokens: int,
     parameter_count_billions: float = 3.0,
 ) -> int:
-    """Calculate conservative memory overhead in bytes for KV cache at given context length.
+    """Fallback approximation for KV cache overhead when architectural metadata is unavailable.
 
     Approximation based on FP16 KV cache scaling with context length and model width:
-    Base ~100MB per 2048 tokens for 3B models, scaling with parameter size.
+    Base ~100 MiB per 2048 tokens for 3B models, scaling with parameter size.
     """
     tokens = max(512, context_tokens)
     scale = max(0.5, parameter_count_billions / 3.0)
-    # Approx 50KB per token scaled by model dimension
     overhead = int(tokens * 50 * 1024 * scale)
-    # Bound minimum overhead to 64MB
     return max(64 * 1024 * 1024, overhead)
+
+
+def calculate_usable_ram_before_model(
+    available_ram_bytes: int,
+    policy: Optional[ReservePolicy] = None,
+) -> int:
+    """Compute usable RAM before model resident load: available - OS - AE - runtime_base."""
+    p = policy or ReservePolicy()
+    total_reserves = (
+        p.os_reserve_bytes + p.agent_engine_reserve_bytes + p.runtime_base_reserve_bytes
+    )
+    return max(0, available_ram_bytes - total_reserves)
 
 
 def calculate_safe_available_ram(

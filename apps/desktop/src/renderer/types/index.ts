@@ -907,6 +907,24 @@ export type RequirementsProvenance =
   | 'estimate'
   | 'unknown';
 
+export type NumericFactProvenance =
+  | 'declared_fact'
+  | 'inspected_fact'
+  | 'measured_fact'
+  | 'derived_estimate'
+  | 'curated_heuristic'
+  | 'curated_policy'
+  | 'unknown';
+
+export interface ModelKVArchitectureMetadata {
+  num_layers: number;
+  num_kv_heads: number;
+  head_dim: number;
+  cache_element_bytes: number;
+  provenance: NumericFactProvenance;
+  source: string;
+}
+
 export type RecommendationTier = 'fast' | 'balanced' | 'best_local';
 
 export interface TaskRequirements {
@@ -931,9 +949,13 @@ export interface CapabilityEligibility {
 export interface HardwareFitResult {
   state: HardwareFitState;
   safe_ram_available_bytes: number;
+  usable_before_model_bytes: number;
   required_ram_bytes: number;
   ram_headroom_bytes: number;
   ram_headroom_ratio: number;
+  memory_unit: string;
+  kv_context_bytes: number;
+  kv_context_provenance: NumericFactProvenance;
   vram_fit_state?: HardwareFitState;
   available_vram_bytes?: number | null;
   required_vram_bytes?: number | null;
@@ -956,18 +978,32 @@ export interface CatalogModelEntry {
   architecture: string;
   parameter_size: string;
   parameter_count_billions: number;
+  parameter_count_provenance: NumericFactProvenance;
   quantization: string;
   managed_runtime: string;
+  memory_unit: string;
   artifact_size_bytes: number;
+  artifact_size_provenance: NumericFactProvenance;
+  artifact_size_source: string;
   min_ram_bytes: number;
+  min_ram_provenance: NumericFactProvenance;
+  min_ram_source: string;
   recommended_ram_bytes: number;
+  recommended_ram_provenance: NumericFactProvenance;
+  recommended_ram_source: string;
+  accelerator_required: boolean;
   min_vram_bytes?: number | null;
   recommended_vram_bytes?: number | null;
+  min_vram_bytes_if_gpu_required?: number | null;
   supported_backends: string[];
   supported_architectures: string[];
   context_window_limit: number;
+  context_window_provenance: NumericFactProvenance;
+  kv_metadata?: ModelKVArchitectureMetadata | null;
   capabilities: Record<string, string>;
-  quality_score: number;
+  quality_rank: number;
+  quality_rank_provenance: NumericFactProvenance;
+  quality_rank_source: string;
   provenance: RequirementsProvenance;
   catalog_version: string;
   updated_at: string;
@@ -1011,6 +1047,9 @@ export interface LocalRecommendationResponse {
   evaluated_candidates_count: number;
   snapshot_timestamp: number;
   stale_telemetry: boolean;
+  resource_captured_at: number;
+  resource_stale: boolean;
+  warning?: string | null;
 }
 
 

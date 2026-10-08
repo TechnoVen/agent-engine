@@ -22,6 +22,8 @@ from core.model_recommendation.models import (
     HardwareFitState,
     LocalModelRecommendation,
     LocalRecommendationResponse,
+    ModelKVArchitectureMetadata,
+    NumericFactProvenance,
     RecommendationExplanation,
     RecommendationTier,
     RequirementsProvenance,
@@ -34,8 +36,10 @@ from core.model_recommendation.policy import (
     DEFAULT_RUNTIME_BASE_RESERVE_BYTES,
     ReservePolicy,
     calculate_kv_context_overhead,
+    calculate_model_kv_cache_bytes,
     calculate_safe_available_ram,
     calculate_safe_available_vram,
+    calculate_usable_ram_before_model,
 )
 
 __all__ = [
@@ -55,6 +59,8 @@ __all__ = [
     "HardwareFitState",
     "LocalModelRecommendation",
     "LocalRecommendationResponse",
+    "ModelKVArchitectureMetadata",
+    "NumericFactProvenance",
     "RecommendationExplanation",
     "RecommendationTier",
     "RequirementsProvenance",
@@ -66,6 +72,8 @@ __all__ = [
     "DEFAULT_RUNTIME_BASE_RESERVE_BYTES",
     "ReservePolicy",
     "calculate_kv_context_overhead",
+    "calculate_model_kv_cache_bytes",
     "calculate_safe_available_ram",
     "calculate_safe_available_vram",
+    "calculate_usable_ram_before_model",
 ]

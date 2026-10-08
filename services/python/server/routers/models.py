@@ -7,6 +7,7 @@ Part of Task R1.14 (Split Monolithic API by Domain).
 from __future__ import annotations
 
 import logging
+import time
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -282,6 +283,16 @@ async def get_model_recommendations(
     try:
         manager = get_resource_manager()
         snapshot = manager.get_snapshot()
+        now = time.time()
+        age = now - snapshot.captured_at
+        warning: Optional[str] = None
+        if age > 5.0 or snapshot.stale:
+            try:
+                snapshot = manager.get_snapshot(force_refresh=True)
+            except Exception as exc:
+                logger.warning("Failed to refresh stale resource snapshot: %s", exc)
+                warning = f"Resource telemetry is stale ({age:.1f}s old); automatic refresh failed."
+
         reqs = TaskRequirements(
             task_type=task_type,
             coding=coding,
@@ -293,7 +304,12 @@ async def get_model_recommendations(
             require_local_only=require_local_only,
             required_accelerator=required_accelerator,
         )
-        return recommend_local_models(snapshot=snapshot, requirements=reqs)
+        rec_res = recommend_local_models(snapshot=snapshot, requirements=reqs)
+        if warning:
+            rec_res.warning = warning
+            rec_res.resource_stale = True
+            rec_res.stale_telemetry = True
+        return rec_res
     except Exception as e:
         logger.error("Failed to generate model recommendations: %s", e)
         raise HTTPException(

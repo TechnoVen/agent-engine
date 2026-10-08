@@ -17,6 +17,8 @@ from typing import Dict, List, Optional
 
 from core.model_recommendation.models import (
     CatalogModelEntry,
+    ModelKVArchitectureMetadata,
+    NumericFactProvenance,
     RequirementsProvenance,
 )
 from core.model_registry.models import ModelIdentity, TriStateBool
@@ -37,12 +39,29 @@ def get_curated_local_models() -> List[CatalogModelEntry]:
             architecture="llama",
             parameter_size="1B",
             parameter_count_billions=1.2,
+            parameter_count_provenance=NumericFactProvenance.DECLARED_FACT,
             quantization="Q4_K_M",
             managed_runtime="llamacpp",
-            artifact_size_bytes=850 * 1024 * 1024,  # ~850 MB
-            min_ram_bytes=int(1.5 * 1024 * 1024 * 1024),  # 1.5 GB
-            recommended_ram_bytes=2 * 1024 * 1024 * 1024,  # 2.0 GB
+            memory_unit="bytes",
+            artifact_size_bytes=850 * 1024 * 1024,  # ~850 MiB
+            artifact_size_provenance=NumericFactProvenance.MEASURED_FACT,
+            artifact_size_source="meta_llama_3.2_1b_gguf_release",
+            min_ram_bytes=int(1.5 * 1024 * 1024 * 1024),  # 1.5 GiB
+            min_ram_provenance=NumericFactProvenance.CURATED_HEURISTIC,
+            min_ram_source="curated_catalog_policy_v2026.10.1",
+            recommended_ram_bytes=2 * 1024 * 1024 * 1024,  # 2.0 GiB
+            recommended_ram_provenance=NumericFactProvenance.CURATED_HEURISTIC,
+            recommended_ram_source="curated_catalog_policy_v2026.10.1",
+            accelerator_required=False,
             context_window_limit=8192,
+            context_window_provenance=NumericFactProvenance.DECLARED_FACT,
+            kv_metadata=ModelKVArchitectureMetadata(
+                num_layers=16,
+                num_kv_heads=8,
+                head_dim=64,
+                cache_element_bytes=2,
+                source="meta-llama-3.2-1b-config",
+            ),
             capabilities={
                 "coding": TriStateBool.FALSE,
                 "reasoning": TriStateBool.FALSE,
@@ -51,7 +70,9 @@ def get_curated_local_models() -> List[CatalogModelEntry]:
                 "structured_output": TriStateBool.TRUE,
                 "streaming": TriStateBool.TRUE,
             },
-            quality_score=0.50,
+            quality_rank=1,
+            quality_rank_provenance=NumericFactProvenance.CURATED_POLICY,
+            quality_rank_source="Agent Engine Curated Quality Policy v2026.10.1",
             provenance=RequirementsProvenance.TRUSTED_CATALOG,
             catalog_version=DEFAULT_CATALOG_VERSION,
             updated_at=DEFAULT_CATALOG_UPDATED_AT,
@@ -65,12 +86,29 @@ def get_curated_local_models() -> List[CatalogModelEntry]:
             architecture="qwen2",
             parameter_size="1.5B",
             parameter_count_billions=1.5,
+            parameter_count_provenance=NumericFactProvenance.DECLARED_FACT,
             quantization="Q4_K_M",
             managed_runtime="llamacpp",
-            artifact_size_bytes=int(1.1 * 1024 * 1024 * 1024),  # ~1.1 GB
-            min_ram_bytes=2 * 1024 * 1024 * 1024,  # 2.0 GB
-            recommended_ram_bytes=int(2.5 * 1024 * 1024 * 1024),  # 2.5 GB
+            memory_unit="bytes",
+            artifact_size_bytes=int(1.1 * 1024 * 1024 * 1024),  # ~1.1 GiB
+            artifact_size_provenance=NumericFactProvenance.MEASURED_FACT,
+            artifact_size_source="qwen2.5_coder_1.5b_gguf_release",
+            min_ram_bytes=2 * 1024 * 1024 * 1024,  # 2.0 GiB
+            min_ram_provenance=NumericFactProvenance.CURATED_HEURISTIC,
+            min_ram_source="curated_catalog_policy_v2026.10.1",
+            recommended_ram_bytes=int(2.5 * 1024 * 1024 * 1024),  # 2.5 GiB
+            recommended_ram_provenance=NumericFactProvenance.CURATED_HEURISTIC,
+            recommended_ram_source="curated_catalog_policy_v2026.10.1",
+            accelerator_required=False,
             context_window_limit=32768,
+            context_window_provenance=NumericFactProvenance.DECLARED_FACT,
+            kv_metadata=ModelKVArchitectureMetadata(
+                num_layers=28,
+                num_kv_heads=2,
+                head_dim=128,
+                cache_element_bytes=2,
+                source="qwen2.5-coder-1.5b-config",
+            ),
             capabilities={
                 "coding": TriStateBool.TRUE,
                 "reasoning": TriStateBool.FALSE,
@@ -79,7 +117,9 @@ def get_curated_local_models() -> List[CatalogModelEntry]:
                 "structured_output": TriStateBool.TRUE,
                 "streaming": TriStateBool.TRUE,
             },
-            quality_score=0.65,
+            quality_rank=2,
+            quality_rank_provenance=NumericFactProvenance.CURATED_POLICY,
+            quality_rank_source="Agent Engine Curated Quality Policy v2026.10.1",
             provenance=RequirementsProvenance.TRUSTED_CATALOG,
             catalog_version=DEFAULT_CATALOG_VERSION,
             updated_at=DEFAULT_CATALOG_UPDATED_AT,
@@ -93,12 +133,29 @@ def get_curated_local_models() -> List[CatalogModelEntry]:
             architecture="llama",
             parameter_size="3B",
             parameter_count_billions=3.2,
+            parameter_count_provenance=NumericFactProvenance.DECLARED_FACT,
             quantization="Q4_K_M",
             managed_runtime="llamacpp",
-            artifact_size_bytes=int(2.0 * 1024 * 1024 * 1024),  # ~2.0 GB
-            min_ram_bytes=3 * 1024 * 1024 * 1024,  # 3.0 GB
-            recommended_ram_bytes=4 * 1024 * 1024 * 1024,  # 4.0 GB
+            memory_unit="bytes",
+            artifact_size_bytes=int(2.0 * 1024 * 1024 * 1024),  # ~2.0 GiB
+            artifact_size_provenance=NumericFactProvenance.MEASURED_FACT,
+            artifact_size_source="meta_llama_3.2_3b_gguf_release",
+            min_ram_bytes=3 * 1024 * 1024 * 1024,  # 3.0 GiB
+            min_ram_provenance=NumericFactProvenance.CURATED_HEURISTIC,
+            min_ram_source="curated_catalog_policy_v2026.10.1",
+            recommended_ram_bytes=4 * 1024 * 1024 * 1024,  # 4.0 GiB
+            recommended_ram_provenance=NumericFactProvenance.CURATED_HEURISTIC,
+            recommended_ram_source="curated_catalog_policy_v2026.10.1",
+            accelerator_required=False,
             context_window_limit=16384,
+            context_window_provenance=NumericFactProvenance.DECLARED_FACT,
+            kv_metadata=ModelKVArchitectureMetadata(
+                num_layers=28,
+                num_kv_heads=8,
+                head_dim=128,
+                cache_element_bytes=2,
+                source="meta-llama-3.2-3b-config",
+            ),
             capabilities={
                 "coding": TriStateBool.TRUE,
                 "reasoning": TriStateBool.FALSE,
@@ -107,7 +164,9 @@ def get_curated_local_models() -> List[CatalogModelEntry]:
                 "structured_output": TriStateBool.TRUE,
                 "streaming": TriStateBool.TRUE,
             },
-            quality_score=0.72,
+            quality_rank=3,
+            quality_rank_provenance=NumericFactProvenance.CURATED_POLICY,
+            quality_rank_source="Agent Engine Curated Quality Policy v2026.10.1",
             provenance=RequirementsProvenance.TRUSTED_CATALOG,
             catalog_version=DEFAULT_CATALOG_VERSION,
             updated_at=DEFAULT_CATALOG_UPDATED_AT,
@@ -121,12 +180,29 @@ def get_curated_local_models() -> List[CatalogModelEntry]:
             architecture="qwen2",
             parameter_size="3B",
             parameter_count_billions=3.1,
+            parameter_count_provenance=NumericFactProvenance.DECLARED_FACT,
             quantization="Q4_K_M",
             managed_runtime="llamacpp",
-            artifact_size_bytes=int(2.0 * 1024 * 1024 * 1024),  # ~2.0 GB
-            min_ram_bytes=3 * 1024 * 1024 * 1024,  # 3.0 GB
-            recommended_ram_bytes=4 * 1024 * 1024 * 1024,  # 4.0 GB
+            memory_unit="bytes",
+            artifact_size_bytes=int(2.0 * 1024 * 1024 * 1024),  # ~2.0 GiB
+            artifact_size_provenance=NumericFactProvenance.MEASURED_FACT,
+            artifact_size_source="qwen2.5_coder_3b_gguf_release",
+            min_ram_bytes=3 * 1024 * 1024 * 1024,  # 3.0 GiB
+            min_ram_provenance=NumericFactProvenance.CURATED_HEURISTIC,
+            min_ram_source="curated_catalog_policy_v2026.10.1",
+            recommended_ram_bytes=4 * 1024 * 1024 * 1024,  # 4.0 GiB
+            recommended_ram_provenance=NumericFactProvenance.CURATED_HEURISTIC,
+            recommended_ram_source="curated_catalog_policy_v2026.10.1",
+            accelerator_required=False,
             context_window_limit=32768,
+            context_window_provenance=NumericFactProvenance.DECLARED_FACT,
+            kv_metadata=ModelKVArchitectureMetadata(
+                num_layers=36,
+                num_kv_heads=2,
+                head_dim=128,
+                cache_element_bytes=2,
+                source="qwen2.5-coder-3b-config",
+            ),
             capabilities={
                 "coding": TriStateBool.TRUE,
                 "reasoning": TriStateBool.TRUE,
@@ -135,7 +211,9 @@ def get_curated_local_models() -> List[CatalogModelEntry]:
                 "structured_output": TriStateBool.TRUE,
                 "streaming": TriStateBool.TRUE,
             },
-            quality_score=0.80,
+            quality_rank=4,
+            quality_rank_provenance=NumericFactProvenance.CURATED_POLICY,
+            quality_rank_source="Agent Engine Curated Quality Policy v2026.10.1",
             provenance=RequirementsProvenance.TRUSTED_CATALOG,
             catalog_version=DEFAULT_CATALOG_VERSION,
             updated_at=DEFAULT_CATALOG_UPDATED_AT,
@@ -149,12 +227,29 @@ def get_curated_local_models() -> List[CatalogModelEntry]:
             architecture="qwen2",
             parameter_size="7B",
             parameter_count_billions=7.6,
+            parameter_count_provenance=NumericFactProvenance.DECLARED_FACT,
             quantization="Q4_K_M",
             managed_runtime="llamacpp",
-            artifact_size_bytes=int(4.7 * 1024 * 1024 * 1024),  # ~4.7 GB
-            min_ram_bytes=6 * 1024 * 1024 * 1024,  # 6.0 GB
-            recommended_ram_bytes=8 * 1024 * 1024 * 1024,  # 8.0 GB
+            memory_unit="bytes",
+            artifact_size_bytes=int(4.7 * 1024 * 1024 * 1024),  # ~4.7 GiB
+            artifact_size_provenance=NumericFactProvenance.MEASURED_FACT,
+            artifact_size_source="qwen2.5_coder_7b_gguf_release",
+            min_ram_bytes=6 * 1024 * 1024 * 1024,  # 6.0 GiB
+            min_ram_provenance=NumericFactProvenance.CURATED_HEURISTIC,
+            min_ram_source="curated_catalog_policy_v2026.10.1",
+            recommended_ram_bytes=8 * 1024 * 1024 * 1024,  # 8.0 GiB
+            recommended_ram_provenance=NumericFactProvenance.CURATED_HEURISTIC,
+            recommended_ram_source="curated_catalog_policy_v2026.10.1",
+            accelerator_required=False,
             context_window_limit=32768,
+            context_window_provenance=NumericFactProvenance.DECLARED_FACT,
+            kv_metadata=ModelKVArchitectureMetadata(
+                num_layers=28,
+                num_kv_heads=4,
+                head_dim=128,
+                cache_element_bytes=2,
+                source="qwen2.5-coder-7b-config",
+            ),
             capabilities={
                 "coding": TriStateBool.TRUE,
                 "reasoning": TriStateBool.TRUE,
@@ -163,7 +258,9 @@ def get_curated_local_models() -> List[CatalogModelEntry]:
                 "structured_output": TriStateBool.TRUE,
                 "streaming": TriStateBool.TRUE,
             },
-            quality_score=0.88,
+            quality_rank=5,
+            quality_rank_provenance=NumericFactProvenance.CURATED_POLICY,
+            quality_rank_source="Agent Engine Curated Quality Policy v2026.10.1",
             provenance=RequirementsProvenance.TRUSTED_CATALOG,
             catalog_version=DEFAULT_CATALOG_VERSION,
             updated_at=DEFAULT_CATALOG_UPDATED_AT,
@@ -177,12 +274,29 @@ def get_curated_local_models() -> List[CatalogModelEntry]:
             architecture="qwen2",
             parameter_size="14B",
             parameter_count_billions=14.7,
+            parameter_count_provenance=NumericFactProvenance.DECLARED_FACT,
             quantization="Q4_K_M",
             managed_runtime="llamacpp",
-            artifact_size_bytes=int(9.0 * 1024 * 1024 * 1024),  # ~9.0 GB
-            min_ram_bytes=12 * 1024 * 1024 * 1024,  # 12.0 GB
-            recommended_ram_bytes=16 * 1024 * 1024 * 1024,  # 16.0 GB
+            memory_unit="bytes",
+            artifact_size_bytes=int(9.0 * 1024 * 1024 * 1024),  # ~9.0 GiB
+            artifact_size_provenance=NumericFactProvenance.MEASURED_FACT,
+            artifact_size_source="qwen2.5_14b_gguf_release",
+            min_ram_bytes=12 * 1024 * 1024 * 1024,  # 12.0 GiB
+            min_ram_provenance=NumericFactProvenance.CURATED_HEURISTIC,
+            min_ram_source="curated_catalog_policy_v2026.10.1",
+            recommended_ram_bytes=16 * 1024 * 1024 * 1024,  # 16.0 GiB
+            recommended_ram_provenance=NumericFactProvenance.CURATED_HEURISTIC,
+            recommended_ram_source="curated_catalog_policy_v2026.10.1",
+            accelerator_required=False,
             context_window_limit=32768,
+            context_window_provenance=NumericFactProvenance.DECLARED_FACT,
+            kv_metadata=ModelKVArchitectureMetadata(
+                num_layers=48,
+                num_kv_heads=8,
+                head_dim=128,
+                cache_element_bytes=2,
+                source="qwen2.5-14b-config",
+            ),
             capabilities={
                 "coding": TriStateBool.TRUE,
                 "reasoning": TriStateBool.TRUE,
@@ -191,7 +305,9 @@ def get_curated_local_models() -> List[CatalogModelEntry]:
                 "structured_output": TriStateBool.TRUE,
                 "streaming": TriStateBool.TRUE,
             },
-            quality_score=0.93,
+            quality_rank=6,
+            quality_rank_provenance=NumericFactProvenance.CURATED_POLICY,
+            quality_rank_source="Agent Engine Curated Quality Policy v2026.10.1",
             provenance=RequirementsProvenance.TRUSTED_CATALOG,
             catalog_version=DEFAULT_CATALOG_VERSION,
             updated_at=DEFAULT_CATALOG_UPDATED_AT,
@@ -205,12 +321,29 @@ def get_curated_local_models() -> List[CatalogModelEntry]:
             architecture="qwen2",
             parameter_size="32B",
             parameter_count_billions=32.5,
+            parameter_count_provenance=NumericFactProvenance.DECLARED_FACT,
             quantization="Q4_K_M",
             managed_runtime="llamacpp",
-            artifact_size_bytes=int(20.0 * 1024 * 1024 * 1024),  # ~20.0 GB
-            min_ram_bytes=24 * 1024 * 1024 * 1024,  # 24.0 GB
-            recommended_ram_bytes=32 * 1024 * 1024 * 1024,  # 32.0 GB
+            memory_unit="bytes",
+            artifact_size_bytes=int(20.0 * 1024 * 1024 * 1024),  # ~20.0 GiB
+            artifact_size_provenance=NumericFactProvenance.MEASURED_FACT,
+            artifact_size_source="qwen2.5_32b_gguf_release",
+            min_ram_bytes=24 * 1024 * 1024 * 1024,  # 24.0 GiB
+            min_ram_provenance=NumericFactProvenance.CURATED_HEURISTIC,
+            min_ram_source="curated_catalog_policy_v2026.10.1",
+            recommended_ram_bytes=32 * 1024 * 1024 * 1024,  # 32.0 GiB
+            recommended_ram_provenance=NumericFactProvenance.CURATED_HEURISTIC,
+            recommended_ram_source="curated_catalog_policy_v2026.10.1",
+            accelerator_required=False,
             context_window_limit=32768,
+            context_window_provenance=NumericFactProvenance.DECLARED_FACT,
+            kv_metadata=ModelKVArchitectureMetadata(
+                num_layers=64,
+                num_kv_heads=8,
+                head_dim=128,
+                cache_element_bytes=2,
+                source="qwen2.5-32b-config",
+            ),
             capabilities={
                 "coding": TriStateBool.TRUE,
                 "reasoning": TriStateBool.TRUE,
@@ -219,7 +352,9 @@ def get_curated_local_models() -> List[CatalogModelEntry]:
                 "structured_output": TriStateBool.TRUE,
                 "streaming": TriStateBool.TRUE,
             },
-            quality_score=0.97,
+            quality_rank=7,
+            quality_rank_provenance=NumericFactProvenance.CURATED_POLICY,
+            quality_rank_source="Agent Engine Curated Quality Policy v2026.10.1",
             provenance=RequirementsProvenance.TRUSTED_CATALOG,
             catalog_version=DEFAULT_CATALOG_VERSION,
             updated_at=DEFAULT_CATALOG_UPDATED_AT,

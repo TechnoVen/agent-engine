@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { Mode, ModelTier, CredentialItem, CredentialTestResult, HardwareTelemetry, AppSettings } from '../types';
 import { sidecarClient } from '../api/client';
+import { LocalModelRecommendations } from '../components/LocalModelRecommendations';
 
 export interface SettingsProps {
   onSelectMode: (mode: Mode) => void;
@@ -1307,6 +1308,9 @@ export const Settings: React.FC<SettingsProps> = () => {
                   </div>
                 </div>
               </div>
+
+              {/* Hardware-Fit Local Model Recommendations */}
+              <LocalModelRecommendations />
 
               {/* Local Runtimes Status Card */}
               <div className="p-5 rounded-xl bg-bg-elevated border border-border-subtle space-y-3">
