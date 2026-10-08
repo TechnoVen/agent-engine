@@ -14,7 +14,7 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from core.model_registry.models import ModelIdentity
+from core.model_registry.models import ModelIdentity, parse_model_identifier
 
 
 class Money(BaseModel):
@@ -181,18 +181,26 @@ class OutcomeEvidence(BaseModel):
 
 
 class HumanCorrectionEvent(BaseModel):
-    """Explicit human intervention event (Directive 11).
+    """Explicit human intervention event (Directive 7 & 11).
 
     Invariant: Must originate from an explicit user action (e.g. reject,
-    request regeneration, manual edit approval), never inferred from timing or messages.
+    request regeneration, manual edit approval), never inferred from timing,
+    continuation of conversation, or length of execution.
     """
 
     correction_event_id: str = Field(default_factory=lambda: f"corr_{uuid.uuid4().hex[:12]}")
     task_id: str
+    logical_task_id: Optional[str] = None
     source: str = "trusted_user_action"
+    trusted_actor: str = "user"
     correction_type: str  # e.g. "explicit_reject", "request_regeneration", "manual_override"
     observed_at: float = Field(default_factory=time.time)
     reason: Optional[str] = None
+    reason_code: Optional[str] = None
+
+    def model_post_init(self, __context: Any) -> None:
+        if not self.logical_task_id:
+            self.logical_task_id = self.task_id
 
 
 class AttemptEconomicsRecord(BaseModel):
@@ -210,6 +218,7 @@ class AttemptEconomicsRecord(BaseModel):
     outcome_evidence: Optional[OutcomeEvidence] = None
     is_fallback: bool = False
     is_retry: bool = False
+    is_synthetic: bool = False
     attempt_index: int = 0
     created_at: float = Field(default_factory=time.time)
 
@@ -264,21 +273,38 @@ class LogicalTaskEconomicsRecord(BaseModel):
 
 
 class EconomicsCohortKey(BaseModel):
-    """Multidimensional key defining an isolated economics cohort (Directive 5).
+    """Multidimensional key defining an isolated economics cohort (Directive 2 & 5).
 
     Invariant: Incompatible privacy classes, evaluator versions, policy versions,
-    or evidence sources NEVER merge into the same cohort.
+    or different initial ModelIdentities NEVER merge into the same cohort.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    initial_model_identity_str: str  # e.g. "openai:gpt-4o"
+    initial_model_identity: ModelIdentity
     task_family: str
-    evaluator_version: str
-    routing_policy_version: str
-    fallback_policy_version: str
-    effective_privacy_class: str
-    evidence_source: EvidenceSource
+    evaluator_id: Optional[str] = None
+    evaluator_version: str = "v1"
+    routing_policy_version: str = "v1"
+    fallback_policy_version: str = "v1"
+    effective_privacy_class: str = "ANY_CONFIGURED"
+    evidence_source: EvidenceSource = EvidenceSource.PRODUCTION_OBSERVATION
+
+    def __init__(
+        self,
+        initial_model_identity: Optional[ModelIdentity] = None,
+        initial_model_identity_str: Optional[str] = None,
+        **data: Any,
+    ) -> None:
+        if initial_model_identity is None and initial_model_identity_str is not None:
+            initial_model_identity = parse_model_identifier(initial_model_identity_str)
+        if initial_model_identity is not None and "initial_model_identity" not in data:
+            data["initial_model_identity"] = initial_model_identity
+        super().__init__(**data)
+
+    @property
+    def initial_model_identity_str(self) -> str:
+        return self.initial_model_identity.canonical_id
 
     @field_validator("effective_privacy_class", mode="before")
     @classmethod
@@ -299,18 +325,25 @@ class EvidenceSufficiencyStatus(str, Enum):
 
 
 class SufficiencyPolicy(BaseModel):
-    """Deterministic, policy-versioned threshold rules over logical tasks (Directive 8)."""
+    """Deterministic, policy-versioned threshold rules over evaluable logical tasks (Directive 3 & 8).
 
-    policy_version: str = "v1_min5_success1_unknown50"
+    Evaluable tasks are logical tasks with definitive verified outcomes:
+    SUCCESS or FAILURE (excluding UNKNOWN and PARTIAL which lack definitive truth).
+    """
+
+    policy_version: str = "v1_min5_evaluable5_success1"
     min_logical_tasks: int = 5
+    min_evaluable_tasks: int = 5
     min_verified_successes: int = 1
-    max_unknown_ratio: float = 0.50
+    allow_partial_as_evaluable: bool = False
 
     def evaluate(
         self,
         logical_tasks_count: int,
         verified_successes: int,
-        unknowns_count: int,
+        failures_count: int = 0,
+        partials_count: int = 0,
+        unknowns_count: int = 0,
     ) -> EvidenceSufficiencyStatus:
         """Evaluate sufficiency status over logical task aggregates."""
         if verified_successes == 0:
@@ -319,16 +352,21 @@ class SufficiencyPolicy(BaseModel):
         if logical_tasks_count < self.min_logical_tasks:
             return EvidenceSufficiencyStatus.INSUFFICIENT_EVIDENCE
 
-        if logical_tasks_count > 0:
-            unknown_ratio = unknowns_count / logical_tasks_count
-            if unknown_ratio > self.max_unknown_ratio:
-                return EvidenceSufficiencyStatus.INSUFFICIENT_EVIDENCE
+        evaluable_count = verified_successes + failures_count
+        if self.allow_partial_as_evaluable:
+            evaluable_count += partials_count
+
+        if evaluable_count < self.min_evaluable_tasks:
+            return EvidenceSufficiencyStatus.INSUFFICIENT_EVIDENCE
+
+        if verified_successes < self.min_verified_successes:
+            return EvidenceSufficiencyStatus.INSUFFICIENT_EVIDENCE
 
         return EvidenceSufficiencyStatus.SUFFICIENT_EVIDENCE
 
 
 class ModelEconomicsSummary(BaseModel):
-    """Complete summary of economics for a model cohort (Directive 2 & 18)."""
+    """Complete summary of economics for a model cohort (Directive 2, 3, 7, 8, 10)."""
 
     cohort_key: EconomicsCohortKey
     initial_model_identity: ModelIdentity
@@ -340,10 +378,16 @@ class ModelEconomicsSummary(BaseModel):
     failures: int
     partials: int
     unknowns: int
+    evaluable_tasks_count: int = 0
+    known_correction_count: int = 0
     total_cost: Money
     mean_task_cost: Money
     observed_cost_per_verified_success: Optional[Money] = None
     expected_cost_per_success: Optional[Money] = None
+    expected_cost_per_success_provenance: Optional[str] = None
+    estimator_version: str = "v1_empirical_cohort"
+    evidence_window: str = "all_recorded_tasks"
+    sufficiency_policy_version: str = "v1_min5_evaluable5_success1"
     status: EvidenceSufficiencyStatus
     currency: str = "USD"
     evaluator_version: str

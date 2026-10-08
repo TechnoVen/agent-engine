@@ -343,10 +343,24 @@ class RoutingOptimizer:
             # Cost utility
             if cost_ev.is_free:
                 cost_util = 1.0
-            elif cost_ev.is_cost_per_success and cost_ev.cost_per_success_usd is not None:
-                # Invert cost per success: 0.0 is 1.0, ceiling is 0.0
-                cps_ceiling = getattr(routing_obj, "cps_norm_ceiling_usd", 0.10)
-                cost_norm = cost_ev.cost_per_success_usd / max(0.001, cps_ceiling)
+            elif cost_ev.is_cost_per_success and (
+                cost_ev.cost_per_success_micros is not None
+                or cost_ev.cost_per_success_usd is not None
+            ):
+                # Invert cost per success: 0 is 1.0, ceiling is 0.0 using exact integer micros ratio (Directive 5)
+                cost_micros = (
+                    cost_ev.cost_per_success_micros
+                    if cost_ev.cost_per_success_micros is not None
+                    else int(round(cost_ev.cost_per_success_usd * 1_000_000))
+                )
+                ceiling_micros = getattr(
+                    routing_obj,
+                    "cps_norm_ceiling_micros",
+                    int(round(getattr(routing_obj, "cps_norm_ceiling_usd", 0.10) * 1_000_000)),
+                )
+                if ceiling_micros <= 0:
+                    ceiling_micros = 100_000
+                cost_norm = min(1.0, max(0.0, cost_micros / ceiling_micros))
                 cost_util = max(0.0, min(1.0, 1.0 - cost_norm))
             elif cost_ev.is_known and cost_ev.expected_cost_usd is not None:
                 # Invert request cost: 0.0 is 1.0, ceiling is 0.0
@@ -665,6 +679,7 @@ class RoutingOptimizer:
                     cost_metric="COST_PER_SUCCESS_WHEN_SUFFICIENT",
                     cost_metric_policy_version=metric_version,
                     cost_per_success_usd=cps_est.estimated_cps.as_usd,
+                    cost_per_success_micros=cps_est.estimated_cps.amount_micros,
                     cost_per_success_status="SUFFICIENT_EVIDENCE",
                     cost_per_success_sample_count=cps_est.sample_count,
                     cost_per_success_provenance=cps_est.provenance,

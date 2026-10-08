@@ -47,6 +47,7 @@ from core.economics import (
     TaskOutcome,
     build_golden_eval_service,
     generate_golden_eval_report,
+    generate_golden_eval_markdown_report,
     get_economics_service,
     reset_economics_service,
 )
@@ -1115,3 +1116,394 @@ def test_22_full_cohort_summary_field_validation():
     assert restored.total_cost.amount_micros == 180000
     assert restored.observed_cost_per_verified_success.amount_micros == 22500
     assert restored.status == EvidenceSufficiencyStatus.SUFFICIENT_EVIDENCE
+
+
+# ---------------------------------------------------------------------------
+# Test 23: Initial ModelIdentity Strictly Separates Cohorts (Directive 2)
+# ---------------------------------------------------------------------------
+
+
+def test_23_initial_model_identity_separates_cohorts():
+    svc = EconomicsService()
+    m_openai = ModelIdentity(provider_id="openai", model_id="gpt-4o")
+    m_anthropic = ModelIdentity(provider_id="anthropic", model_id="claude-3-5-sonnet")
+
+    for i in range(5):
+        t1_id = f"t_openai_{i}"
+        att1 = AttemptEconomicsRecord(
+            execution_id=f"e_o_{i}",
+            logical_task_id=t1_id,
+            model_identity=m_openai,
+            provider_id="openai",
+            cost=Money.from_usd(0.01),
+            outcome=TaskOutcome.SUCCESS,
+        )
+        svc.record_attempt(att1)
+        svc.complete_logical_task(
+            logical_task_id=t1_id,
+            initial_model_identity=m_openai,
+            initial_provider_id="openai",
+            task_family="coding",
+            evaluator_version="v1",
+            routing_policy_version="v1",
+            fallback_policy_version="v1",
+            effective_privacy_class="ANY_CONFIGURED",
+            final_outcome=TaskOutcome.SUCCESS,
+        )
+
+        t2_id = f"t_anthropic_{i}"
+        att2 = AttemptEconomicsRecord(
+            execution_id=f"e_a_{i}",
+            logical_task_id=t2_id,
+            model_identity=m_anthropic,
+            provider_id="anthropic",
+            cost=Money.from_usd(0.015),
+            outcome=TaskOutcome.SUCCESS,
+        )
+        svc.record_attempt(att2)
+        svc.complete_logical_task(
+            logical_task_id=t2_id,
+            initial_model_identity=m_anthropic,
+            initial_provider_id="anthropic",
+            task_family="coding",
+            evaluator_version="v1",
+            routing_policy_version="v1",
+            fallback_policy_version="v1",
+            effective_privacy_class="ANY_CONFIGURED",
+            final_outcome=TaskOutcome.SUCCESS,
+        )
+
+    summaries = svc.list_economics(task_family="coding")
+    assert len(summaries) == 2
+    identities = {s.initial_model_identity.canonical_id for s in summaries}
+    assert identities == {"openai:gpt-4o", "anthropic:claude-3-5-sonnet"}
+    assert summaries[0].cohort_key != summaries[1].cohort_key
+
+
+# ---------------------------------------------------------------------------
+# Test 24: 5 UNKNOWN Tasks != Sufficient Evidence (Directive 3)
+# ---------------------------------------------------------------------------
+
+
+def test_24_unknown_tasks_do_not_produce_sufficient_evidence():
+    svc = EconomicsService()
+    model = ModelIdentity(provider_id="mock", model_id="opaque-model")
+
+    for i in range(5):
+        t_id = f"t_unk_{i}"
+        att = AttemptEconomicsRecord(
+            execution_id=f"e_unk_{i}",
+            logical_task_id=t_id,
+            model_identity=model,
+            provider_id="mock",
+            cost=Money.from_usd(0.01),
+            outcome=TaskOutcome.UNKNOWN,
+        )
+        svc.record_attempt(att)
+        svc.complete_logical_task(
+            logical_task_id=t_id,
+            initial_model_identity=model,
+            initial_provider_id="mock",
+            final_outcome=TaskOutcome.UNKNOWN,
+        )
+
+    summaries = svc.list_economics()
+    assert len(summaries) == 1
+    s = summaries[0]
+    assert s.logical_tasks_count == 5
+    assert s.verified_successes == 0
+    assert s.unknowns == 5
+    assert s.evaluable_tasks_count == 0
+    assert s.status == EvidenceSufficiencyStatus.NO_SUCCESS_EVIDENCE
+    assert s.observed_cost_per_verified_success is None
+    assert s.expected_cost_per_success is None
+
+    # Test 5 tasks with 1 SUCCESS, 4 UNKNOWN (not enough evaluable tasks)
+    svc_partial = EconomicsService()
+    m2 = ModelIdentity(provider_id="mock", model_id="mostly-unknown")
+    for i in range(5):
+        t_id = f"t_mu_{i}"
+        outcome = TaskOutcome.SUCCESS if i == 0 else TaskOutcome.UNKNOWN
+        att = AttemptEconomicsRecord(
+            execution_id=f"e_mu_{i}",
+            logical_task_id=t_id,
+            model_identity=m2,
+            provider_id="mock",
+            cost=Money.from_usd(0.01),
+            outcome=outcome,
+        )
+        svc_partial.record_attempt(att)
+        svc_partial.complete_logical_task(
+            logical_task_id=t_id,
+            initial_model_identity=m2,
+            initial_provider_id="mock",
+            final_outcome=outcome,
+        )
+
+    s2 = svc_partial.list_economics()[0]
+    assert s2.logical_tasks_count == 5
+    assert s2.verified_successes == 1
+    assert s2.evaluable_tasks_count == 1  # 1 evaluable < 5 min_evaluable
+    assert s2.status == EvidenceSufficiencyStatus.INSUFFICIENT_EVIDENCE
+    assert s2.expected_cost_per_success is None
+
+
+# ---------------------------------------------------------------------------
+# Test 25: CPS Cost Evidence Applied Across All Profiles With Nonzero Cost Weight (Directive 4)
+# ---------------------------------------------------------------------------
+
+
+def test_25_cps_evidence_applied_across_all_profiles_with_cost_weight():
+    svc = EconomicsService()
+    m_id = ModelIdentity(provider_id="mock", model_id="solid-model")
+    m_def = _make_model_def("mock", "solid-model", input_price=10.0, output_price=10.0)
+
+    for i in range(5):
+        t_id = f"t_cps_{i}"
+        att = AttemptEconomicsRecord(
+            execution_id=f"e_{i}",
+            logical_task_id=t_id,
+            model_identity=m_id,
+            provider_id="mock",
+            cost=Money.from_usd(0.01),
+            outcome=TaskOutcome.SUCCESS,
+        )
+        svc.record_attempt(att)
+        svc.complete_logical_task(
+            logical_task_id=t_id,
+            initial_model_identity=m_id,
+            initial_provider_id="mock",
+            final_outcome=TaskOutcome.SUCCESS,
+        )
+
+    optimizer = RoutingOptimizer()
+
+    profiles_to_test = [
+        RoutingObjectiveProfile.BALANCED,
+        RoutingObjectiveProfile.COST_FIRST,
+        RoutingObjectiveProfile.QUALITY_FIRST,
+        RoutingObjectiveProfile.LATENCY_FIRST,
+    ]
+
+    for p in profiles_to_test:
+        decision = optimizer.optimize([m_def], objective=p, economics_service=svc)
+        assert decision.selected_model is not None
+        assert len(decision.eligible_candidates) > 0
+        cand = decision.eligible_candidates[0]
+        cost_ev = cand.metrics.cost
+        assert cost_ev.is_cost_per_success is True
+        assert cost_ev.cost_per_success_status == "SUFFICIENT_EVIDENCE"
+        assert cost_ev.cost_per_success_micros == 10000
+        # Cost utility normalized deterministically against 100,000 micros: (1.0 - 0.10) = 0.90
+        assert cand.score.cost_utility == 0.90
+
+
+# ---------------------------------------------------------------------------
+# Test 26: Money Remains Exact Micros and Normalization is Deterministic (Directive 5)
+# ---------------------------------------------------------------------------
+
+
+def test_26_money_remains_exact_micros_and_deterministic_normalization():
+    svc = EconomicsService()
+    m_id = ModelIdentity(provider_id="mock", model_id="micro-model")
+
+    # Record tasks with exact non-round micros: 12,345 micros per task
+    for i in range(5):
+        t_id = f"t_micro_{i}"
+        att = AttemptEconomicsRecord(
+            execution_id=f"e_m_{i}",
+            logical_task_id=t_id,
+            model_identity=m_id,
+            provider_id="mock",
+            cost=Money(amount_micros=12345, currency="USD"),
+            outcome=TaskOutcome.SUCCESS,
+        )
+        svc.record_attempt(att)
+        svc.complete_logical_task(
+            logical_task_id=t_id,
+            initial_model_identity=m_id,
+            initial_provider_id="mock",
+            final_outcome=TaskOutcome.SUCCESS,
+        )
+
+    summary = svc.list_economics()[0]
+    assert summary.total_cost.amount_micros == 61725
+    assert summary.mean_task_cost.amount_micros == 12345
+    assert summary.observed_cost_per_verified_success.amount_micros == 12345
+    assert summary.expected_cost_per_success.amount_micros == 12345
+
+    # Rebuild from records and confirm exact integer micros preservation
+    ledger = svc.export_ledger()
+    svc2 = EconomicsService()
+    svc2.rebuild_from_records(ledger)
+    summary2 = svc2.list_economics()[0]
+    assert summary2.total_cost.amount_micros == 61725
+    assert summary2.expected_cost_per_success.amount_micros == 12345
+
+
+# ---------------------------------------------------------------------------
+# Test 27: Arbitrary Forged Production Attempt Rejected (Directive 6)
+# ---------------------------------------------------------------------------
+
+
+def test_27_forged_attempt_cannot_enter_production_cohort():
+    svc = EconomicsService()
+    model = ModelIdentity(provider_id="forged", model_id="fabricated-model")
+
+    forged_attempt = AttemptEconomicsRecord(
+        execution_id="forged_exec",
+        logical_task_id="forged_task",
+        model_identity=model,
+        provider_id="forged",
+        cost=Money.from_usd(0.001),
+        outcome=TaskOutcome.SUCCESS,
+        is_synthetic=True,
+    )
+
+    with pytest.raises(
+        ValueError, match="Forged or synthetic attempt record cannot enter production cohort"
+    ):
+        svc.record_attempt(forged_attempt)
+
+
+# ---------------------------------------------------------------------------
+# Test 28: Explicit Human Correction Recorded vs Inferred Ignored (Directive 7)
+# ---------------------------------------------------------------------------
+
+
+def test_28_explicit_human_correction_vs_inferred_negative_test():
+    svc = EconomicsService()
+    model = ModelIdentity(provider_id="mock", model_id="model-corr")
+
+    for i in range(5):
+        t_id = f"t_corr_test_{i}"
+        att = AttemptEconomicsRecord(
+            execution_id=f"e_ct_{i}",
+            logical_task_id=t_id,
+            model_identity=model,
+            provider_id="mock",
+            cost=Money.from_usd(0.01),
+            outcome=TaskOutcome.SUCCESS,
+        )
+        svc.record_attempt(att)
+        svc.complete_logical_task(
+            logical_task_id=t_id,
+            initial_model_identity=model,
+            initial_provider_id="mock",
+            final_outcome=TaskOutcome.SUCCESS,
+        )
+
+    # Initially: 0 known corrections
+    summary_before = svc.list_economics()[0]
+    assert summary_before.known_correction_count == 0
+
+    # Negative inference test: another attempt or message arrives on task 0 without explicit HumanCorrectionEvent
+    att_continuation = AttemptEconomicsRecord(
+        execution_id="e_cont_0",
+        logical_task_id="t_corr_test_0",
+        model_identity=model,
+        provider_id="mock",
+        cost=Money.from_usd(0.005),
+        outcome=TaskOutcome.SUCCESS,
+    )
+    svc.record_attempt(att_continuation)
+    summary_mid = svc.list_economics()[0]
+    assert (
+        summary_mid.known_correction_count == 0
+    )  # Still 0! Inferred continuation is NOT a correction!
+
+    # Explicit human rejection event
+    event = HumanCorrectionEvent(
+        task_id="t_corr_test_0",
+        source="trusted_user_action",
+        trusted_actor="user",
+        correction_type="explicit_reject",
+        reason="User clicked thumbs down and typed reject",
+        reason_code="USER_THUMBS_DOWN",
+    )
+    svc.record_human_correction(event)
+    summary_after = svc.list_economics()[0]
+    assert summary_after.known_correction_count == 1
+    assert summary_after.failures == 1
+    assert summary_after.verified_successes == 4
+
+
+# ---------------------------------------------------------------------------
+# Test 29: Observed CPS Distinct From Expected CPS Under Insufficient Evidence (Directive 8)
+# ---------------------------------------------------------------------------
+
+
+def test_29_observed_cps_distinct_from_expected_cps():
+    svc = EconomicsService()
+    model = ModelIdentity(provider_id="mock", model_id="insuf-model")
+
+    # Only 2 tasks (< 5) with success: observed CPS can be computed, but expected CPS is None
+    for i in range(2):
+        t_id = f"t_ins_{i}"
+        att = AttemptEconomicsRecord(
+            execution_id=f"e_i_{i}",
+            logical_task_id=t_id,
+            model_identity=model,
+            provider_id="mock",
+            cost=Money.from_usd(0.01),
+            outcome=TaskOutcome.SUCCESS,
+        )
+        svc.record_attempt(att)
+        svc.complete_logical_task(
+            logical_task_id=t_id,
+            initial_model_identity=model,
+            initial_provider_id="mock",
+            final_outcome=TaskOutcome.SUCCESS,
+        )
+
+    summary = svc.list_economics()[0]
+    assert summary.logical_tasks_count == 2
+    assert summary.verified_successes == 2
+    assert summary.observed_cost_per_verified_success is not None
+    assert summary.observed_cost_per_verified_success.amount_micros == 10000
+    assert summary.status == EvidenceSufficiencyStatus.INSUFFICIENT_EVIDENCE
+    assert summary.expected_cost_per_success is None
+    assert summary.expected_cost_per_success_provenance == "INSUFFICIENT_EVIDENCE"
+
+
+# ---------------------------------------------------------------------------
+# Test 30: Golden Eval Markdown Report Generated and Thesis Proven (Directive 9)
+# ---------------------------------------------------------------------------
+
+
+def test_30_golden_eval_markdown_report_generated():
+    report_md = generate_golden_eval_markdown_report()
+    assert "Agent Engine R3.10 Golden Evaluation Report" in report_md
+    assert "Mathematical Thesis & Proven Proof" in report_md
+    assert "0.018" in report_md
+    assert "0.030" in report_md
+    assert "66.7% higher Cost-Per-Success" in report_md
+
+
+# ---------------------------------------------------------------------------
+# Test 31: API Exposes Expected CPS, Provenance, and Known Correction Count (Directive 10)
+# ---------------------------------------------------------------------------
+
+
+def test_31_api_exposes_expected_cps_and_provenance(test_client):
+    svc = build_golden_eval_service()
+    from services.python.server.routers import models as models_router
+
+    orig_svc = models_router.get_economics_service
+    models_router.get_economics_service = lambda: svc
+    try:
+        resp = test_client.get(
+            "/v1/models/economics",
+            headers={"Authorization": "Bearer test-secret-token"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) > 0
+        first = data[0]
+        assert "expected_cost_per_success" in first
+        assert "expected_cost_per_success_provenance" in first
+        assert "known_correction_count" in first
+        assert "evaluable_tasks_count" in first
+        assert "sufficiency_policy_version" in first
+    finally:
+        models_router.get_economics_service = orig_svc

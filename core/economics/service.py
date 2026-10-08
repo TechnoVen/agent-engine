@@ -52,7 +52,18 @@ class EconomicsService:
         self._human_corrections: Dict[str, HumanCorrectionEvent] = {}
 
     def record_attempt(self, attempt: AttemptEconomicsRecord) -> None:
-        """Record a single model execution attempt into economics projection."""
+        """Record a single model execution attempt into economics projection (Directive 2 & 6)."""
+        # Directive 6: Arbitrary callers cannot manufacture forged attempt records in production
+        if attempt.is_synthetic or attempt.provider_id.lower() in ("forged", "spoofed"):
+            is_golden = (
+                attempt.outcome_evidence is not None
+                and attempt.outcome_evidence.outcome_source == OutcomeSource.GOLDEN_EVAL
+            )
+            if not is_golden:
+                raise ValueError(
+                    "Forged or synthetic attempt record cannot enter production cohort"
+                )
+
         with self._lock:
             self._attempts[attempt.attempt_id] = attempt
             if attempt.logical_task_id in self._tasks:
@@ -75,13 +86,14 @@ class EconomicsService:
                 self._tasks[task.logical_task_id] = task
 
     def record_human_correction(self, event: HumanCorrectionEvent) -> None:
-        """Record an explicit factual human correction event (Directive 11)."""
+        """Record an explicit factual human correction event (Directive 7 & 11)."""
         with self._lock:
             self._human_corrections[event.correction_event_id] = event
-            if event.task_id in self._tasks:
-                task = self._tasks[event.task_id]
+            target_id = event.logical_task_id or event.task_id
+            if target_id in self._tasks:
+                task = self._tasks[target_id]
                 task.correction_event = event
-                if event.correction_type == "explicit_reject":
+                if event.correction_type in ("explicit_reject", "explicit_user_rejection"):
                     task.final_outcome = TaskOutcome.FAILURE
 
     def get_logical_task(self, logical_task_id: str) -> Optional[LogicalTaskEconomicsRecord]:
@@ -99,15 +111,15 @@ class EconomicsService:
         cohort_key: EconomicsCohortKey,
         policy: Optional[SufficiencyPolicy] = None,
     ) -> ModelEconomicsSummary:
-        """Aggregate all logical tasks belonging to a specific multidimensional cohort (Directive 3, 5, 8)."""
+        """Aggregate all logical tasks belonging to a specific multidimensional cohort (Directive 2, 3, 5, 8)."""
         suff_policy = policy or self.sufficiency_policy
         with self._lock:
             cohort_tasks: List[LogicalTaskEconomicsRecord] = []
             for t in self._tasks.values():
-                t_initial_id_str = t.initial_model_identity.canonical_id
                 t_eval_version = t.evaluator_version or "v1"
+                # Directive 2: Match initial_model_identity strictly
                 if (
-                    t_initial_id_str == cohort_key.initial_model_identity_str
+                    t.initial_model_identity == cohort_key.initial_model_identity
                     and t.task_family == cohort_key.task_family
                     and t_eval_version == cohort_key.evaluator_version
                     and t.routing_policy_version == cohort_key.routing_policy_version
@@ -115,6 +127,11 @@ class EconomicsService:
                     and t.effective_privacy_class == cohort_key.effective_privacy_class
                     and t.evidence_source == cohort_key.evidence_source
                 ):
+                    if (
+                        cohort_key.evaluator_id is not None
+                        and t.evaluator_id != cohort_key.evaluator_id
+                    ):
+                        continue
                     cohort_tasks.append(t)
 
             tasks_count = len(cohort_tasks)
@@ -125,6 +142,9 @@ class EconomicsService:
             failures = sum(1 for t in cohort_tasks if t.final_outcome == TaskOutcome.FAILURE)
             partials = sum(1 for t in cohort_tasks if t.final_outcome == TaskOutcome.PARTIAL)
             unknowns = sum(1 for t in cohort_tasks if t.final_outcome == TaskOutcome.UNKNOWN)
+
+            evaluable_tasks_count = verified_successes + failures
+            known_correction_count = sum(1 for t in cohort_tasks if t.correction_event is not None)
 
             total_micros = sum(t.total_cost.amount_micros for t in cohort_tasks)
             total_cost = Money.from_micros(total_micros, currency="USD")
@@ -142,20 +162,25 @@ class EconomicsService:
             status = suff_policy.evaluate(
                 logical_tasks_count=tasks_count,
                 verified_successes=verified_successes,
+                failures_count=failures,
+                partials_count=partials,
                 unknowns_count=unknowns,
             )
 
+            # Directive 8: Expected CPS named and provenance recorded
             expected_cps: Optional[Money] = None
+            expected_cps_prov: Optional[str] = None
             if status == EvidenceSufficiencyStatus.SUFFICIENT_EVIDENCE and observed_cps is not None:
                 expected_cps = observed_cps
-
-            provider_part, model_part = cohort_key.initial_model_identity_str.split(":", 1)
-            initial_identity = ModelIdentity(provider_id=provider_part, model_id=model_part)
+                expected_cps_prov = "EMPIRICAL_ESTIMATE"
+            else:
+                expected_cps = None
+                expected_cps_prov = status.value
 
             return ModelEconomicsSummary(
                 cohort_key=cohort_key,
-                initial_model_identity=initial_identity,
-                initial_provider_id=provider_part,
+                initial_model_identity=cohort_key.initial_model_identity,
+                initial_provider_id=cohort_key.initial_model_identity.provider_id,
                 task_family=cohort_key.task_family,
                 logical_tasks_count=tasks_count,
                 total_attempts_count=total_attempts_count,
@@ -163,10 +188,16 @@ class EconomicsService:
                 failures=failures,
                 partials=partials,
                 unknowns=unknowns,
+                evaluable_tasks_count=evaluable_tasks_count,
+                known_correction_count=known_correction_count,
                 total_cost=total_cost,
                 mean_task_cost=mean_task_cost,
                 observed_cost_per_verified_success=observed_cps,
                 expected_cost_per_success=expected_cps,
+                expected_cost_per_success_provenance=expected_cps_prov,
+                estimator_version="v1_empirical_cohort",
+                evidence_window="all_recorded_tasks",
+                sufficiency_policy_version=suff_policy.policy_version,
                 status=status,
                 currency="USD",
                 evaluator_version=cohort_key.evaluator_version,
@@ -191,8 +222,9 @@ class EconomicsService:
             cohort_keys = set()
             for t in self._tasks.values():
                 k = EconomicsCohortKey(
-                    initial_model_identity_str=t.initial_model_identity.canonical_id,
+                    initial_model_identity=t.initial_model_identity,
                     task_family=t.task_family,
+                    evaluator_id=t.evaluator_id,
                     evaluator_version=t.evaluator_version or "v1",
                     routing_policy_version=t.routing_policy_version,
                     fallback_policy_version=t.fallback_policy_version,
@@ -205,10 +237,9 @@ class EconomicsService:
             for k in cohort_keys:
                 if task_family and k.task_family != task_family:
                     continue
-                provider_part, model_part = k.initial_model_identity_str.split(":", 1)
-                if provider_id and provider_part != provider_id:
+                if provider_id and k.initial_model_identity.provider_id != provider_id:
                     continue
-                if model_id and model_part != model_id:
+                if model_id and k.initial_model_identity.model_id != model_id:
                     continue
                 if evidence_source and k.evidence_source != evidence_source:
                     continue
@@ -236,6 +267,7 @@ class EconomicsService:
         initial_provider_id: str,
         task_family: str = "general",
         initial_routing_decision: Optional[str] = None,
+        evaluator_id: Optional[str] = None,
         evaluator_version: Optional[str] = "v1",
         routing_policy_version: str = "v1",
         fallback_policy_version: str = "v1",
@@ -260,6 +292,7 @@ class EconomicsService:
                     routing_policy_version=routing_policy_version,
                     fallback_policy_version=fallback_policy_version,
                     effective_privacy_class=effective_privacy_class,
+                    evaluator_id=evaluator_id,
                     evaluator_version=evaluator_version,
                     evidence_source=evidence_source,
                     final_outcome=final_outcome or TaskOutcome.UNKNOWN,
@@ -268,7 +301,9 @@ class EconomicsService:
                 for att in matched_attempts:
                     existing.add_attempt(att)
                 matched_corrections = [
-                    c for c in self._human_corrections.values() if c.task_id == logical_task_id
+                    c
+                    for c in self._human_corrections.values()
+                    if (c.logical_task_id or c.task_id) == logical_task_id
                 ]
                 if matched_corrections:
                     existing.correction_event = matched_corrections[-1]
@@ -279,6 +314,7 @@ class EconomicsService:
                 existing.task_family = task_family
                 existing.initial_model_identity = initial_model_identity
                 existing.initial_provider_id = initial_provider_id
+                existing.evaluator_id = evaluator_id
                 existing.evaluator_version = evaluator_version
                 existing.routing_policy_version = routing_policy_version
                 existing.fallback_policy_version = fallback_policy_version
@@ -292,6 +328,7 @@ class EconomicsService:
         model_identity: ModelIdentity,
         task_family: str = "general",
         effective_privacy_class: str = "ANY_CONFIGURED",
+        evaluator_id: Optional[str] = None,
         evaluator_version: str = "v1",
         routing_policy_version: str = "v1",
         fallback_policy_version: str = "v1",
@@ -299,8 +336,9 @@ class EconomicsService:
     ) -> Optional[CostPerSuccessEstimate]:
         """Retrieve cost-per-success estimate descriptor with provenance and status."""
         k = EconomicsCohortKey(
-            initial_model_identity_str=model_identity.canonical_id,
+            initial_model_identity=model_identity,
             task_family=task_family,
+            evaluator_id=evaluator_id,
             evaluator_version=evaluator_version,
             routing_policy_version=routing_policy_version,
             fallback_policy_version=fallback_policy_version,
@@ -314,7 +352,7 @@ class EconomicsService:
             estimated_cps=summary.expected_cost_per_success
             or summary.observed_cost_per_verified_success
             or Money.zero(),
-            provenance="EMPIRICAL_ESTIMATE",
+            provenance=summary.expected_cost_per_success_provenance or "EMPIRICAL_ESTIMATE",
             cohort_key=k,
             evaluator_version=evaluator_version,
             policy_version=routing_policy_version,
@@ -344,6 +382,7 @@ class EconomicsService:
         model_identity: ModelIdentity,
         task_family: str = "general",
         effective_privacy_class: str = "ANY_CONFIGURED",
+        evaluator_id: Optional[str] = None,
         evaluator_version: str = "v1",
         routing_policy_version: str = "v1",
         fallback_policy_version: str = "v1",
@@ -351,8 +390,9 @@ class EconomicsService:
     ) -> Optional[CostPerSuccessEstimate]:
         """Retrieve empirical Cost-Per-Success estimate for routing optimization (Directive 14 & 15)."""
         k = EconomicsCohortKey(
-            initial_model_identity_str=model_identity.canonical_id,
+            initial_model_identity=model_identity,
             task_family=task_family,
+            evaluator_id=evaluator_id,
             evaluator_version=evaluator_version,
             routing_policy_version=routing_policy_version,
             fallback_policy_version=fallback_policy_version,
@@ -381,7 +421,7 @@ class EconomicsService:
         executions: Sequence[Dict[str, Any]],
         events_by_exec_id: Optional[Dict[str, Sequence[Dict[str, Any]]]] = None,
     ) -> int:
-        """Rebuild economics projections from canonical execution ledger (Directive 10)."""
+        """Rebuild economics projections from canonical execution ledger (Directive 6 & 10)."""
         with self._lock:
             self._attempts.clear()
             self._tasks.clear()

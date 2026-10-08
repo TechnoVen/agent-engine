@@ -1099,8 +1099,14 @@ export interface Money {
 }
 
 export interface EconomicsCohortKey {
+  initial_model_identity?: {
+    provider_id: string;
+    model_id: string;
+    variant?: string;
+  };
   initial_model_identity_str: string;
   task_family: string;
+  evaluator_id?: string | null;
   evaluator_version: string;
   routing_policy_version: string;
   fallback_policy_version: string;
@@ -1123,10 +1129,15 @@ export interface ModelEconomicsSummary {
   failures: number;
   partials: number;
   unknowns: number;
+  evaluable_tasks_count?: number;
+  known_correction_count?: number;
   total_cost: Money;
   mean_task_cost: Money;
   observed_cost_per_verified_success?: Money | null;
   expected_cost_per_success?: Money | null;
+  expected_cost_per_success_provenance?: string | null;
+  estimator_version?: string;
+  sufficiency_policy_version?: string;
   status: EvidenceSufficiencyStatus;
   currency: string;
   evaluator_version: string;

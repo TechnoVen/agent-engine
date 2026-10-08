@@ -166,8 +166,8 @@ export const ModelEconomicsComparison: React.FC<ModelEconomicsComparisonProps> =
                 <th className="pb-2.5 px-3 text-right">Tasks / Attempts</th>
                 <th className="pb-2.5 px-3 text-center">Outcome Truth</th>
                 <th className="pb-2.5 px-3 text-right">Total Cost</th>
-                <th className="pb-2.5 px-3 text-right">Mean Task Cost</th>
                 <th className="pb-2.5 px-3 text-right">Observed CPS</th>
+                <th className="pb-2.5 px-3 text-right">Expected CPS</th>
                 <th className="pb-2.5 pl-4 text-center">Sufficiency Status</th>
               </tr>
             </thead>
@@ -242,19 +242,27 @@ export const ModelEconomicsComparison: React.FC<ModelEconomicsComparisonProps> =
                       {formatMicrosToUsd(summary.total_cost.amount_micros)}
                     </td>
 
-                    {/* Mean Task Cost */}
-                    <td className="py-3 px-3 text-right text-text-secondary">
-                      {formatMicrosToUsd(summary.mean_task_cost.amount_micros)}
-                    </td>
-
                     {/* Observed CPS */}
-                    <td className="py-3 px-3 text-right font-bold">
+                    <td className="py-3 px-3 text-right font-medium">
                       {summary.observed_cost_per_verified_success ? (
-                        <span className="text-emerald-400">
+                        <span className="text-text-primary">
                           {formatMicrosToUsd(summary.observed_cost_per_verified_success.amount_micros)}
                         </span>
                       ) : (
                         <span className="text-text-muted font-normal text-[11px]">—</span>
+                      )}
+                    </td>
+
+                    {/* Expected CPS */}
+                    <td className="py-3 px-3 text-right font-bold">
+                      {summary.expected_cost_per_success ? (
+                        <span className="text-emerald-400">
+                          {formatMicrosToUsd(summary.expected_cost_per_success.amount_micros)}
+                        </span>
+                      ) : (
+                        <span className="text-text-muted font-normal text-[11px]" title={summary.expected_cost_per_success_provenance || 'None'}>
+                          None
+                        </span>
                       )}
                     </td>
 

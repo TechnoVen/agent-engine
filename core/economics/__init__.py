@@ -23,6 +23,7 @@ from core.economics.service import (
 from core.economics.golden_eval import (
     build_golden_eval_service,
     generate_golden_eval_report,
+    generate_golden_eval_markdown_report,
 )
 
 __all__ = [
@@ -44,4 +45,5 @@ __all__ = [
     "reset_economics_service",
     "build_golden_eval_service",
     "generate_golden_eval_report",
+    "generate_golden_eval_markdown_report",
 ]
