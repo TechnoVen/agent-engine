@@ -24,10 +24,13 @@ import {
 } from 'lucide-react';
 import { Mode, Project, RecentChat, SessionSearchResult } from '../types';
 import { sidecarClient } from '../api/client';
+import { AppRoute, resolveRoute } from '../routes';
 
 interface SidebarProps {
-  activeMode: Mode;
+  currentRoute?: AppRoute;
+  activeMode?: Mode;
   onSelectMode: (mode: Mode) => void;
+  onNavigate?: (route: AppRoute) => void;
   activeSessionId?: string;
   onSelectSession?: (sessionId: string) => void;
   collapsed: boolean;
@@ -38,28 +41,67 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
+  currentRoute,
   activeMode,
   onSelectMode,
+  onNavigate,
   activeSessionId,
   onSelectSession,
   collapsed,
   onToggleCollapse,
   onNewChat,
-  projects = [
-    { id: '1', name: 'Agent Engine', icon: 'folder', threadCount: 12, lastActivity: '18m ago' },
-    { id: '2', name: 'Organiser Workspace', icon: 'folder', threadCount: 8, lastActivity: '2h ago' },
-    { id: '3', name: 'Client Website', icon: 'folder', threadCount: 3, lastActivity: '1d ago' },
-  ],
-  recentChats = [
-    { id: 'c1', title: 'Agent Engine architecture review', mode: 'home', updatedAt: '18m ago' },
-    { id: 'c2', title: 'THE DEN opening checklist', mode: 'sheets', updatedAt: 'Yesterday' },
-    { id: 'c3', title: 'Article draft: Local AI', mode: 'docs', updatedAt: '2d ago' },
-  ],
+  projects = [],
+  recentChats = [],
 }) => {
+  const [realProjects, setRealProjects] = useState<Project[]>(projects);
+  const [realChats, setRealChats] = useState<RecentChat[]>(recentChats);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SessionSearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let active = true;
+    const fetchSidebarData = async () => {
+      try {
+        const [projs, sess] = await Promise.all([
+          sidecarClient.getProjects(),
+          sidecarClient.getSessions(5),
+        ]);
+        if (active) {
+          if (projs && projs.length > 0) {
+            setRealProjects(
+              projs.map((p) => ({
+                id: p.id,
+                name: p.name,
+                icon: 'folder',
+                threadCount: 0,
+                lastActivity: 'Active',
+              }))
+            );
+          }
+          if (sess && sess.length > 0) {
+            setRealChats(
+              sess.map((s) => ({
+                id: s.id,
+                title: s.title || 'Untitled Session',
+                mode: (s.channel || 'home') as Mode,
+                updatedAt: s.updated_at
+                  ? new Date(s.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                  : 'Recent',
+              }))
+            );
+          }
+        }
+      } catch {
+        // Fallback gracefully
+      }
+    };
+    fetchSidebarData();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     const trimmed = searchQuery.trim();
@@ -105,33 +147,45 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   // Canonical WORK section
-  const primaryModes: { id: Mode; label: string; icon: React.ReactNode }[] = [
-    { id: 'home', label: 'Home', icon: <HomeIcon className="w-4 h-4 text-text-secondary" /> },
-    { id: 'projects', label: 'Projects', icon: <FolderKanban className="w-4 h-4 text-text-secondary" /> },
-    { id: 'tasks', label: 'Tasks', icon: <Clock className="w-4 h-4 text-text-secondary" /> },
-    { id: 'workflows', label: 'Automations', icon: <GitBranch className="w-4 h-4 text-text-secondary" /> },
+  const primaryModes = [
+    { id: 'home', path: '#home', label: 'Home', icon: <HomeIcon className="w-4 h-4 text-text-secondary" /> },
+    { id: 'projects', path: '#projects', label: 'Projects', icon: <FolderKanban className="w-4 h-4 text-text-secondary" /> },
+    { id: 'tasks', path: '#tasks', label: 'Tasks', icon: <Clock className="w-4 h-4 text-text-secondary" /> },
+    { id: 'automations', path: '#automations', label: 'Automations', icon: <GitBranch className="w-4 h-4 text-text-secondary" /> },
   ];
 
   // Canonical TOOLS section
-  const capabilityModes: { id: Mode; label: string; icon: React.ReactNode }[] = [
-    { id: 'deep-research', label: 'Research', icon: <Search className="w-4 h-4 text-text-secondary" /> },
-    { id: 'docs', label: 'Writing', icon: <FileText className="w-4 h-4 text-text-secondary" /> },
-    { id: 'sheets', label: 'Data', icon: <Table2 className="w-4 h-4 text-text-secondary" /> },
-    { id: 'code', label: 'Developer', icon: <Code2 className="w-4 h-4 text-text-secondary" /> },
+  const capabilityModes = [
+    { id: 'research', path: '#research', label: 'Research', icon: <Search className="w-4 h-4 text-text-secondary" /> },
+    { id: 'writing', path: '#writing', label: 'Writing', icon: <FileText className="w-4 h-4 text-text-secondary" /> },
+    { id: 'data', path: '#data', label: 'Data', icon: <Table2 className="w-4 h-4 text-text-secondary" /> },
+    { id: 'developer', path: '#developer', label: 'Developer', icon: <Code2 className="w-4 h-4 text-text-secondary" /> },
   ];
 
   // Canonical LIBRARY section
-  const libraryModes: { id: Mode; label: string; icon: React.ReactNode }[] = [
-    { id: 'docs', label: 'Knowledge', icon: <BookOpen className="w-4 h-4 text-text-secondary" /> },
-    { id: 'skills', label: 'Skills', icon: <Puzzle className="w-4 h-4 text-text-secondary" /> },
+  const libraryModes = [
+    { id: 'knowledge', path: '#knowledge', label: 'Knowledge', icon: <BookOpen className="w-4 h-4 text-text-secondary" /> },
+    { id: 'skills', path: '#skills', label: 'Skills', icon: <Puzzle className="w-4 h-4 text-text-secondary" /> },
   ];
 
   // Canonical SYSTEM section
-  const systemModes: { id: Mode; label: string; icon: React.ReactNode }[] = [
-    { id: 'cost', label: 'Activity', icon: <Activity className="w-4 h-4 text-text-secondary" /> },
-    { id: 'policies', label: 'Approvals', icon: <ShieldCheck className="w-4 h-4 text-text-secondary" /> },
-    { id: 'benchmarks', label: 'Models', icon: <Gauge className="w-4 h-4 text-text-secondary" /> },
+  const systemModes = [
+    { id: 'activity', path: '#activity', label: 'Activity', icon: <Activity className="w-4 h-4 text-text-secondary" /> },
+    { id: 'approvals', path: '#approvals', label: 'Approvals', icon: <ShieldCheck className="w-4 h-4 text-text-secondary" /> },
+    { id: 'models', path: '#models', label: 'Models', icon: <Gauge className="w-4 h-4 text-text-secondary" /> },
   ];
+
+  const activeRouteId = currentRoute?.id || (activeMode ? resolveRoute(activeMode).id : resolveRoute(window.location.hash).id);
+
+  const handleNavigate = (item: { id: string; path: string }) => {
+    window.location.hash = item.path;
+    const resolved = resolveRoute(item.path);
+    onNavigate?.(resolved);
+    onSelectMode(item.id as Mode);
+  };
+
+  const displayProjects = projects.length > 0 ? projects : realProjects;
+  const displayChats = recentChats.length > 0 ? recentChats : realChats;
 
   return (
     <aside
@@ -192,11 +246,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
           <div className="space-y-0.5">
             {primaryModes.map((item) => {
-              const isActive = activeMode === item.id;
+              const isActive = activeRouteId === item.id;
               return (
                 <button
                   key={item.id}
-                  onClick={() => onSelectMode(item.id)}
+                  onClick={() => handleNavigate(item)}
                   title={collapsed ? item.label : undefined}
                   className={`w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md text-xs transition-colors ${
                     isActive
@@ -221,11 +275,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
           <div className="space-y-0.5">
             {capabilityModes.map((item) => {
-              const isActive = activeMode === item.id;
+              const isActive = activeRouteId === item.id;
               return (
                 <button
                   key={item.id}
-                  onClick={() => onSelectMode(item.id)}
+                  onClick={() => handleNavigate(item)}
                   title={collapsed ? item.label : undefined}
                   className={`w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md text-xs transition-colors ${
                     isActive
@@ -250,11 +304,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
           <div className="space-y-0.5">
             {libraryModes.map((item, idx) => {
-              const isActive = activeMode === item.id;
+              const isActive = activeRouteId === item.id;
               return (
                 <button
                   key={`${item.id}-${idx}`}
-                  onClick={() => onSelectMode(item.id)}
+                  onClick={() => handleNavigate(item)}
                   title={collapsed ? item.label : undefined}
                   className={`w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md text-xs transition-colors ${
                     isActive
@@ -279,11 +333,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
           <div className="space-y-0.5">
             {systemModes.map((item) => {
-              const isActive = activeMode === item.id;
+              const isActive = activeRouteId === item.id;
               return (
                 <button
                   key={item.id}
-                  onClick={() => onSelectMode(item.id)}
+                  onClick={() => handleNavigate(item)}
                   title={collapsed ? item.label : undefined}
                   className={`w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md text-xs transition-colors ${
                     isActive
@@ -314,7 +368,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <Search className="w-4 h-4" />
             </button>
             <button
-              onClick={() => onSelectMode('projects')}
+              onClick={() => handleNavigate({ id: 'projects', path: '#projects' })}
               title="Projects"
               aria-label="Projects"
               className="w-full flex items-center justify-center p-2 rounded-md text-text-secondary hover:text-text-primary hover:bg-bg-hover"
@@ -424,7 +478,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     </span>
                     <button
                       title="New Project"
-                      onClick={() => onSelectMode('projects')}
+                      onClick={() => handleNavigate({ id: 'projects', path: '#projects' })}
                       aria-label="New Project"
                       className="text-text-tertiary hover:text-text-primary p-0.5 rounded"
                     >
@@ -432,52 +486,64 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     </button>
                   </div>
                   <div className="space-y-0.5">
-                    {projects.map((p) => (
-                      <button
-                        key={p.id}
-                        onClick={() => onSelectMode('projects')}
-                        className="w-full flex items-center justify-between px-2 py-1 rounded-md text-xs text-text-secondary hover:text-text-primary hover:bg-bg-hover/60 transition-colors"
-                      >
-                        <span className="truncate flex items-center gap-1.5">
-                          <FolderKanban className="w-3.5 h-3.5 text-text-tertiary flex-shrink-0" />
-                          <span className="truncate">{p.name}</span>
-                        </span>
-                        <span className="text-[10px] text-text-tertiary font-mono">{p.threadCount}</span>
-                      </button>
-                    ))}
+                    {displayProjects.length === 0 ? (
+                      <div className="px-2 py-1 text-[11px] text-text-tertiary">
+                        No projects yet
+                      </div>
+                    ) : (
+                      displayProjects.map((p) => (
+                        <button
+                          key={p.id}
+                          onClick={() => handleNavigate({ id: 'projects', path: '#projects' })}
+                          className="w-full flex items-center justify-between px-2 py-1 rounded-md text-xs text-text-secondary hover:text-text-primary hover:bg-bg-hover/60 transition-colors"
+                        >
+                          <span className="truncate flex items-center gap-1.5">
+                            <FolderKanban className="w-3.5 h-3.5 text-text-tertiary flex-shrink-0" />
+                            <span className="truncate">{p.name}</span>
+                          </span>
+                          <span className="text-[10px] text-text-tertiary font-mono">{p.threadCount}</span>
+                        </button>
+                      ))
+                    )}
                   </div>
                 </div>
 
                 {/* Recent Chats */}
                 <div>
                   <div className="px-2 mb-1 text-[10px] font-semibold tracking-wider text-text-tertiary uppercase">
-                    Recent
+                    Recent Chats
                   </div>
                   <div className="space-y-0.5">
-                    {recentChats.map((c) => {
-                      const isSelected = activeSessionId === c.id;
-                      return (
-                        <button
-                          key={c.id}
-                          onClick={() => {
-                            onSelectSession?.(c.id);
-                            onSelectMode(c.mode);
-                          }}
-                          aria-selected={isSelected}
-                          className={`w-full flex items-center justify-between px-2 py-1 rounded-md text-xs transition-colors ${
-                            isSelected
-                              ? 'bg-accent/15 text-accent font-medium border-l-2 border-accent'
-                              : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover/60'
-                          }`}
-                        >
-                          <span className="truncate flex items-center gap-1.5">
-                            <MessageSquare className="w-3.5 h-3.5 text-text-tertiary flex-shrink-0" />
-                            <span className="truncate text-left">{c.title}</span>
-                          </span>
-                          <span className="text-[10px] text-text-tertiary flex-shrink-0 ml-1">{c.updatedAt}</span>
-                        </button>
-                      );
-                    })}
+                    {displayChats.length === 0 ? (
+                      <div className="px-2 py-1 text-[11px] text-text-tertiary">
+                        No recent sessions
+                      </div>
+                    ) : (
+                      displayChats.map((c) => {
+                        const isSelected = activeSessionId === c.id;
+                        return (
+                          <button
+                            key={c.id}
+                            onClick={() => {
+                              onSelectSession?.(c.id);
+                              handleNavigate({ id: 'home', path: '#home' });
+                            }}
+                            aria-selected={isSelected}
+                            className={`w-full flex items-center justify-between px-2 py-1 rounded-md text-xs transition-colors ${
+                              isSelected
+                                ? 'bg-accent/15 text-accent font-medium border-l-2 border-accent'
+                                : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover/60'
+                            }`}
+                          >
+                            <span className="truncate flex items-center gap-1.5">
+                              <MessageSquare className="w-3.5 h-3.5 text-text-tertiary flex-shrink-0" />
+                              <span className="truncate text-left">{c.title}</span>
+                            </span>
+                            <span className="text-[10px] text-text-tertiary flex-shrink-0 ml-1">{c.updatedAt}</span>
+                          </button>
+                        );
+                      })
+                    )}
                   </div>
                 </div>
               </>
@@ -489,7 +555,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Zone C: User Profile & Settings Footer */}
       <div className="p-2 border-t border-border-subtle bg-bg-elevated">
         <div className="flex items-center justify-between p-1.5 rounded-md hover:bg-bg-hover transition-colors">
-          <div className="flex items-center gap-2 overflow-hidden">
+          <div
+            onClick={() => handleNavigate({ id: 'profile', path: '#profile' })}
+            className="flex items-center gap-2 overflow-hidden cursor-pointer"
+          >
             <div className="relative flex-shrink-0">
               <div className="w-6 h-6 rounded-full bg-border-strong flex items-center justify-center text-[11px] font-medium text-text-primary">
                 N
@@ -505,7 +574,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
           {!collapsed && (
             <button
-              onClick={() => onSelectMode('settings')}
+              onClick={() => handleNavigate({ id: 'settings', path: '#settings' })}
               title="Settings"
               aria-label="Settings"
               className="p-1 text-text-tertiary hover:text-text-primary rounded transition-colors"

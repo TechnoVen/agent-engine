@@ -2,10 +2,13 @@ import React from 'react';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
 import { Mode, ModelTier, SidecarHealth, PrivacyBoundary, RoutingObjective } from '../types';
+import { AppRoute } from '../routes';
 
 interface LayoutProps {
+  currentRoute?: AppRoute;
   activeMode: Mode;
   onSelectMode: (mode: Mode) => void;
+  onNavigate?: (route: AppRoute) => void;
   activeSessionId?: string;
   onSelectSession?: (sessionId: string) => void;
   activeModel?: ModelTier;
@@ -24,8 +27,10 @@ interface LayoutProps {
 }
 
 export const Layout: React.FC<LayoutProps> = ({
+  currentRoute,
   activeMode,
   onSelectMode,
+  onNavigate,
   activeSessionId,
   onSelectSession,
   activeModel,
@@ -46,8 +51,10 @@ export const Layout: React.FC<LayoutProps> = ({
     <div className="flex h-screen w-screen bg-bg-base overflow-hidden">
       {/* 3-Zone Sidebar */}
       <Sidebar
+        currentRoute={currentRoute}
         activeMode={activeMode}
         onSelectMode={onSelectMode}
+        onNavigate={onNavigate}
         activeSessionId={activeSessionId}
         onSelectSession={onSelectSession}
         collapsed={sidebarCollapsed}
@@ -58,6 +65,7 @@ export const Layout: React.FC<LayoutProps> = ({
       {/* Main Shell Viewport */}
       <div className="flex-1 flex flex-col h-full overflow-hidden">
         <TopBar
+          currentRoute={currentRoute}
           activeMode={activeMode}
           activeModel={activeModel}
           onSelectModel={onSelectModel}

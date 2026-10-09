@@ -146,6 +146,62 @@ class SidecarClient {
     }
   }
 
+  async getProjects(limit = 50, offset = 0): Promise<any[]> {
+    try {
+      const res = await fetch(`${this.base}/v1/projects?limit=${limit}&offset=${offset}`, {
+        headers: this.getHeaders(),
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
+    } catch {
+      return [];
+    }
+  }
+
+  async getProject(projectId: string): Promise<any | null> {
+    try {
+      const res = await fetch(`${this.base}/v1/projects/${encodeURIComponent(projectId)}`, {
+        headers: this.getHeaders(),
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  async createProject(payload: {
+    name: string;
+    description?: string;
+    root_path?: string;
+    instructions?: string;
+  }): Promise<any | null> {
+    try {
+      const res = await fetch(`${this.base}/v1/projects`, {
+        method: 'POST',
+        headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  async deleteProject(projectId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.base}/v1/projects/${encodeURIComponent(projectId)}`, {
+        method: 'DELETE',
+        headers: this.getHeaders(),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
   async runPipeline(name: string, inputs: Record<string, any>): Promise<any> {
     const res = await fetch(`${this.base}/v1/pipelines/${encodeURIComponent(name)}/run`, {
       method: 'POST',

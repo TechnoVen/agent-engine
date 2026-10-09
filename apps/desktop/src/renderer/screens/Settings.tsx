@@ -157,6 +157,21 @@ export const Settings: React.FC<SettingsProps> = () => {
   const [exportingDiagnostics, setExportingDiagnostics] = useState<boolean>(false);
   const [diagnosticsSuccess, setDiagnosticsSuccess] = useState<string | null>(null);
 
+  // Developer Mode (Default: OFF)
+  const [developerMode, setDeveloperMode] = useState<boolean>(() => {
+    return (
+      localStorage.getItem('agent_engine_developer_mode') === 'true' ||
+      localStorage.getItem('ae_developer_mode') === 'true'
+    );
+  });
+
+  const handleToggleDeveloperMode = (enabled: boolean) => {
+    setDeveloperMode(enabled);
+    localStorage.setItem('agent_engine_developer_mode', String(enabled));
+    localStorage.setItem('ae_developer_mode', String(enabled));
+    window.dispatchEvent(new Event('developer-mode-changed'));
+  };
+
   // Load existing credentials & app settings on mount
   useEffect(() => {
     loadStoredCredentials();
@@ -2083,6 +2098,30 @@ export const Settings: React.FC<SettingsProps> = () => {
                   <div className="text-amber-200/80 leading-relaxed">
                     Sensitive data (keys, secrets, personal paths) has been redacted. Review before sharing.
                   </div>
+                </div>
+              </div>
+
+              {/* Developer Mode Toggle */}
+              <div className="p-5 rounded-xl bg-bg-surface border border-border-subtle space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xs font-bold text-text-primary">Developer Mode</h3>
+                    <p className="text-xs text-text-secondary mt-0.5">
+                      Enable advanced engineering surfaces, raw telemetry, model tier names, and low-level pipeline logs.
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={developerMode}
+                      onChange={(e) => handleToggleDeveloperMode(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-bg-elevated peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-border-strong after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent border border-border-subtle"></div>
+                  </label>
+                </div>
+                <div className="text-[11px] font-mono text-text-tertiary">
+                  Current state: <span className={developerMode ? "text-accent font-semibold" : "text-text-secondary"}>{developerMode ? "ENABLED (Technical controls active)" : "DISABLED (Standard restrained UX)"}</span>
                 </div>
               </div>
 

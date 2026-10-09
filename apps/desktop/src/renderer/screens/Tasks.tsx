@@ -210,13 +210,8 @@ export const Tasks: React.FC<TasksScreenProps> = ({
   };
 
   const handleTriggerTask = async (task: ScheduledTask) => {
-    setActionNotice(`Executing "${task.name}" immediately...`);
-    setTimeout(() => setActionNotice(null), 3000);
-    try {
-      await sidecarClient.triggerScheduledTask(task.id);
-    } catch {
-      // dev fallback
-    }
+    setActionNotice(`Runtime paused: Background cron task "${task.name}" requires R4 worker runtime.`);
+    setTimeout(() => setActionNotice(null), 4000);
   };
 
   const handleDeleteTask = async (id: string) => {
@@ -289,7 +284,7 @@ export const Tasks: React.FC<TasksScreenProps> = ({
         <div className="w-full max-w-[960px] mx-auto space-y-6">
           {/* Top Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border-subtle pb-5">
-            <div>
+            <div className="space-y-1">
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-xl bg-accent/15 border border-accent/30 flex items-center justify-center text-accent">
                   <Clock className="w-4 h-4" />
@@ -297,12 +292,12 @@ export const Tasks: React.FC<TasksScreenProps> = ({
                 <h1 className="text-xl font-bold text-text-primary tracking-tight">
                   Scheduled Tasks
                 </h1>
-                <span className="px-2 py-0.5 rounded-full bg-accent/10 border border-accent/20 text-[11px] font-medium text-accent">
-                  Off-Peak Engine (Law 7)
+                <span className="px-2 py-0.5 rounded-md bg-warning/10 border border-warning/25 text-[10px] font-mono font-medium text-warning uppercase">
+                  Preview · Runtime not available yet · Coming in R4
                 </span>
               </div>
-              <p className="text-xs text-text-secondary mt-1">
-                Let your agent run tasks on schedule and deliver results automatically
+              <p className="text-xs text-text-secondary">
+                Recurring schedules and background cron execution are scheduled for Milestone R4.
               </p>
             </div>
 

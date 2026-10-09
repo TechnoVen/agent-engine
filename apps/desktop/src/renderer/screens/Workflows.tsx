@@ -467,24 +467,15 @@ export const Workflows: React.FC<WorkflowsProps> = () => {
     setIsRunning(true);
     setRunResult(null);
     try {
-      let inputs: Record<string, any> = {};
       try {
-        inputs = JSON.parse(runInputsJson);
+        JSON.parse(runInputsJson);
       } catch {
-        inputs = { query: 'Execute live pipeline' };
+        // valid JSON format check
       }
       await sidecarClient.saveWorkflow(activeWorkflow);
-      const res = await sidecarClient.runWorkflow(activeWorkflow.id, inputs);
-      setRunResult(res);
-      if (res.status === 'waiting_approval') {
-        showNotification(`Workflow paused at approval gate: ${res.pending_gate?.node_id}`);
-        loadPendingGates();
-      } else {
-        showNotification(`Workflow executed successfully! Total cost: $${res.total_cost_usd.toFixed(4)}`);
-      }
-      loadWorkflows();
+      showNotification('Workflow saved. Execution runtime is paused: Durable DAG workflow execution requires Milestone R4.', 'error');
     } catch (err: any) {
-      showNotification(err.message || 'Workflow execution failed', 'error');
+      showNotification(err.message || 'Workflow operation failed', 'error');
     } finally {
       setIsRunning(false);
       setRunModalOpen(false);
@@ -564,16 +555,16 @@ export const Workflows: React.FC<WorkflowsProps> = () => {
         <div className="p-6 border-b border-border-subtle bg-bg-surface flex items-center justify-between">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-accent/20 text-accent border border-accent/40">
-                Phase 7 — Milestone M5
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-medium bg-warning/10 text-warning border border-warning/25 uppercase">
+                Preview · Runtime not available yet · Coming in R4
               </span>
-              <span className="text-xs text-text-tertiary">ADR-012 Layered Workflows</span>
+              <span className="text-xs text-text-tertiary">ADR-012 Visual DAG Editor</span>
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-text-primary flex items-center gap-2">
-              <span>Workflows & DAG Pipelines</span>
+              <span>Automations & Workflows</span>
             </h1>
             <p className="text-xs text-text-secondary mt-1">
-              Visual pipeline orchestrator combining DSPy modules, skills, autonomous agents, and human-in-the-loop gates.
+              Visual pipeline DAG designer. Durable workflow execution and background workers are scheduled for Milestone R4.
             </p>
           </div>
 

@@ -5,11 +5,9 @@ import {
   Table2,
   Code2,
   RotateCcw,
-  ArrowRight,
   FolderKanban,
   Upload,
   Loader2,
-  Layers,
   Clock,
   Pin,
 } from 'lucide-react';
@@ -44,16 +42,6 @@ export interface HomeProps {
   onProjectNameChange?: (name: string) => void;
 }
 
-interface FeaturedCase {
-  title: string;
-  category: string;
-  description: string;
-  mode: Mode;
-  icon: React.ReactNode;
-  estCost: string;
-  prompt: string;
-}
-
 export const Home: React.FC<HomeProps> = ({
   onSelectMode,
   activeModel,
@@ -76,7 +64,6 @@ export const Home: React.FC<HomeProps> = ({
   const [activeProjectName, setActiveProjectName] = useState<string>('Agent Engine');
   const [initialInputText, setInitialInputText] = useState('');
   const [activePersona, setActivePersona] = useState<AgentPersona>(DEFAULT_PERSONAS[0]);
-  const [activePipeline, setActivePipeline] = useState<string>(DEFAULT_PERSONAS[0].pipelineName);
   const [isCanvasDragOver, setIsCanvasDragOver] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [canvasAttachments, setCanvasAttachments] = useState<AttachmentFile[]>([]);
@@ -224,26 +211,18 @@ export const Home: React.FC<HomeProps> = ({
     });
   };
 
-  // Update model and immediately sync pipeline state
+  // Update model
   const handleModelChange = useCallback(
     (newModel: ModelTier) => {
       onSelectModel?.(newModel);
-      if (newModel === 'reasoning') {
-        setActivePipeline(activePersona.id === 'general' ? 'cot_reasoning' : activePersona.pipelineName);
-      } else if (newModel === 'swarm') {
-        setActivePipeline(activePersona.id === 'general' ? 'swarm_parallel' : activePersona.pipelineName);
-      } else {
-        setActivePipeline(activePersona.pipelineName);
-      }
     },
-    [onSelectModel, activePersona]
+    [onSelectModel]
   );
 
-  // Switch persona and immediately activate persona pipeline and suggested model
+  // Switch persona
   const handlePersonaChange = useCallback(
     (persona: AgentPersona) => {
       setActivePersona(persona);
-      setActivePipeline(persona.pipelineName);
       if (persona.suggestedModel && persona.suggestedModel !== activeModel) {
         onSelectModel?.(persona.suggestedModel);
       }
@@ -266,53 +245,36 @@ export const Home: React.FC<HomeProps> = ({
     return 'Good evening, Nadir';
   };
 
+  const [realProjects, setRealProjects] = useState<any[]>([]);
+  const [recentSessions, setRecentSessions] = useState<any[]>([]);
+
+  useEffect(() => {
+    let mounted = true;
+    const loadHomeData = async () => {
+      try {
+        const [projs, sess] = await Promise.all([
+          sidecarClient.getProjects(5),
+          sidecarClient.getSessions(5),
+        ]);
+        if (mounted) {
+          if (Array.isArray(projs)) setRealProjects(projs);
+          if (Array.isArray(sess)) setRecentSessions(sess);
+        }
+      } catch {
+        // offline or fallback
+      }
+    };
+    loadHomeData();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const contextualTools = [
-    { mode: 'deep-research' as Mode, label: 'Research', icon: <Search className="w-3.5 h-3.5 text-text-secondary" /> },
-    { mode: 'docs' as Mode, label: 'Writing', icon: <FileText className="w-3.5 h-3.5 text-text-secondary" /> },
-    { mode: 'sheets' as Mode, label: 'Data', icon: <Table2 className="w-3.5 h-3.5 text-text-secondary" /> },
-    { mode: 'code' as Mode, label: 'Developer', icon: <Code2 className="w-3.5 h-3.5 text-text-secondary" /> },
-  ];
-
-  const featuredCases: FeaturedCase[] = [
-    {
-      title: 'Build an invoice agent',
-      category: 'Business Pipeline',
-      description: 'Extract line items from PDF invoices and validate calculations with deterministic code.',
-      mode: 'workflows',
-      icon: <Layers className="w-3.5 h-3.5 text-text-secondary" />,
-      estCost: '$0.00 (CODE Tier)',
-      prompt: 'Build an invoice validation workflow that extracts line items from incoming PDFs, verifies tax arithmetic via Python, and flags discrepancies > 1% to Slack.',
-    },
-    {
-      title: 'Analyze codebase & architecture',
-      category: 'Developer Case',
-      description: 'Generate component graphs and detect dead dependencies across projects.',
-      mode: 'code',
-      icon: <Code2 className="w-3.5 h-3.5 text-text-secondary" />,
-      estCost: '$0.001 (Small Model)',
-      prompt: 'Inspect the current codebase architecture, map inter-module dependencies across services, and suggest optimizations for deterministic execution.',
-    },
-    {
-      title: 'Deep market research report',
-      category: 'Investigative Case',
-      description: 'Synthesize market sources into an executive summary with verified source citations.',
-      mode: 'deep-research',
-      icon: <Search className="w-3.5 h-3.5 text-text-secondary" />,
-      estCost: '$0.004 (Mid Model)',
-      prompt: 'Draft an in-depth research report comparing local-first AI engine architectures against cloud-centric platforms, highlighting latency, cost, and data sovereignty.',
-    },
-  ];
-
-  const recentProjects = [
-    { id: '1', name: 'Agent Engine', threads: 12, updated: 'Active today', desc: 'Local repository · Active today' },
-    { id: '2', name: 'Organiser Workspace', threads: 8, updated: '2h ago', desc: '8 active threads · Updated 2h ago' },
-    { id: '3', name: 'Client Website', threads: 3, updated: '1d ago', desc: '3 active threads · Updated 1d ago' },
-  ];
-
-  const recentWork = [
-    { id: 'w1', title: 'Agent Engine architecture review', updated: '18 min ago' },
-    { id: 'w2', title: 'THE DEN opening checklist', updated: 'Yesterday' },
-    { id: 'w3', title: 'Article draft: Local AI', updated: '2 days ago' },
+    { mode: 'research' as Mode, label: 'Research', icon: <Search className="w-3.5 h-3.5 text-text-secondary" /> },
+    { mode: 'writing' as Mode, label: 'Writing', icon: <FileText className="w-3.5 h-3.5 text-text-secondary" /> },
+    { mode: 'data' as Mode, label: 'Data', icon: <Table2 className="w-3.5 h-3.5 text-text-secondary" /> },
+    { mode: 'developer' as Mode, label: 'Developer', icon: <Code2 className="w-3.5 h-3.5 text-text-secondary" /> },
   ];
 
   // Real streaming token dispatcher via sidecarClient
@@ -819,20 +781,12 @@ export const Home: React.FC<HomeProps> = ({
     );
   };
 
-  const handleSelectFeaturedCase = (c: FeaturedCase) => {
-    setInitialInputText(c.prompt);
-    if (c.mode !== 'home') {
-      onSelectMode(c.mode);
-    }
-    activeInputRef.current?.focus();
-  };
-
-  const handleProjectSelect = (id: string) => {
+  const handleProjectSelect = (id: string, name?: string) => {
     setActiveProjectId(id);
-    const found = recentProjects.find((p) => p.id === id);
-    const name = found ? found.name : '';
-    setActiveProjectName(name);
-    onProjectNameChange?.(name);
+    const found = realProjects.find((p) => p.id === id);
+    const resolvedName = name || (found ? found.name : '');
+    setActiveProjectName(resolvedName);
+    onProjectNameChange?.(resolvedName);
   };
 
   const handleResetChat = () => {
@@ -936,11 +890,6 @@ export const Home: React.FC<HomeProps> = ({
               <p className="text-xs text-text-secondary leading-relaxed pt-0.5">
                 Ask, open a project, or describe a task.
               </p>
-              <div className="flex items-center gap-2 pt-1 text-[11px] text-text-tertiary font-mono">
-                <span>Persona: <span className="text-text-secondary font-medium font-sans">{activePersona.name}</span></span>
-                <span>•</span>
-                <span>Pipeline: <span className="text-text-secondary">{activePipeline}</span></span>
-              </div>
             </div>
 
             {/* Universal Command Surface with ExecutionPreferences */}
@@ -1009,19 +958,29 @@ export const Home: React.FC<HomeProps> = ({
                   <span>Recent work</span>
                 </div>
                 <div className="border border-border-subtle rounded-lg bg-bg-elevated/40 divide-y divide-border-subtle overflow-hidden">
-                  {recentWork.map((w) => (
-                    <div
-                      key={w.id}
-                      onClick={() => {
-                        setInitialInputText(`Review recent task: ${w.title}`);
-                        activeInputRef.current?.focus();
-                      }}
-                      className="px-3 py-2.5 flex items-center justify-between text-xs hover:bg-bg-hover cursor-pointer transition-colors"
-                    >
-                      <span className="font-medium text-text-primary truncate mr-2">{w.title}</span>
-                      <span className="text-[11px] text-text-tertiary font-mono flex-shrink-0">{w.updated}</span>
+                  {recentSessions.length === 0 ? (
+                    <div className="px-3 py-4 text-center text-xs text-text-tertiary">
+                      No recent work
                     </div>
-                  ))}
+                  ) : (
+                    recentSessions.map((s) => (
+                      <div
+                        key={s.session_id || s.id}
+                        onClick={() => {
+                          setInitialInputText(`Continue session: ${s.title || s.name || s.session_id}`);
+                          activeInputRef.current?.focus();
+                        }}
+                        className="px-3 py-2.5 flex items-center justify-between text-xs hover:bg-bg-hover cursor-pointer transition-colors"
+                      >
+                        <span className="font-medium text-text-primary truncate mr-2">
+                          {s.title || s.name || `Session ${s.session_id?.slice(0, 8)}`}
+                        </span>
+                        <span className="text-[11px] text-text-tertiary font-mono flex-shrink-0">
+                          {s.updated_at ? new Date(s.updated_at).toLocaleDateString() : 'Recent'}
+                        </span>
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
 
@@ -1032,64 +991,35 @@ export const Home: React.FC<HomeProps> = ({
                   <span>Pinned projects</span>
                 </div>
                 <div className="border border-border-subtle rounded-lg bg-bg-elevated/40 divide-y divide-border-subtle overflow-hidden">
-                  {recentProjects.map((p) => (
-                    <div
-                      key={p.id}
-                      onClick={() => handleProjectSelect(p.id)}
-                      className={`px-3 py-2.5 flex items-center justify-between text-xs hover:bg-bg-hover cursor-pointer transition-colors ${
-                        activeProjectId === p.id ? 'bg-accent/5' : ''
-                      }`}
-                    >
-                      <div className="truncate mr-2">
-                        <div className="font-medium text-text-primary flex items-center gap-1.5">
-                          <FolderKanban className="w-3.5 h-3.5 text-text-tertiary flex-shrink-0" />
-                          <span>{p.name}</span>
+                  {realProjects.length === 0 ? (
+                    <div className="px-3 py-4 text-center text-xs text-text-tertiary">
+                      No projects configured
+                    </div>
+                  ) : (
+                    realProjects.map((p) => (
+                      <div
+                        key={p.id}
+                        onClick={() => handleProjectSelect(p.id, p.name)}
+                        className={`px-3 py-2.5 flex items-center justify-between text-xs hover:bg-bg-hover cursor-pointer transition-colors ${
+                          activeProjectId === p.id ? 'bg-accent/5' : ''
+                        }`}
+                      >
+                        <div className="truncate mr-2">
+                          <div className="font-medium text-text-primary flex items-center gap-1.5">
+                            <FolderKanban className="w-3.5 h-3.5 text-text-tertiary flex-shrink-0" />
+                            <span>{p.name}</span>
+                          </div>
+                          {p.description && (
+                            <div className="text-[11px] text-text-tertiary line-clamp-1">{p.description}</div>
+                          )}
                         </div>
-                        <div className="text-[11px] text-text-tertiary line-clamp-1">{p.desc}</div>
-                      </div>
-                      <span className="text-[10px] font-mono text-text-tertiary uppercase flex-shrink-0">
-                        {activeProjectId === p.id ? 'Active' : 'Select'}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* Quick-Start Templates & Inspiration (Satisfies task template coverage) */}
-            <div className="pt-2 space-y-2">
-              <div className="flex items-center justify-between px-0.5">
-                <span className="text-xs font-semibold uppercase tracking-wider text-text-tertiary">
-                  Explore Inspiration
-                </span>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
-                {featuredCases.map((item, idx) => (
-                  <div
-                    key={idx}
-                    onClick={() => handleSelectFeaturedCase(item)}
-                    className="p-3 rounded-lg bg-bg-elevated hover:bg-bg-hover border border-border-subtle hover:border-border-strong cursor-pointer transition-all flex flex-col justify-between group"
-                  >
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-mono text-text-tertiary uppercase">
-                          {item.category}
+                        <span className="text-[10px] font-mono text-text-tertiary uppercase flex-shrink-0">
+                          {activeProjectId === p.id ? 'Active' : 'Select'}
                         </span>
-                        {item.icon}
                       </div>
-                      <h3 className="text-xs font-semibold text-text-primary group-hover:text-accent transition-colors">
-                        {item.title}
-                      </h3>
-                      <p className="text-[11px] text-text-secondary leading-relaxed line-clamp-2">
-                        {item.description}
-                      </p>
-                    </div>
-                    <div className="pt-2.5 mt-2 border-t border-border-subtle/50 flex items-center justify-between text-[10px] font-mono text-text-tertiary">
-                      <span>{item.estCost}</span>
-                      <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform text-accent" />
-                    </div>
-                  </div>
-                ))}
+                    ))
+                  )}
+                </div>
               </div>
             </div>
           </div>

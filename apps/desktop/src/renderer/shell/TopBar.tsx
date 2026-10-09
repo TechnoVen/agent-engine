@@ -18,8 +18,10 @@ import {
   RoutingObjective,
 } from '../types';
 import { sidecarClient } from '../api/client';
+import { AppRoute, resolveRoute, buildBreadcrumb } from '../routes';
 
 export interface TopBarProps {
+  currentRoute?: AppRoute;
   activeMode: Mode;
   health: SidecarHealth;
   isBusy?: boolean;
@@ -40,6 +42,7 @@ export interface TopBarProps {
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
+  currentRoute,
   activeMode,
   health,
   isBusy = false,
@@ -49,6 +52,11 @@ export const TopBar: React.FC<TopBarProps> = ({
   const [statusPopoverOpen, setStatusPopoverOpen] = useState(false);
   const [telemetry, setTelemetry] = useState<HardwareTelemetry | null>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
+
+  const breadcrumbSegments = React.useMemo(() => {
+    const route = currentRoute || resolveRoute(activeMode);
+    return buildBreadcrumb(route, projectName);
+  }, [currentRoute, activeMode, projectName]);
 
   // Close popover on outside click
   useEffect(() => {
@@ -87,41 +95,6 @@ export const TopBar: React.FC<TopBarProps> = ({
     };
   }, [telemetry?.local_runtime_active]);
 
-  const getLocationTitle = (mode: Mode, project?: string) => {
-    if (project) return project;
-    switch (mode) {
-      case 'home':
-        return 'Home';
-      case 'projects':
-        return 'Projects';
-      case 'tasks':
-        return 'Tasks';
-      case 'workflows':
-      case 'swarm':
-        return 'Automations';
-      case 'code':
-        return 'Developer';
-      case 'deep-research':
-        return 'Research';
-      case 'docs':
-        return 'Writing';
-      case 'sheets':
-        return 'Data';
-      case 'skills':
-      case 'marketplace':
-        return 'Skills';
-      case 'cost':
-        return 'Activity / Usage';
-      case 'policies':
-        return 'Approvals';
-      case 'benchmarks':
-        return 'Models / Diagnostics';
-      case 'settings':
-        return 'Settings';
-      default:
-        return 'Workspace';
-    }
-  };
 
   const getStatusLabel = () => {
     if (health.status === 'offline') return 'Offline';
@@ -140,10 +113,27 @@ export const TopBar: React.FC<TopBarProps> = ({
   return (
     <header className="h-11 bg-bg-elevated border-b border-border-subtle px-4 flex items-center justify-between select-none">
       {/* Left: Canonical Location Breadcrumb */}
-      <div className="flex items-center gap-1.5 text-xs text-text-secondary select-none">
-        <span className="font-semibold text-text-primary tracking-tight">Agent Engine</span>
-        <span className="text-text-tertiary">/</span>
-        <span className="text-text-secondary font-medium">{getLocationTitle(activeMode, projectName)}</span>
+      <div
+        className="flex items-center gap-1.5 text-xs text-text-secondary select-none"
+        data-testid="breadcrumb-container"
+        aria-label="Agent Engine location breadcrumb"
+      >
+        {breadcrumbSegments.map((segment, idx) => (
+          <React.Fragment key={idx}>
+            {idx > 0 && <span className="text-text-tertiary">/</span>}
+            <span
+              className={
+                idx === 0
+                  ? "font-semibold text-text-primary tracking-tight"
+                  : idx === breadcrumbSegments.length - 1
+                  ? "text-text-primary font-medium"
+                  : "text-text-secondary font-medium"
+              }
+            >
+              {segment}
+            </span>
+          </React.Fragment>
+        ))}
       </div>
 
       {/* Right: Restrained Single Status Popover Trigger */}

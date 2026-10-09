@@ -16,15 +16,9 @@ import {
   ShieldCheck,
   Terminal,
   FolderTree,
-  SlidersHorizontal,
   Check,
   Tag,
   Wand2,
-  Bot,
-  Code2,
-  Mail,
-  Search,
-  FileText,
   AlertTriangle,
 } from 'lucide-react';
 import { Mode, ModelTier, AttachmentFile, SkillItem, PluginItem, SelectedSkill, AgentPersona } from '../types';
@@ -76,22 +70,25 @@ export function estimateTokenCount(text: string): number {
 
 const MODEL_TIER_CONFIG: Record<
   ModelTier,
-  { label: string; ratePer1k: number; rateStr: string; icon: React.ReactNode }
+  { label: string; standardLabel: string; ratePer1k: number; rateStr: string; icon: React.ReactNode }
 > = {
   instant: {
-    label: 'Instant High',
+    label: 'Fast',
+    standardLabel: 'Automatic',
     ratePer1k: 0.0002,
     rateStr: '$0.0002/1k',
     icon: <Zap className="w-3.5 h-3.5 text-warning" />,
   },
   swarm: {
-    label: 'K3 Swarm High',
+    label: 'Swarm',
+    standardLabel: 'Balanced',
     ratePer1k: 0.0015,
     rateStr: '$0.0015/1k',
     icon: <Sparkles className="w-3.5 h-3.5 text-accent" />,
   },
   reasoning: {
-    label: 'K3 High',
+    label: 'Reasoning',
+    standardLabel: 'Best quality',
     ratePer1k: 0.008,
     rateStr: '$0.0080/1k',
     icon: <Brain className="w-3.5 h-3.5 text-success" />,
@@ -99,17 +96,22 @@ const MODEL_TIER_CONFIG: Record<
 };
 
 const MODE_PLACEHOLDERS: Record<string, string> = {
-  home: "Type '/' to invoke plugins and skills, or ask anything...",
-  code: "Describe a feature to build, code to refactor, or paste a bug trace...",
-  'deep-research': "Enter research topic, hypotheses, or market question to investigate...",
+  home: "Ask, describe a task, or type / for commands...",
+  writing: "Describe document outline, contract clause, or drafting requirements...",
   docs: "Describe document outline, contract clause, or drafting requirements...",
+  research: "Enter research topic, hypotheses, or market question to investigate...",
+  'deep-research': "Enter research topic, hypotheses, or market question to investigate...",
+  data: "Describe data to analyze, spreadsheet transformations, or formulas...",
   sheets: "Describe data to analyze, spreadsheet transformations, or formulas...",
+  developer: "Describe a feature to build, code to refactor, or paste a bug trace...",
+  code: "Describe a feature to build, code to refactor, or paste a bug trace...",
   slides: "Describe your presentation topic, audience, and key takeaways...",
   websites: "Describe the site to build, landing page sections, or brand specs...",
   design: "Describe UI components, layout mockups, or visual design tokens...",
   diagrams: "Describe system architecture, microservices, or data pipeline flow...",
-  swarm: "Assign a complex multi-agent parallel mission to your AI team...",
-  workflows: "Describe workflow nodes, approval gates, and deterministic steps...",
+  swarm: "Preview · Runtime not available yet · Coming in R4",
+  workflows: "Preview · Runtime not available yet · Coming in R4",
+  automations: "Preview · Runtime not available yet · Coming in R4",
 };
 
 const DEFAULT_PLUGINS: PluginItem[] = [
@@ -167,7 +169,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   onStop,
   onModeChange,
   onModelChange,
-  onPersonaChange,
+  onPersonaChange: _onPersonaChange,
   onProjectChange,
   onClearChat,
   inputRef: externalInputRef,
@@ -192,9 +194,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     [controlledAttachments, onAttachmentsChange]
   );
   const [modelDropdownOpen, setModelDropdownOpen] = useState(false);
-  const [personaDropdownOpen, setPersonaDropdownOpen] = useState(false);
   const [projectDropdownOpen, setProjectDropdownOpen] = useState(false);
-  const [pluginsDropdownOpen, setPluginsDropdownOpen] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
 
   // Agent Personas state
@@ -235,17 +235,22 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     }
   }, [personaId]);
 
-  // Fetch real skills and personas catalog from sidecar
+  const [realProjects, setRealProjects] = useState<any[]>([]);
+  const isDev = typeof window !== 'undefined' && localStorage.getItem('ae_developer_mode') === 'true';
+
+  // Fetch real skills, personas, and projects catalog from sidecar
   useEffect(() => {
     let mounted = true;
     const fetchCatalog = async () => {
-      const [skills, personas] = await Promise.all([
+      const [skills, personas, projs] = await Promise.all([
         sidecarClient.getSkills(),
         sidecarClient.getPersonas(),
+        sidecarClient.getProjects(20),
       ]);
       if (mounted) {
         if (skills && skills.length > 0) setSkillsCatalog(skills);
         if (personas && personas.length > 0) setPersonasCatalog(personas);
+        if (projs && Array.isArray(projs)) setRealProjects(projs);
       }
     };
     fetchCatalog();
@@ -577,33 +582,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     personasCatalog[0] ||
     DEFAULT_PERSONAS[0];
 
-  const handleSelectPersona = (p: AgentPersona) => {
-    setActivePersonaId(p.id);
-    setPersonaDropdownOpen(false);
-    onPersonaChange?.(p);
-    if (p.suggestedModel && p.suggestedModel !== model) {
-      onModelChange?.(p.suggestedModel);
-    }
-  };
-
-  const renderPersonaIcon = (avatarName: string, className = 'w-3.5 h-3.5') => {
-    switch (avatarName) {
-      case 'Code2':
-        return <Code2 className={className} />;
-      case 'Search':
-        return <Search className={className} />;
-      case 'FileText':
-        return <FileText className={className} />;
-      case 'ShieldCheck':
-        return <ShieldCheck className={className} />;
-      case 'Mail':
-        return <Mail className={className} />;
-      case 'Bot':
-      default:
-        return <Bot className={className} />;
-    }
-  };
-
   const renderPluginIcon = (iconName: string) => {
     switch (iconName) {
       case 'globe':
@@ -633,7 +611,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         setIsDragOver(false);
         handleFilesSelected(e.dataTransfer.files);
       }}
-      className={`w-full bg-bg-elevated border rounded-xl p-3 shadow-2xl transition-all duration-150 relative ${
+      className={`w-full bg-bg-elevated border rounded-lg p-3 shadow-md transition-all duration-150 relative ${
         isDragOver
           ? 'border-accent bg-accent/5 ring-1 ring-accent'
           : 'border-border-strong focus-within:border-accent/80 focus-within:ring-1 focus-within:ring-accent/40'
@@ -894,9 +872,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             type="button"
             onClick={() => fileInputRef.current?.click()}
             title="Attach documents, CSVs, or code files"
-            className="p-1.5 rounded-md hover:bg-bg-hover text-text-tertiary hover:text-text-primary transition-colors flex items-center gap-1"
+            className="px-2 py-1 rounded-md bg-bg-base hover:bg-bg-hover border border-border-subtle text-xs text-text-secondary hover:text-text-primary transition-colors flex items-center gap-1.5"
           >
-            <Paperclip className="w-4 h-4" />
+            <Paperclip className="w-3.5 h-3.5 text-text-tertiary" />
+            <span>Attach</span>
           </button>
 
           {/* Mode Chip */}
@@ -904,11 +883,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             <button
               type="button"
               onClick={() => onModeChange?.('home')}
-              title={`Active Mode: ${mode}. Click to reset to default chat.`}
-              className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-accent/15 border border-accent/30 text-[11px] font-medium text-accent hover:bg-accent/25 transition-all"
+              title={`Active Mode: ${mode}. Click to reset to home.`}
+              className="flex items-center gap-1 px-2 py-0.5 rounded border border-border-subtle text-[11px] font-medium text-text-secondary hover:bg-bg-hover transition-all"
             >
               <span className="capitalize">{mode.replace('-', ' ')}</span>
-              <X className="w-3 h-3 text-accent/80 hover:text-accent" />
+              <X className="w-3 h-3 text-text-tertiary hover:text-text-primary" />
             </button>
           )}
 
@@ -920,16 +899,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-bg-base hover:bg-bg-hover border border-border-subtle text-xs text-text-secondary hover:text-text-primary transition-colors"
             >
               <Folder className="w-3.5 h-3.5 text-text-tertiary" />
-              <span className="truncate max-w-[120px]">
-                {projectName || 'Select project'}
+              <span className="truncate max-w-[140px]">
+                Project: {projectName || 'Default'}
               </span>
               <ChevronDown className="w-3 h-3 text-text-tertiary" />
             </button>
 
             {projectDropdownOpen && (
-              <div className="absolute left-0 bottom-full mb-1 w-48 bg-bg-elevated border border-border-strong rounded-lg shadow-2xl py-1 z-50">
+              <div className="absolute left-0 bottom-full mb-1 w-52 bg-bg-elevated border border-border-strong rounded-lg shadow-2xl py-1 z-50">
                 <div className="px-2.5 py-1 text-[10px] uppercase font-semibold text-text-tertiary tracking-wider border-b border-border-subtle">
-                  Bind Chat to Workspace
+                  Project Workspace
                 </div>
                 <button
                   type="button"
@@ -943,224 +922,77 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 >
                   None (Global Scratchpad)
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onProjectChange?.('1');
-                    setProjectDropdownOpen(false);
-                  }}
-                  className={`w-full text-left px-2.5 py-1.5 text-xs hover:bg-bg-hover transition-colors ${
-                    projectId === '1' ? 'text-accent font-medium' : 'text-text-secondary'
-                  }`}
-                >
-                  Organiser Workspace
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onProjectChange?.('2');
-                    setProjectDropdownOpen(false);
-                  }}
-                  className={`w-full text-left px-2.5 py-1.5 text-xs hover:bg-bg-hover transition-colors ${
-                    projectId === '2' ? 'text-accent font-medium' : 'text-text-secondary'
-                  }`}
-                >
-                  Client Website
-                </button>
+                {realProjects.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => {
+                      onProjectChange?.(p.id);
+                      setProjectDropdownOpen(false);
+                    }}
+                    className={`w-full text-left px-2.5 py-1.5 text-xs hover:bg-bg-hover transition-colors truncate ${
+                      projectId === p.id ? 'text-accent font-medium' : 'text-text-secondary'
+                    }`}
+                  >
+                    {p.name}
+                  </button>
+                ))}
               </div>
             )}
           </div>
 
-          <div className="hidden sm:block h-3.5 w-px bg-border-subtle" />
+          {/* Optional Developer-mode plugins */}
+          {isDev && (
+            <>
+              <div className="hidden sm:block h-3.5 w-px bg-border-subtle" />
+              <div className="flex items-center gap-1 bg-bg-base/80 border border-border-subtle rounded-lg p-0.5">
+                {plugins.map((plugin) => (
+                  <button
+                    key={plugin.id}
+                    type="button"
+                    onClick={() => togglePlugin(plugin.id)}
+                    title={`${plugin.name} (${plugin.enabled ? 'Enabled' : 'Disabled'})`}
+                    className={`p-1 rounded transition-all ${
+                      plugin.enabled
+                        ? 'text-accent bg-accent/15 border border-accent/30 shadow-xs'
+                        : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover border border-transparent'
+                    }`}
+                  >
+                    {renderPluginIcon(plugin.iconName)}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
 
-          {/* Plugin Quick-Toggles Strip */}
-          <div className="flex items-center gap-1 bg-bg-base/80 border border-border-subtle rounded-lg p-0.5">
-            {plugins.map((plugin) => (
-              <button
-                key={plugin.id}
-                type="button"
-                onClick={() => togglePlugin(plugin.id)}
-                title={`${plugin.name} (${plugin.enabled ? 'Enabled' : 'Disabled'})`}
-                className={`p-1 rounded transition-all ${
-                  plugin.enabled
-                    ? 'text-accent bg-accent/15 border border-accent/30 shadow-xs'
-                    : 'text-text-tertiary hover:text-text-secondary hover:bg-bg-hover border border-transparent'
-                }`}
-              >
-                {renderPluginIcon(plugin.iconName)}
-              </button>
-            ))}
-
-            {/* Plugins Dropdown Trigger */}
-            <div className="relative">
-              <button
-                type="button"
-                onClick={() => setPluginsDropdownOpen(!pluginsDropdownOpen)}
-                className="p-1 rounded text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors flex items-center"
-                title="Manage Plugins & Grounding Tools"
-              >
-                <SlidersHorizontal className="w-3.5 h-3.5" />
-              </button>
-
-              {pluginsDropdownOpen && (
-                <div className="absolute left-0 bottom-full mb-1 w-64 bg-bg-elevated border border-border-strong rounded-xl shadow-2xl py-1.5 z-50 text-left">
-                  <div className="px-3 py-1 text-[10px] uppercase font-semibold text-text-tertiary tracking-wider border-b border-border-subtle flex items-center justify-between">
-                    <span>Active Grounding Plugins</span>
-                    <span className="font-mono text-accent">
-                      {plugins.filter((p) => p.enabled).length}/{plugins.length} ON
-                    </span>
-                  </div>
-                  <div className="p-1 space-y-1">
-                    {plugins.map((plugin) => (
-                      <div
-                        key={plugin.id}
-                        onClick={() => togglePlugin(plugin.id)}
-                        className="px-2.5 py-1.5 rounded-lg hover:bg-bg-hover flex items-center justify-between cursor-pointer transition-colors"
-                      >
-                        <div className="flex items-center gap-2">
-                          <div
-                            className={`p-1 rounded ${
-                              plugin.enabled
-                                ? 'bg-accent/15 text-accent'
-                                : 'bg-bg-base text-text-tertiary'
-                            }`}
-                          >
-                            {renderPluginIcon(plugin.iconName)}
-                          </div>
-                          <div>
-                            <div className="text-xs font-medium text-text-primary">
-                              {plugin.name}
-                            </div>
-                            <div className="text-[10px] text-text-tertiary">
-                              {plugin.description}
-                            </div>
-                          </div>
-                        </div>
-                        {plugin.enabled && (
-                          <Check className="w-4 h-4 text-accent flex-shrink-0" />
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+          {isDev && (
+            <div
+              title={`Approx. ${approxTokens.toLocaleString()} tokens`}
+              className="hidden lg:flex items-center gap-1 text-[11px] font-mono text-text-tertiary"
+            >
+              <Coins className="w-3 h-3 text-success/80" />
+              <span>Est: {costPreview}</span>
             </div>
-          </div>
-
-          <div className="hidden lg:block h-3.5 w-px bg-border-subtle" />
-
-          {/* Pre-execution Cost Estimate (accurate to ±5%) */}
-          <div
-            title={`Approx. ${approxTokens.toLocaleString()} tokens on ${currentTierConfig.label} (${currentTierConfig.rateStr}) — accuracy ±5%`}
-            className="hidden lg:flex items-center gap-1 text-[11px] font-mono text-text-tertiary"
-          >
-            <Coins className="w-3 h-3 text-success/80" />
-            <span>Est: {costPreview}</span>
-            {approxTokens > 0 && prompt.trim().length > 0 && (
-              <span className="text-[10px] text-text-tertiary">
-                (~{approxTokens >= 1000 ? `${(approxTokens / 1000).toFixed(1)}k` : approxTokens} tok)
-              </span>
-            )}
-          </div>
+          )}
         </div>
 
-        {/* Right cluster: Agent Persona, Model Tier Dropdown & Send/Stop Button */}
+        {/* Right cluster: Model Selector & Run/Stop Button */}
         <div className="flex items-center gap-1.5 sm:gap-2">
-          {/* Agent Persona Selector */}
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => {
-                setPersonaDropdownOpen(!personaDropdownOpen);
-                setModelDropdownOpen(false);
-                setProjectDropdownOpen(false);
-                setPluginsDropdownOpen(false);
-              }}
-              aria-label="Select agent persona"
-              title={`Agent Persona: ${currentPersona.name} (${currentPersona.role})`}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-bg-base hover:bg-bg-hover border border-border-subtle hover:border-border-strong text-xs text-text-primary transition-colors"
-            >
-              <span className="text-accent flex items-center justify-center">
-                {renderPersonaIcon(currentPersona.avatar)}
-              </span>
-              <span className="hidden sm:inline font-medium text-[11px] truncate max-w-[100px]">
-                {currentPersona.name}
-              </span>
-              <ChevronDown className="w-3 h-3 text-text-tertiary" />
-            </button>
-
-            {personaDropdownOpen && (
-              <div
-                role="listbox"
-                aria-label="Agent personas"
-                className="absolute right-0 bottom-full mb-1 w-72 bg-bg-elevated border border-border-strong rounded-lg shadow-2xl py-1 z-50 animate-in fade-in duration-100"
-              >
-                <div className="px-3 py-1.5 text-[10px] uppercase font-semibold text-text-tertiary tracking-wider border-b border-border-subtle flex items-center justify-between">
-                  <span>Agent Persona</span>
-                  <span className="text-[9px] text-text-secondary">Persona Co-Pilot</span>
-                </div>
-                <div className="max-h-60 overflow-y-auto py-1">
-                  {personasCatalog.map((p) => {
-                    const isSelected = p.id === activePersonaId;
-                    return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() => handleSelectPersona(p)}
-                        className={`w-full text-left px-3 py-2 hover:bg-bg-hover flex items-start gap-2.5 transition-colors ${
-                          isSelected ? 'bg-bg-hover/80' : ''
-                        }`}
-                      >
-                        <div className="p-1.5 rounded-md bg-bg-base border border-border-subtle text-accent mt-0.5 flex items-center justify-center">
-                          {renderPersonaIcon(p.avatar)}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-semibold text-text-primary truncate">
-                              {p.name}
-                            </span>
-                            <div className="flex items-center gap-1">
-                              <span className="px-1 py-0.2 text-[9px] font-mono rounded bg-bg-base border border-border-subtle text-text-secondary">
-                                {p.suggestedModel === 'instant' ? '$0.0002/1k' : p.suggestedModel === 'swarm' ? '$0.0015/1k' : '$0.0080/1k'}
-                              </span>
-                              {isSelected && <Check className="w-3.5 h-3.5 text-accent" />}
-                            </div>
-                          </div>
-                          <div className="text-[10px] text-accent font-medium">
-                            {p.role} · {p.pipelineName}
-                          </div>
-                          <div className="text-[10px] text-text-secondary line-clamp-1 mt-0.5">
-                            {p.description}
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Quick Model Selector in Input */}
+          {/* Model Selector in Input */}
           <div className="relative">
             <button
               type="button"
               onClick={() => {
                 setModelDropdownOpen(!modelDropdownOpen);
-                setPersonaDropdownOpen(false);
                 setProjectDropdownOpen(false);
-                setPluginsDropdownOpen(false);
               }}
-              aria-label="Select model routing tier"
-              title={`Model Tier: ${currentTierConfig.label} (${currentTierConfig.rateStr})`}
+              aria-label="Select model routing"
+              title={`Model: ${isDev ? currentTierConfig.label : currentTierConfig.standardLabel}`}
               className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-bg-base hover:bg-bg-hover border border-border-subtle hover:border-border-strong text-xs text-text-primary transition-colors"
             >
               {currentTierConfig.icon}
-              <span className="hidden md:inline font-medium text-[11px]">
-                {currentTierConfig.label}
-              </span>
-              <span className="hidden xl:inline text-[10px] font-mono text-text-tertiary">
-                {currentTierConfig.rateStr}
+              <span className="font-medium text-[11px]">
+                {isDev ? currentTierConfig.label : currentTierConfig.standardLabel}
               </span>
               <ChevronDown className="w-3 h-3 text-text-tertiary" />
             </button>
@@ -1168,11 +1000,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             {modelDropdownOpen && (
               <div
                 role="listbox"
-                aria-label="Model tiers"
-                className="absolute right-0 bottom-full mb-1 w-56 bg-bg-elevated border border-border-strong rounded-lg shadow-2xl py-1 z-50 animate-in fade-in duration-100"
+                aria-label="Model options"
+                className="absolute right-0 bottom-full mb-1 w-52 bg-bg-elevated border border-border-strong rounded-lg shadow-2xl py-1 z-50 animate-in fade-in duration-100"
               >
                 <div className="px-3 py-1 text-[10px] uppercase font-semibold text-text-tertiary tracking-wider border-b border-border-subtle">
-                  Model Routing Tier
+                  {isDev ? 'Model Routing Tier' : 'Model Selection'}
                 </div>
                 {(Object.keys(MODEL_TIER_CONFIG) as ModelTier[]).map((tierKey) => {
                   const item = MODEL_TIER_CONFIG[tierKey];
@@ -1192,13 +1024,15 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                       <div className="flex items-center gap-2">
                         {item.icon}
                         <span className="text-xs text-text-primary font-medium">
-                          {item.label}
+                          {isDev ? item.label : item.standardLabel}
                         </span>
                       </div>
                       <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] font-mono text-text-tertiary">
-                          {item.rateStr}
-                        </span>
+                        {isDev && (
+                          <span className="text-[10px] font-mono text-text-tertiary">
+                            {item.rateStr}
+                          </span>
+                        )}
                         {isSelected && <Check className="w-3 h-3 text-accent" />}
                       </div>
                     </button>
@@ -1208,33 +1042,31 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             )}
           </div>
 
-          {/* Send / Stop Button */}
+          {/* Run / Stop Button */}
           {isStreaming ? (
             <button
               type="button"
               onClick={onStop}
               title="Stop generation (Esc)"
-              className="p-2 rounded-lg bg-danger hover:bg-danger/90 text-white shadow-md transition-all flex items-center justify-center animate-pulse"
+              className="px-2.5 py-1.5 rounded-md bg-danger hover:bg-danger/90 text-white text-xs font-medium transition-all flex items-center gap-1.5"
             >
-              <Square className="w-4 h-4 fill-white" />
+              <Square className="w-3 h-3 fill-white" />
+              <span>Stop</span>
             </button>
           ) : (
             <button
               type="button"
               onClick={handleSubmit}
               disabled={!prompt.trim() && attachments.length === 0 && !selectedSkill}
-              title={
-                !prompt.trim() && attachments.length === 0 && !selectedSkill
-                  ? 'Enter a prompt or type / for skills'
-                  : 'Send message (Enter)'
-              }
-              className={`p-2 rounded-lg flex items-center justify-center transition-all ${
+              title="Run task or send prompt"
+              className={`px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-1.5 transition-all ${
                 prompt.trim() || attachments.length > 0 || selectedSkill
-                  ? 'bg-accent hover:bg-accent-hover text-white shadow-md cursor-pointer'
+                  ? 'bg-accent hover:bg-accent-hover text-white shadow-xs cursor-pointer'
                   : 'bg-bg-hover text-text-tertiary cursor-not-allowed opacity-60'
               }`}
             >
-              <ArrowUp className="w-4 h-4" />
+              <ArrowUp className="w-3.5 h-3.5" />
+              <span>Run</span>
             </button>
           )}
         </div>

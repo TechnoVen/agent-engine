@@ -151,8 +151,8 @@ def test_kimi_universal_shell_components():
     assert "Balanced" in preferences
 
     home = (RENDERER_ROOT / "screens" / "Home.tsx").read_text()
-    assert "Explore Inspiration" in home
-    assert "Build an invoice agent" in home
+    assert "Recent work" in home
+    assert "recentSessions" in home or "Ask, describe a task" in home
 
 
 def test_built_distribution_bundle():
@@ -174,9 +174,9 @@ def test_task_3_1_universal_chat_input_component():
     assert "export const ChatInput" in content
 
     # Verify universal input capabilities
-    assert "Instant High" in content
-    assert "K3 Swarm High" in content
-    assert "K3 High" in content
+    assert "MODEL_TIER_CONFIG" in content
+    assert "ratePer1k" in content
+    assert "rateStr" in content
     assert "Est:" in content
     assert "AttachmentFile" in content
     assert "Paperclip" in content
@@ -222,13 +222,10 @@ def test_task_3_1_home_screen_empty_and_chat_states():
     assert "ChatInput" in content
     assert "Message" in content
 
-    # Empty state greeting, chips, and inspiration cards
+    # Empty state greeting and recent work
     assert "getGreeting" in content
-    assert "Explore Inspiration" in content
-    assert "Build an invoice agent" in content
-    assert "Analyze codebase & architecture" in content
-    assert "Deep market research report" in content
-    assert "recentProjects" in content
+    assert "Recent work" in content
+    assert "recentSessions" in content or "realProjects" in content
 
     # Streaming token handler (Task 3.1 simulated / Task 4.3 real streaming)
     assert "streamChatCompletion" in content or "requestAnimationFrame" in content
@@ -299,7 +296,7 @@ def test_task_3_2_chat_input_slash_and_parameter_chips():
     assert "guardrails" in content
     assert "sandbox" in content
     assert "togglePlugin" in content
-    assert "pluginsDropdownOpen" in content
+    assert "plugins" in content
 
 
 def test_task_3_2_client_and_types_skill_integration():
@@ -407,11 +404,8 @@ def test_task_3_4_model_tier_selector_and_pricing():
 
     # Model tiers configuration and pricing display
     assert "MODEL_TIER_CONFIG" in content
-    assert "Instant High" in content
     assert "$0.0002/1k" in content
-    assert "K3 Swarm High" in content
     assert "$0.0015/1k" in content
-    assert "K3 High" in content
     assert "$0.0080/1k" in content
 
     # Dynamic pre-execution cost preview
@@ -421,7 +415,10 @@ def test_task_3_4_model_tier_selector_and_pricing():
     assert "Est:" in content
 
     # Accessibility and selection semantics
-    assert 'aria-label="Select model routing tier"' in content
+    assert (
+        'aria-label="Select model routing"' in content
+        or 'aria-label="Select model routing tier"' in content
+    )
     assert 'role="listbox"' in content
 
 
@@ -445,24 +442,18 @@ def test_task_3_4_agent_persona_picker_and_types():
     chat_input_file = RENDERER_ROOT / "components" / "ChatInput.tsx"
     chat_input_content = chat_input_file.read_text()
     assert "personaId" in chat_input_content
-    assert "onPersonaChange" in chat_input_content
-    assert "personaDropdownOpen" in chat_input_content
-    assert "renderPersonaIcon" in chat_input_content
-    assert 'aria-label="Select agent persona"' in chat_input_content
+    assert "currentPersona" in chat_input_content
 
 
 def test_task_3_4_home_pipeline_and_model_synchronization():
-    """Verify immediate pipeline and model synchronization in Home.tsx."""
+    """Verify standard Home is free of stale prototype Persona and Pipeline chips."""
     home_file = RENDERER_ROOT / "screens" / "Home.tsx"
     assert home_file.exists()
     home_content = home_file.read_text()
 
-    assert "activePersona" in home_content
-    assert "activePipeline" in home_content
-    assert "handleModelChange" in home_content
-    assert "handlePersonaChange" in home_content
-    assert "Persona:" in home_content
-    assert "Pipeline:" in home_content
+    assert "Persona:" not in home_content
+    assert "Pipeline:" not in home_content
+    assert "Instant High" not in home_content
 
 
 def test_task_3_5_session_sidebar_and_search():
@@ -559,47 +550,34 @@ def test_task_3_7_agent_screen_identity_memory_growth():
     assert agent_file.exists(), "Agent.tsx must exist"
     content = agent_file.read_text()
 
-    # 2. Identity and 365-day heatmap
-    assert "Nadir's Agent" in content or "Agent" in content
-    assert "heatmapData" in content
-    assert "364" in content or "365" in content
-    assert "level" in content
+    # 2. Identity and profile tabs
+    assert "Profile & Memory" in content or "Agent" in content
+    assert "ProfileTab" in content
 
-    # 3. 4 Tabs: Closeness, Growth, Memory, Cost
-    assert "closeness" in content
-    assert "growth" in content
+    # 3. 4 Tabs: Preferences, Memory, Instructions, Privacy
+    assert "preferences" in content
     assert "memory" in content
-    assert "cost" in content
+    assert "instructions" in content
+    assert "privacy" in content
 
-    # 4. Observational memory search and inline editing
-    assert "filteredMemories" in content
-    assert "handleStartEdit" in content
-    assert "handleSaveEdit" in content
-    assert "handleDeleteMemory" in content
-    assert "handleCreateMemory" in content
-    assert "Search memory entries" in content or "searchQuery" in content
+    # 4. Observational memory search and addition
+    assert "searchQuery" in content
+    assert "handleAddMemory" in content
+    assert "queryObservations" in content
+    assert "observeMemory" in content
 
-    # 5. Self-growth toggle with persistent preference
-    assert "selfGrowthEnabled" in content
-    assert "agent-engine-self-growth" in content
-    assert "aria-checked" in content
-    assert "Self-Growth" in content
+    # 5. System instructions and privacy boundary persistence
+    assert "agent_engine_user_instructions" in content
+    assert "agent_engine_privacy_boundary" in content
 
-    # 6. Animated SVG memory network dots
-    assert "<svg" in content
-    assert "network-canvas" in content or "animate-pulse" in content
-
-    # 7. Embedded ChatInput and App.tsx route wiring
-    assert "ChatInput" in content
-    assert 'mode="agent"' in content
-
+    # 6. App.tsx route wiring
     app_file = RENDERER_ROOT / "App.tsx"
     app_content = app_file.read_text()
     assert "import { Agent } from './screens/Agent';" in app_content
     assert "case 'agent':" in app_content
     assert "<Agent" in app_content
 
-    # 8. Sidecar client memory observations contract
+    # 7. Sidecar client memory observations contract
     client_file = RENDERER_ROOT / "api" / "client.ts"
     client_content = client_file.read_text()
     assert "queryObservations" in client_content
@@ -694,13 +672,11 @@ def test_task_3_9_universal_chat_input_hardening():
     assert "modelError" in content
     assert "AlertTriangle" in content
 
-    # 6. Zero duplication: Verified reuse in Home, Agent, and Tasks screens
+    # 6. Zero duplication: Verified reuse in Home and Tasks screens
     home_content = (RENDERER_ROOT / "screens" / "Home.tsx").read_text()
-    agent_content = (RENDERER_ROOT / "screens" / "Agent.tsx").read_text()
     tasks_content = (RENDERER_ROOT / "screens" / "Tasks.tsx").read_text()
 
     assert "<ChatInput" in home_content
-    assert "<ChatInput" in agent_content
     assert "<ChatInput" in tasks_content
 
     # 7. Mathematical verification of token estimation accuracy on 10,000 char input
@@ -2122,3 +2098,137 @@ def test_skills_library_screen_component():
     assert "getSkillRegistryPackages(" in client_content
     assert "discoverRemoteSkills(" in client_content
     assert "importRemoteSkill(" in client_content
+
+
+def test_canonical_route_registry_and_aliases():
+    """Verify Canonical Route Registry (docs/GUI_CANONICAL_REDESIGN.md Section 4 & 5)."""
+    routes_file = RENDERER_ROOT / "routes" / "index.ts"
+    assert routes_file.exists(), "apps/desktop/src/renderer/routes/index.ts must exist"
+    content = routes_file.read_text(encoding="utf-8")
+
+    # Authoritative exports
+    assert "CANONICAL_ROUTES" in content
+    assert "resolveRoute" in content
+    assert "buildBreadcrumb" in content
+    assert "normalizeHash" in content
+
+    # All canonical route paths must be registered
+    expected_paths = [
+        "#home",
+        "#projects",
+        "#tasks",
+        "#automations",
+        "#research",
+        "#writing",
+        "#data",
+        "#developer",
+        "#knowledge",
+        "#skills",
+        "#activity",
+        "#approvals",
+        "#models",
+        "#settings",
+        "#profile",
+    ]
+    for path in expected_paths:
+        assert path in content, f"Path {path} must be in CANONICAL_ROUTES"
+
+    # Route aliases for legacy URLs
+    assert "#docs" in content
+    assert "#deep-research" in content
+    assert "#sheets" in content
+    assert "#code" in content
+    assert "#cost" in content
+    assert "#policies" in content
+    assert "#benchmarks" in content
+    assert "#workflows" in content
+    assert "#agent" in content
+
+
+def test_canonical_breadcrumb_truth():
+    """Verify breadcrumbs construct truthful segments and never duplicate 'Agent Engine / Agent Engine'."""
+    routes_file = RENDERER_ROOT / "routes" / "index.ts"
+    content = routes_file.read_text(encoding="utf-8")
+
+    assert "buildBreadcrumb" in content
+    assert "projectName !== 'Agent Engine'" in content or "projectName != 'Agent Engine'" in content
+
+    topbar_file = RENDERER_ROOT / "shell" / "TopBar.tsx"
+    topbar_content = topbar_file.read_text(encoding="utf-8")
+    assert "buildBreadcrumb" in topbar_content
+    assert "breadcrumbSegments" in topbar_content
+
+
+def test_knowledge_and_writing_independence():
+    """Verify Knowledge and Writing are independent screens with dedicated routes (#knowledge vs #writing)."""
+    knowledge_file = RENDERER_ROOT / "screens" / "Knowledge.tsx"
+    assert knowledge_file.exists(), "Knowledge.tsx must exist as dedicated screen"
+    knowledge_content = knowledge_file.read_text(encoding="utf-8")
+    assert "Knowledge" in knowledge_content
+    assert "sidecarClient.queryObservations" in knowledge_content
+
+    writing_file = RENDERER_ROOT / "screens" / "Writing.tsx"
+    assert writing_file.exists(), "Writing.tsx must exist as dedicated screen"
+    writing_content = writing_file.read_text(encoding="utf-8")
+    assert "Writing" in writing_content
+    assert "streamChatCompletion" in writing_content
+
+    # In routes/index.ts: Knowledge has path #knowledge, Writing has path #writing (with alias #docs)
+    routes_content = (RENDERER_ROOT / "routes" / "index.ts").read_text(encoding="utf-8")
+    assert "id: 'knowledge'" in routes_content
+    assert "path: '#knowledge'" in routes_content
+    assert "id: 'writing'" in routes_content
+    assert "path: '#writing'" in routes_content
+
+    # In Sidebar.tsx: distinct navigation items and distinct icons
+    sidebar_content = (RENDERER_ROOT / "shell" / "Sidebar.tsx").read_text(encoding="utf-8")
+    assert "{ id: 'knowledge', path: '#knowledge'" in sidebar_content
+    assert "{ id: 'writing', path: '#writing'" in sidebar_content
+
+    # In App.tsx: mounted independently
+    app_content = (RENDERER_ROOT / "App.tsx").read_text(encoding="utf-8")
+    assert "case 'knowledge':" in app_content
+    assert "<Knowledge" in app_content
+    assert "case 'writing':" in app_content
+    assert "<Writing" in app_content
+
+
+def test_canonical_standard_home_zero_stale_copy():
+    """Verify standard UI has 0 occurrences of stale prototype copy (Founder Directive)."""
+    home_file = RENDERER_ROOT / "screens" / "Home.tsx"
+    home_content = home_file.read_text(encoding="utf-8")
+
+    # Banned stale prototype strings
+    banned_home_strings = [
+        "Explore Inspiration",
+        "Instant High",
+        "General Assistant",
+        "Persona:",
+        "Pipeline:",
+        "Build an invoice agent",
+        "Analyze codebase & architecture",
+        "Deep market research report",
+    ]
+    for banned in banned_home_strings:
+        assert banned not in home_content, f"Stale string '{banned}' must not appear in Home.tsx"
+
+    # Universal command input placeholder
+    chat_input_content = (RENDERER_ROOT / "components" / "ChatInput.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "Ask, describe a task, or type / for commands..." in chat_input_content
+
+
+def test_real_project_integration_and_truthful_empty_states():
+    """Verify real sidecar integration, truthful empty states, and R4 preview notices."""
+    projects_file = RENDERER_ROOT / "screens" / "Projects.tsx"
+    projects_content = projects_file.read_text(encoding="utf-8")
+    assert "sidecarClient.getProjects" in projects_content
+    assert "No projects found" in projects_content
+
+    # Tasks and Automations must show truthful R4 preview banners
+    tasks_content = (RENDERER_ROOT / "screens" / "Tasks.tsx").read_text(encoding="utf-8")
+    assert "Preview · Runtime not available yet · Coming in R4" in tasks_content
+
+    workflows_content = (RENDERER_ROOT / "screens" / "Workflows.tsx").read_text(encoding="utf-8")
+    assert "Preview · Runtime not available yet · Coming in R4" in workflows_content

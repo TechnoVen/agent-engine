@@ -20,6 +20,7 @@ import {
   Check,
 } from 'lucide-react';
 import { Mode, ModelTier, Project } from '../types';
+import { sidecarClient } from '../api/client';
 import { ProjectDetail } from './ProjectDetail';
 
 export interface ProjectsProps {
@@ -28,6 +29,7 @@ export interface ProjectsProps {
   activeModel: ModelTier;
   onSelectModel?: (model: ModelTier) => void;
   inputRef?: React.RefObject<HTMLTextAreaElement>;
+  onProjectNameChange?: (name: string) => void;
 }
 
 const AVAILABLE_ICONS = [
@@ -67,72 +69,6 @@ const POLICY_OPTIONS = [
   },
 ];
 
-const INITIAL_PROJECTS: Project[] = [
-  {
-    id: 'p-1',
-    name: 'Organiser Workspace',
-    description: 'Core project management, workspace settings, and system architecture planning.',
-    icon: 'folder',
-    color: '#3b82f6',
-    threadCount: 8,
-    lastActivity: '12m ago',
-    instructions: 'Always structure output as clean TypeScript or Markdown specs. Prioritize Law 3 zero-trust guardrails.',
-    scopedPolicy: 'Strict Zero-Trust (Law 3)',
-    monthlySpendUsd: 4.85,
-    budgetCeilingUsd: 25.0,
-    activeAgents: ['Senior Architect', 'Security Auditor'],
-    files: [
-      { id: 'f-1', name: 'architecture-spec.md', size: '14.2 KB', type: 'markdown', uploadedAt: 'Today, 10:30 AM' },
-      { id: 'f-2', name: 'schema-v1.json', size: '38.6 KB', type: 'json', uploadedAt: 'Yesterday, 04:15 PM' },
-    ],
-    threads: [
-      { id: 'th-p-1-1', title: 'Architecture Refactor', updatedAt: '12m ago', messageCount: 8, snippet: 'Refactored backend routers to eliminate synchronous blocking operations.', status: 'active' },
-      { id: 'th-p-1-2', title: 'Zero-Trust AST Guardrails', updatedAt: '2h ago', messageCount: 14, snippet: 'Policy inspection verified against Law 3 safety boundary.', status: 'active' },
-    ],
-  },
-  {
-    id: 'p-2',
-    name: 'Client Website',
-    description: 'High-performance landing page and customer portal with Vite + React 18 and Tailwind CSS.',
-    icon: 'code',
-    color: '#10b981',
-    threadCount: 3,
-    lastActivity: '1d ago',
-    instructions: 'Focus on Web Vitals (LCP < 1.2s, CLS < 0.05), accessibility standards (WCAG AAA), and dark mode by default.',
-    scopedPolicy: 'Standard Sandbox',
-    monthlySpendUsd: 1.20,
-    budgetCeilingUsd: 15.0,
-    activeAgents: ['Code Specialist', 'UX Designer'],
-    files: [
-      { id: 'f-3', name: 'tailwind.config.ts', size: '3.4 KB', type: 'typescript', uploadedAt: 'Sep 11, 2026' },
-    ],
-    threads: [
-      { id: 'th-p-2-1', title: 'Landing Hero Design', updatedAt: '1d ago', messageCount: 5, snippet: 'Implemented responsive hero section with dynamic token cost counter.', status: 'active' },
-    ],
-  },
-  {
-    id: 'p-3',
-    name: 'Security Audit & Compliance',
-    description: 'Immutable ledger verification, secret leakage checks, and automated penetration testing.',
-    icon: 'shield',
-    color: '#8b5cf6',
-    threadCount: 5,
-    lastActivity: '3d ago',
-    instructions: 'Verify zero plaintext credentials in memory or logs. Validate single-use approval tokens.',
-    scopedPolicy: 'Strict Zero-Trust (Law 3)',
-    monthlySpendUsd: 8.40,
-    budgetCeilingUsd: 50.0,
-    activeAgents: ['Security Auditor'],
-    files: [
-      { id: 'f-4', name: 'audit-log-sample.json', size: '102.4 KB', type: 'json', uploadedAt: 'Sep 10, 2026' },
-      { id: 'f-5', name: 'cve-checklist.md', size: '8.1 KB', type: 'markdown', uploadedAt: 'Sep 09, 2026' },
-    ],
-    threads: [
-      { id: 'th-p-3-1', title: 'Keychain IPC Protocol Verification', updatedAt: '3d ago', messageCount: 11, snippet: 'Audit completed for macOS Security framework and Linux Secret Service integration.', status: 'active' },
-    ],
-  },
-];
-
 const LOCAL_STORAGE_KEY = 'agent_engine_projects';
 
 export const Projects: React.FC<ProjectsProps> = ({
@@ -140,6 +76,7 @@ export const Projects: React.FC<ProjectsProps> = ({
   onSelectSession,
   activeModel,
   onSelectModel,
+  onProjectNameChange,
 }) => {
   const [projects, setProjects] = useState<Project[]>(() => {
     try {
@@ -149,10 +86,45 @@ export const Projects: React.FC<ProjectsProps> = ({
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
       }
     } catch {
-      // fallback to initial
+      // fallback
     }
-    return INITIAL_PROJECTS;
+    return [];
   });
+
+  // Load real projects from sidecar backend on mount
+  useEffect(() => {
+    let mounted = true;
+    const loadBackendProjects = async () => {
+      try {
+        const backendProjects = await sidecarClient.getProjects();
+        if (mounted && Array.isArray(backendProjects) && backendProjects.length > 0) {
+          const mapped: Project[] = backendProjects.map((bp: any) => ({
+            id: bp.id || `proj-${Math.random().toString(36).slice(2, 7)}`,
+            name: bp.name || 'Untitled Workspace',
+            description: bp.description || 'Workspace context',
+            icon: 'folder',
+            color: '#3b82f6',
+            threadCount: bp.sessions_count || 0,
+            lastActivity: bp.updated_at ? new Date(bp.updated_at).toLocaleTimeString() : 'Recent',
+            instructions: bp.instructions || '',
+            scopedPolicy: 'Strict Zero-Trust (Law 3)',
+            monthlySpendUsd: 0.0,
+            budgetCeilingUsd: bp.settings?.budget_ceiling_usd || 50.0,
+            activeAgents: ['Senior Architect'],
+            files: [],
+            threads: [],
+          }));
+          setProjects((prev) => (prev.length > 0 ? prev : mapped));
+        }
+      } catch {
+        // offline
+      }
+    };
+    loadBackendProjects();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -230,6 +202,15 @@ export const Projects: React.FC<ProjectsProps> = ({
 
   // If a project is selected, render its deep inspector
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
+
+  useEffect(() => {
+    if (selectedProject) {
+      onProjectNameChange?.(selectedProject.name);
+    } else {
+      onProjectNameChange?.('');
+    }
+  }, [selectedProject, onProjectNameChange]);
+
   if (selectedProject) {
     return (
       <ProjectDetail
@@ -446,9 +427,9 @@ export const Projects: React.FC<ProjectsProps> = ({
           {filteredProjects.length === 0 && (
             <div className="text-center py-20 rounded-2xl border border-dashed border-border-subtle bg-bg-elevated/30">
               <FolderKanban className="w-10 h-10 text-text-tertiary mx-auto mb-3 opacity-40" />
-              <h3 className="text-sm font-semibold text-text-primary">No workspaces found</h3>
+              <h3 className="text-sm font-semibold text-text-primary">No projects found</h3>
               <p className="text-xs text-text-tertiary max-w-sm mx-auto mt-1 mb-4">
-                {searchQuery ? `No results matching "${searchQuery}".` : 'Create your first project to organize conversation context.'}
+                {searchQuery ? `No projects found matching "${searchQuery}".` : 'Create your first project to organize conversation context.'}
               </p>
               <button
                 onClick={() => setIsCreateModalOpen(true)}
