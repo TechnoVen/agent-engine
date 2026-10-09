@@ -790,10 +790,10 @@ export const Settings: React.FC<SettingsProps> = () => {
                   <div className="p-3 rounded-lg bg-bg-base border border-border-subtle flex items-center justify-between">
                     <div>
                       <div className="font-semibold text-text-primary">Founder Release Channel</div>
-                      <div className="text-[11px] text-text-tertiary">Version 0.5 Nadir Edition (Local IPC)</div>
+                      <div className="text-[11px] text-text-tertiary">Version 0.5 Nadir Edition (Local IPC) · Auto-updater coming later (manual git builds in 0.5).</div>
                     </div>
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-accent/15 text-accent border border-accent/30 font-semibold">
-                      Up to date
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-bg-surface text-text-tertiary border border-border-subtle font-medium">
+                      Manual / Verified
                     </span>
                   </div>
                 </div>
@@ -1955,149 +1955,32 @@ export const Settings: React.FC<SettingsProps> = () => {
                 <div>
                   <h2 className="text-sm font-bold text-text-primary flex items-center gap-2">
                     <Bell className="w-4 h-4 text-accent" />
-                    Notification & Dispatch Channels
+                    Notifications
                   </h2>
                   <p className="text-xs text-text-secondary mt-1">
-                    Configure dispatch channels for alerts, async tasks, and safety approval triggers.
+                    System notification dispatch and external alert integrations.
                   </p>
                 </div>
-                <button
-                  onClick={handleSaveAppSettings}
-                  disabled={savingSettings || !appSettings}
-                  className="px-3.5 py-1.5 rounded-lg bg-accent text-white text-xs font-semibold hover:bg-accent-hover transition-colors flex items-center gap-2 disabled:opacity-50"
-                >
-                  {savingSettings ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                  Save Channels
-                </button>
+                <span className="px-2.5 py-1 rounded-md text-[11px] font-mono bg-bg-surface border border-border-subtle text-text-tertiary">
+                  Deferred for 0.5
+                </span>
               </div>
 
-              {appSettings && (
-                <div className="space-y-4 text-xs">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <label className="flex items-center gap-3 p-3.5 rounded-lg bg-bg-surface border border-border-subtle cursor-pointer hover:border-accent/40 transition-colors">
-                      <input
-                        type="checkbox"
-                        checked={appSettings.channels.slack_enabled}
-                        onChange={(e) =>
-                          setAppSettings({
-                            ...appSettings,
-                            channels: { ...appSettings.channels, slack_enabled: e.target.checked },
-                          })
-                        }
-                        className="rounded accent-accent w-4 h-4"
-                      />
-                      <div>
-                        <div className="font-semibold text-text-primary">Slack Integration</div>
-                        <div className="text-[11px] text-text-tertiary">Post summaries and approval requests to Slack.</div>
-                      </div>
-                    </label>
-
-                    <label className="flex items-center gap-3 p-3.5 rounded-lg bg-bg-surface border border-border-subtle cursor-pointer hover:border-accent/40 transition-colors">
-                      <input
-                        type="checkbox"
-                        checked={appSettings.channels.discord_enabled}
-                        onChange={(e) =>
-                          setAppSettings({
-                            ...appSettings,
-                            channels: { ...appSettings.channels, discord_enabled: e.target.checked },
-                          })
-                        }
-                        className="rounded accent-accent w-4 h-4"
-                      />
-                      <div>
-                        <div className="font-semibold text-text-primary">Discord Integration</div>
-                        <div className="text-[11px] text-text-tertiary">Dispatch notifications to Discord webhook channels.</div>
-                      </div>
-                    </label>
-
-                    <label className="flex items-center gap-3 p-3.5 rounded-lg bg-bg-surface border border-border-subtle cursor-pointer hover:border-accent/40 transition-colors">
-                      <input
-                        type="checkbox"
-                        checked={appSettings.channels.telegram_enabled}
-                        onChange={(e) =>
-                          setAppSettings({
-                            ...appSettings,
-                            channels: { ...appSettings.channels, telegram_enabled: e.target.checked },
-                          })
-                        }
-                        className="rounded accent-accent w-4 h-4"
-                      />
-                      <div>
-                        <div className="font-semibold text-text-primary">Telegram Integration</div>
-                        <div className="text-[11px] text-text-tertiary">Send notifications via Telegram bot.</div>
-                      </div>
-                    </label>
-
-                    <label className="flex items-center gap-3 p-3.5 rounded-lg bg-bg-surface border border-border-subtle cursor-pointer hover:border-accent/40 transition-colors">
-                      <input
-                        type="checkbox"
-                        checked={appSettings.channels.whatsapp_enabled}
-                        onChange={(e) =>
-                          setAppSettings({
-                            ...appSettings,
-                            channels: { ...appSettings.channels, whatsapp_enabled: e.target.checked },
-                          })
-                        }
-                        className="rounded accent-accent w-4 h-4"
-                      />
-                      <div>
-                        <div className="font-semibold text-text-primary">WhatsApp Integration</div>
-                        <div className="text-[11px] text-text-tertiary">Forward high-priority alerts to WhatsApp Business API.</div>
-                      </div>
-                    </label>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                      <label className="text-text-primary font-medium">Slack Webhook URL</label>
-                      <input
-                        type="text"
-                        value={appSettings.channels.slack_webhook_url || ''}
-                        onChange={(e) =>
-                          setAppSettings({
-                            ...appSettings,
-                            channels: { ...appSettings.channels, slack_webhook_url: e.target.value || null },
-                          })
-                        }
-                        placeholder="https://hooks.slack.com/services/..."
-                        className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
-                      />
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label className="text-text-primary font-medium">Discord Webhook URL</label>
-                      <input
-                        type="text"
-                        value={appSettings.channels.discord_webhook_url || ''}
-                        onChange={(e) =>
-                          setAppSettings({
-                            ...appSettings,
-                            channels: { ...appSettings.channels, discord_webhook_url: e.target.value || null },
-                          })
-                        }
-                        placeholder="https://discord.com/api/webhooks/..."
-                        className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
-                      />
-                    </div>
-
-                    <div className="space-y-1.5 md:col-span-2">
-                      <label className="text-text-primary font-medium">Telegram Bot Token</label>
-                      <input
-                        type="text"
-                        value={appSettings.channels.telegram_bot_token || ''}
-                        onChange={(e) =>
-                          setAppSettings({
-                            ...appSettings,
-                            channels: { ...appSettings.channels, telegram_bot_token: e.target.value || null },
-                          })
-                        }
-                        placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
-                        className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
-                      />
-                    </div>
-                  </div>
+              {/* Truthful Empty State */}
+              <div className="p-10 rounded-xl bg-bg-surface border border-border-subtle flex flex-col items-center justify-center text-center space-y-3">
+                <div className="w-12 h-12 rounded-full bg-accent/10 border border-accent/20 flex items-center justify-center text-accent">
+                  <Bell className="w-5 h-5 text-text-tertiary" />
                 </div>
-              )}
+                <div className="max-w-md space-y-1">
+                  <h3 className="text-sm font-bold text-text-primary">Notification integrations are not available in this release.</h3>
+                  <p className="text-xs text-text-secondary leading-relaxed">
+                    External dispatch channels (Slack, Discord, Telegram, WhatsApp) are deferred for post-0.5 roadmap milestones. No background notifications or shadow webhooks are dispatched by the local daemon.
+                  </p>
+                </div>
+                <span className="px-3 py-1 rounded-full text-[11px] font-medium bg-bg-base border border-border-subtle text-text-tertiary">
+                  Coming later
+                </span>
+              </div>
             </div>
           )}
 
@@ -2129,41 +2012,25 @@ export const Settings: React.FC<SettingsProps> = () => {
                     <div className="space-y-1.5">
                       <label className="text-text-primary font-medium">Database Backend</label>
                       <select
-                        value={appSettings.storage.database_backend}
-                        onChange={(e) =>
-                          setAppSettings({
-                            ...appSettings,
-                            storage: {
-                              ...appSettings.storage,
-                              database_backend: e.target.value as 'sqlite' | 'postgres',
-                            },
-                          })
-                        }
-                        className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
+                        value="sqlite"
+                        disabled
+                        className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent opacity-90 cursor-default"
                       >
-                        <option value="sqlite">SQLite (Local Embedded)</option>
-                        <option value="postgres">PostgreSQL (Enterprise / Dedicated)</option>
+                        <option value="sqlite">SQLite (Local Embedded — Canonical 0.5)</option>
+                        <option value="postgres" disabled>PostgreSQL (Coming later — Cloud/Enterprise in R16)</option>
                       </select>
-                      <p className="text-[11px] text-text-tertiary">Primary relational database for sessions and safety logs.</p>
+                      <p className="text-[11px] text-text-tertiary">SQLite is the single canonical local database for Release 0.5. Dedicated PostgreSQL is deferred for R16.</p>
                     </div>
 
-                    <div className="space-y-1.5">
+                    <div className="space-y-1.5 opacity-75">
                       <label className="text-text-primary font-medium">Audit Log Retention (Days)</label>
                       <input
                         type="number"
-                        value={appSettings.storage.retention_days}
-                        onChange={(e) =>
-                          setAppSettings({
-                            ...appSettings,
-                            storage: {
-                              ...appSettings.storage,
-                              retention_days: parseInt(e.target.value) || 90,
-                            },
-                          })
-                        }
-                        className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
+                        value={appSettings.storage.retention_days || 90}
+                        disabled
+                        className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-secondary font-mono text-xs cursor-not-allowed"
                       />
-                      <p className="text-[11px] text-text-tertiary">Automatic retention threshold for audit logs.</p>
+                      <p className="text-[11px] text-text-tertiary">Default 90 days. Automated log pruning daemon coming later.</p>
                     </div>
                   </div>
 
@@ -2382,7 +2249,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                   <div className="space-y-1.5 opacity-60">
                     <div className="flex items-center justify-between">
                       <label className="text-text-primary font-medium">UI Density</label>
-                      <span className="text-[10px] font-mono text-text-tertiary uppercase">Planned for R4 (Preview)</span>
+                      <span className="text-[10px] font-mono text-text-tertiary uppercase">Coming later</span>
                     </div>
                     <select
                       value="comfortable"
@@ -2400,7 +2267,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                   <div className="space-y-1.5 opacity-60">
                     <div className="flex items-center justify-between">
                       <label className="text-text-primary font-medium">Font Size</label>
-                      <span className="text-[10px] font-mono text-text-tertiary uppercase">Planned for R4 (Preview)</span>
+                      <span className="text-[10px] font-mono text-text-tertiary uppercase">Coming later</span>
                     </div>
                     <select
                       value="base"
@@ -2419,7 +2286,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                   <div className="space-y-1.5 opacity-60">
                     <div className="flex items-center justify-between">
                       <label className="text-text-primary font-medium">Code Font Family</label>
-                      <span className="text-[10px] font-mono text-text-tertiary uppercase">Planned for R4 (Preview)</span>
+                      <span className="text-[10px] font-mono text-text-tertiary uppercase">Coming later</span>
                     </div>
                     <input
                       type="text"
