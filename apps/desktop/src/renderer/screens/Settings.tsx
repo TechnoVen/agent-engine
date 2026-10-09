@@ -3,6 +3,7 @@ import {
   Settings as SettingsIcon,
   Key,
   ShieldCheck,
+  ShieldAlert,
   CheckCircle2,
   XCircle,
   Loader2,
@@ -308,15 +309,47 @@ export const Settings: React.FC<SettingsProps> = () => {
           showToast(`Verification: ${ver.display_state}`);
         }
         return;
-      } catch (verifyErr) {
-        // Fallback gracefully when verification is unavailable
-        const apiKey = keyInputs[provider.id]?.trim() || undefined;
-        const baseUrl = baseUrlInputs[provider.id]?.trim() || provider.defaultBaseUrl;
-        const result = await sidecarClient.testCredential(provider.id, apiKey, baseUrl);
-        setTestResults((prev) => ({ ...prev, [provider.id]: result }));
-        if (result.valid) {
-          showToast(`Connected to ${provider.name} in ${Math.round(result.latency_ms)}ms`);
+      } catch (verifyErr: unknown) {
+        // Verification endpoint unavailable / failed
+        // Note: Legacy testCredential is for diagnostic setup checks only and NEVER establishes Connected
+        const verifyErrMsg = verifyErr instanceof Error ? verifyErr.message : String(verifyErr);
+
+        // Optional diagnostic probe via legacy testCredential for setup checks
+        try {
+          const apiKey = keyInputs[provider.id]?.trim() || undefined;
+          const baseUrl = baseUrlInputs[provider.id]?.trim() || provider.defaultBaseUrl;
+          await sidecarClient.testCredential(provider.id, apiKey, baseUrl);
+        } catch (_) {
+          // Ignore diagnostic setup probe errors
         }
+
+        const unavailableRecord: ProviderConnectionVerification = {
+          provider_id: provider.id,
+          status: 'UNKNOWN_FAILURE',
+          last_verified_at: Date.now() / 1000,
+          latency_ms: 0,
+          failure_class: 'VERIFICATION_UNAVAILABLE',
+          sanitized_error: `Verification unavailable: ${verifyErrMsg}`,
+          verification_version: 'v1',
+          verification_method_version: 'v1_canary',
+          probe_type: 'real_completion_canary',
+          is_fresh: false,
+          display_state: 'Verification unavailable',
+          details: {},
+        };
+        setVerifications((prev) => ({ ...prev, [provider.id]: unavailableRecord }));
+
+        setTestResults((prev) => ({
+          ...prev,
+          [provider.id]: {
+            provider: provider.id,
+            valid: false, // NEVER valid / connected!
+            latency_ms: 0,
+            error: `Verification unavailable: ${verifyErrMsg}`,
+          },
+        }));
+        showToast('Cannot verify connection: Verification unavailable');
+        return;
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -724,6 +757,8 @@ export const Settings: React.FC<SettingsProps> = () => {
                         {(verification || testResult) && (() => {
                           const isConnected = verification ? verification.status === 'VERIFIED_CONNECTED' && verification.is_fresh : testResult?.valid;
                           const isStale = verification ? verification.status === 'VERIFIED_CONNECTED' && !verification.is_fresh : false;
+                          const isPolicyBlocked = verification ? verification.status === 'POLICY_BLOCKED' : false;
+                          const isAccessDenied = verification ? verification.status === 'ACCESS_DENIED' : false;
                           const isNotConfigured = verification ? verification.status === 'NOT_CONFIGURED' : false;
                           const latency = verification ? verification.latency_ms : (testResult?.latency_ms || 0);
                           const errMsg = verification ? (verification.sanitized_error || verification.failure_class) : testResult?.error;
@@ -736,6 +771,10 @@ export const Settings: React.FC<SettingsProps> = () => {
                                   ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
                                   : isStale
                                   ? 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                                  : isPolicyBlocked
+                                  ? 'bg-amber-500/10 border-amber-500/30 text-amber-300'
+                                  : isAccessDenied
+                                  ? 'bg-rose-500/10 border-rose-500/20 text-rose-400'
                                   : isNotConfigured
                                   ? 'bg-bg-surface border-border-subtle text-text-tertiary'
                                   : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
@@ -746,6 +785,10 @@ export const Settings: React.FC<SettingsProps> = () => {
                                   <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
                                 ) : isStale ? (
                                   <Clock className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+                                ) : isPolicyBlocked ? (
+                                  <ShieldAlert className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+                                ) : isAccessDenied ? (
+                                  <ShieldCheck className="w-3.5 h-3.5 shrink-0 text-rose-400" />
                                 ) : isNotConfigured ? (
                                   <ShieldCheck className="w-3.5 h-3.5 shrink-0 text-text-tertiary" />
                                 ) : (
@@ -756,6 +799,10 @@ export const Settings: React.FC<SettingsProps> = () => {
                                     ? `Connected (${Math.round(latency)}ms)`
                                     : isStale
                                     ? `Verification Stale (${Math.round(latency)}ms)`
+                                    : isPolicyBlocked
+                                    ? 'Policy blocked: verification not authorized'
+                                    : isAccessDenied
+                                    ? 'Access denied: credential lacks required permissions (403)'
                                     : isNotConfigured
                                     ? 'Not configured'
                                     : `Verification failed: ${errMsg || 'Operation failed'}`}

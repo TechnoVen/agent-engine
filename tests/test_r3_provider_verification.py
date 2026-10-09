@@ -343,9 +343,10 @@ def test_13_policy_engine_denial_causes_zero_provider_calls():
     svc = ProviderVerificationService(registry=reg, policy_engine=mock_policy)
     ver = svc.verify_provider("openai")
 
-    assert ver.status == ConnectionVerificationStatus.PROVIDER_ERROR
+    assert ver.status == ConnectionVerificationStatus.POLICY_BLOCKED
     assert ver.failure_class == "POLICY_BLOCKED"
-    assert "blocked by active safety policy" in ver.sanitized_error
+    assert "blocked by active security policy" in ver.sanitized_error
+    assert ver.display_state() == "Policy blocked"
     # Invariant: ZERO provider calls when policy blocks!
     assert adapter.invoke.call_count == 0
 
@@ -471,7 +472,7 @@ def test_16_managed_llamacpp_local_verification():
         mock_sup_getter.return_value = mock_sup
 
         ver_failed = svc.verify_provider("llamacpp")
-        assert ver_failed.status == ConnectionVerificationStatus.PROVIDER_ERROR
+        assert ver_failed.status == ConnectionVerificationStatus.NOT_CONFIGURED
         assert ver_failed.failure_class == "SUPERVISOR_NOT_READY"
 
 
@@ -557,3 +558,151 @@ def test_18_desktop_status_mapping():
         last_verified_at=time.time(),
     )
     assert ver_failed.to_safe_dict()["display_state"] == "Verification failed"
+
+
+# 19. Verification endpoint unavailable + legacy credential check succeeds -> NOT VERIFIED_CONNECTED
+def test_19_verification_endpoint_unavailable_legacy_credential_not_connected():
+    unavailable_ver = ProviderConnectionVerification(
+        provider_id="openai",
+        status=ConnectionVerificationStatus.UNKNOWN_FAILURE,
+        last_verified_at=time.time(),
+        latency_ms=0.0,
+        failure_class="VERIFICATION_UNAVAILABLE",
+        sanitized_error="Verification unavailable: sidecar verification endpoint returned HTTP 503",
+    )
+    assert unavailable_ver.status != ConnectionVerificationStatus.VERIFIED_CONNECTED
+    assert unavailable_ver.is_fresh() is False
+    assert unavailable_ver.display_state() == "Verification failed"
+
+
+# 20. HTTP 403 maps to ACCESS_DENIED, distinct from HTTP 401 AUTHENTICATION_FAILED
+def test_20_http_403_access_denied_distinct_from_authentication_failure():
+    reg, adapter, _ = _create_mock_registry()
+    svc = ProviderVerificationService(registry=reg)
+
+    # 403 Forbidden / Access denied
+    adapter.invoke.side_effect = ProviderAuthenticationError(
+        "HTTP 403: Forbidden - model access denied for organization",
+        provider_id="openai",
+        status_code=403,
+    )
+    ver_403 = svc.verify_provider("openai")
+    assert ver_403.status == ConnectionVerificationStatus.ACCESS_DENIED
+    assert ver_403.failure_class == "ACCESS_DENIED"
+    assert "authorization failed" in ver_403.sanitized_error.lower()
+    assert ver_403.display_state() == "Access denied"
+
+    # 401 Unauthorized
+    adapter.invoke.side_effect = ProviderAuthenticationError(
+        "HTTP 401: Unauthorized - invalid api key",
+        provider_id="openai",
+        status_code=401,
+    )
+    ver_401 = svc.verify_provider("openai")
+    assert ver_401.status == ConnectionVerificationStatus.AUTHENTICATION_FAILED
+    assert ver_401.failure_class == "AUTHENTICATION_FAILED"
+    assert "authentication failed" in ver_401.sanitized_error.lower()
+
+
+# 21. Credential with unusual format that matches ZERO regexes never leaks
+def test_21_credential_with_unusual_format_never_leaks():
+    reg, adapter, _ = _create_mock_registry()
+    unusual_secret = "xyZ987_CustomKey_Token_NoPrefixPattern_44192"
+    adapter.resolve_api_key.return_value = unusual_secret
+    adapter.invoke.side_effect = Exception(
+        f"Upstream reject on secret={unusual_secret} error details"
+    )
+
+    svc = ProviderVerificationService(registry=reg)
+    ver = svc.verify_provider("openai")
+
+    # Invariant: Secret must NOT appear anywhere in the sanitized error, dict, or details
+    safe_dict = ver.to_safe_dict()
+    assert unusual_secret not in ver.sanitized_error
+    assert unusual_secret not in str(safe_dict)
+    assert "[REDACTED_SECRET]" in ver.sanitized_error
+
+
+# 22. Canary verification semantics: benign surrounding whitespace accepted, arbitrary text rejected
+def test_22_canary_semantics_whitespace_accepted_arbitrary_rejected():
+    reg, adapter, _ = _create_mock_registry()
+    svc = ProviderVerificationService(registry=reg)
+
+    # Case A: Benign surrounding whitespace / newlines accepted
+    adapter.invoke.return_value = ProviderInvocationResult(
+        content="  \n  AE_PROVIDER_OK \t\n",
+        model="gpt-4o",
+        provider_id="openai",
+    )
+    ver_ok = svc.verify_provider("openai")
+    assert ver_ok.status == ConnectionVerificationStatus.VERIFIED_CONNECTED
+    assert ver_ok.details.get("canary_token_verified") is True
+
+    # Case B: Arbitrary nonempty text without canary REJECTED
+    adapter.invoke.return_value = ProviderInvocationResult(
+        content="Hello! I am a helpful AI assistant ready to help.",
+        model="gpt-4o",
+        provider_id="openai",
+    )
+    ver_arbitrary = svc.verify_provider("openai")
+    assert ver_arbitrary.status == ConnectionVerificationStatus.INVALID_RESPONSE
+    assert ver_arbitrary.failure_class == "CANARY_MISMATCH"
+    assert ver_arbitrary.status != ConnectionVerificationStatus.VERIFIED_CONNECTED
+
+    # Case C: Empty response REJECTED
+    adapter.invoke.return_value = ProviderInvocationResult(
+        content="   ",
+        model="gpt-4o",
+        provider_id="openai",
+    )
+    ver_empty = svc.verify_provider("openai")
+    assert ver_empty.status == ConnectionVerificationStatus.INVALID_RESPONSE
+    assert ver_empty.failure_class == "EMPTY_RESPONSE"
+
+
+# 23. Stale status uses configured/versioned TTL; verification-method version persisted
+def test_23_versioned_ttl_and_method_version_freshness():
+    # Matching version, fresh
+    ver_fresh = ProviderConnectionVerification(
+        provider_id="openai",
+        status=ConnectionVerificationStatus.VERIFIED_CONNECTED,
+        last_verified_at=time.time() - 100.0,
+        verification_method_version="v1_canary",
+    )
+    assert ver_fresh.is_fresh() is True
+
+    # Matching version, expired under configured TTL (e.g. 60s)
+    assert ver_fresh.is_fresh(max_age_seconds=60.0) is False
+    assert ver_fresh.display_state(max_age_seconds=60.0) == "Verification stale"
+
+    # Mismatched method version (e.g. older verification algorithm)
+    ver_old_method = ProviderConnectionVerification(
+        provider_id="openai",
+        status=ConnectionVerificationStatus.VERIFIED_CONNECTED,
+        last_verified_at=time.time() - 10.0,
+        verification_method_version="v0_legacy_ping",
+    )
+    assert ver_old_method.is_fresh() is False
+    assert ver_old_method.display_state() == "Verification stale"
+
+
+# 24. Rate limit 429 classified as RATE_LIMITED unless provider error data specifically proves QUOTA_EXHAUSTED
+def test_24_rate_limit_distinct_from_quota_exhausted():
+    reg, adapter, _ = _create_mock_registry()
+    svc = ProviderVerificationService(registry=reg)
+
+    # Generic 429 rate limit
+    adapter.invoke.side_effect = ProviderRateLimitError(
+        "Too many requests. Please wait 2 seconds.", provider_id="openai"
+    )
+    ver_rl = svc.verify_provider("openai")
+    assert ver_rl.status == ConnectionVerificationStatus.RATE_LIMITED
+    assert ver_rl.failure_class == "RATE_LIMITED"
+
+    # Specific quota exhaustion
+    adapter.invoke.side_effect = ProviderRateLimitError(
+        "Error: insufficient_quota. You have run out of credits.", provider_id="openai"
+    )
+    ver_quota = svc.verify_provider("openai")
+    assert ver_quota.status == ConnectionVerificationStatus.QUOTA_EXHAUSTED
+    assert ver_quota.failure_class == "QUOTA_EXHAUSTED"

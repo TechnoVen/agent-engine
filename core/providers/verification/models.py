@@ -29,7 +29,9 @@ class ConnectionVerificationStatus(str, Enum):
     """Canonical taxonomy of provider verification statuses (Task R3.11)."""
 
     NOT_CONFIGURED = "NOT_CONFIGURED"
+    POLICY_BLOCKED = "POLICY_BLOCKED"
     AUTHENTICATION_FAILED = "AUTHENTICATION_FAILED"
+    ACCESS_DENIED = "ACCESS_DENIED"
     NETWORK_ERROR = "NETWORK_ERROR"
     TIMEOUT = "TIMEOUT"
     MODEL_NOT_FOUND = "MODEL_NOT_FOUND"
@@ -39,6 +41,10 @@ class ConnectionVerificationStatus(str, Enum):
     INVALID_RESPONSE = "INVALID_RESPONSE"
     VERIFIED_CONNECTED = "VERIFIED_CONNECTED"
     UNKNOWN_FAILURE = "UNKNOWN_FAILURE"
+
+
+CURRENT_VERIFICATION_METHOD_VERSION: str = "v1_canary"
+DEFAULT_VERIFICATION_TTL_SECONDS: float = 86400.0
 
 
 class ProviderConnectionVerification(BaseModel):
@@ -54,21 +60,41 @@ class ProviderConnectionVerification(BaseModel):
     failure_class: Optional[str] = None
     sanitized_error: Optional[str] = None
     verification_version: str = "v1"
+    verification_method_version: str = CURRENT_VERIFICATION_METHOD_VERSION
     probe_type: str = "real_completion_canary"
     details: Dict[str, Any] = Field(default_factory=dict)
 
-    def is_fresh(self, max_age_seconds: float = 86400.0) -> bool:
-        """Return True if the verification is currently connected and within the freshness TTL."""
+    def is_fresh(
+        self,
+        max_age_seconds: Optional[float] = None,
+        expected_method_version: Optional[str] = CURRENT_VERIFICATION_METHOD_VERSION,
+    ) -> bool:
+        """Return True if the verification is currently connected, within TTL, and matches method version."""
         if self.status != ConnectionVerificationStatus.VERIFIED_CONNECTED:
             return False
-        return (time.time() - self.last_verified_at) <= max_age_seconds
+        if expected_method_version and self.verification_method_version != expected_method_version:
+            return False
+        ttl = max_age_seconds if max_age_seconds is not None else DEFAULT_VERIFICATION_TTL_SECONDS
+        return (time.time() - self.last_verified_at) <= ttl
 
-    def display_state(self, max_age_seconds: float = 86400.0) -> str:
+    def display_state(
+        self,
+        max_age_seconds: Optional[float] = None,
+        expected_method_version: Optional[str] = CURRENT_VERIFICATION_METHOD_VERSION,
+    ) -> str:
         """Human-readable display state for UI surfaces (Settings / Dashboard)."""
         if self.status == ConnectionVerificationStatus.VERIFIED_CONNECTED:
-            return "Connected" if self.is_fresh(max_age_seconds) else "Verification stale"
+            return (
+                "Connected"
+                if self.is_fresh(max_age_seconds, expected_method_version)
+                else "Verification stale"
+            )
         if self.status == ConnectionVerificationStatus.NOT_CONFIGURED:
             return "Not configured"
+        if self.status == ConnectionVerificationStatus.POLICY_BLOCKED:
+            return "Policy blocked"
+        if self.status == ConnectionVerificationStatus.ACCESS_DENIED:
+            return "Access denied"
         return "Verification failed"
 
     def to_safe_dict(self) -> Dict[str, Any]:
@@ -82,6 +108,7 @@ class ProviderConnectionVerification(BaseModel):
             "failure_class": self.failure_class,
             "sanitized_error": self.sanitized_error,
             "verification_version": self.verification_version,
+            "verification_method_version": self.verification_method_version,
             "probe_type": self.probe_type,
             "is_fresh": self.is_fresh(),
             "display_state": self.display_state(),

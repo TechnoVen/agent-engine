@@ -1150,7 +1150,9 @@ export interface ModelEconomicsSummary {
 
 export type ConnectionVerificationStatus =
   | 'NOT_CONFIGURED'
+  | 'POLICY_BLOCKED'
   | 'AUTHENTICATION_FAILED'
+  | 'ACCESS_DENIED'
   | 'NETWORK_ERROR'
   | 'TIMEOUT'
   | 'MODEL_NOT_FOUND'
@@ -1175,6 +1177,7 @@ export interface ProviderConnectionVerification {
   failure_class?: string | null;
   sanitized_error?: string | null;
   verification_version: string;
+  verification_method_version: string;
   probe_type: string;
   is_fresh: boolean;
   display_state: string;

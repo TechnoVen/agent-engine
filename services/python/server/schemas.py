@@ -1145,6 +1145,7 @@ class ProviderConnectionVerificationResponse(BaseModel):
     failure_class: Optional[str] = None
     sanitized_error: Optional[str] = None
     verification_version: str = "v1"
+    verification_method_version: str = "v1_canary"
     probe_type: str = "real_completion_canary"
     is_fresh: bool = False
     display_state: str = "Not configured"
