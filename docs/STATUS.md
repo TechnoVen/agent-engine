@@ -606,6 +606,8 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
 
 ## 7. Canonical Task Tracking Matrix (Stage R3 — Model Layer & Routing Convergence)
 
+> **Milestone R3 Status:** R3 closed at S1: Implemented and implementation-tested only, not integrated/production/release verified.
+
 ```yaml
 - id: R3.1
   title: "Canonical provider registry contract"
@@ -828,15 +830,24 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "apps/desktop/src/renderer/screens/Settings.tsx"
     - "tests/test_r3_provider_verification.py"
   notes: "S1 — Closed at S1 (commit 6ce2d9a9e647626cbf6866e7f48d66694d57cf5e). Implemented Provider Connection Verification (Task R3.11): (1) Real minimal provider completion operation canary verification ('Return exactly: AE_PROVIDER_OK', temp=0, max_tokens=10, retries=0); avoids false positives where /models or /health returns 200 OK while completion calls fail; canary token required with surrounding whitespace accepted and arbitrary text rejected. (2) Strict provider/model pinning: zero fallback substitution during verification attempts. (3) Standardized failure classification taxonomy: NOT_CONFIGURED, POLICY_BLOCKED, AUTHENTICATION_FAILED, ACCESS_DENIED, NETWORK_ERROR, TIMEOUT, MODEL_NOT_FOUND, RATE_LIMITED, QUOTA_EXHAUSTED, PROVIDER_ERROR, INVALID_RESPONSE, VERIFIED_CONNECTED, UNKNOWN_FAILURE. (4) Freshness semantics: timestamped verification, is_fresh() with versioned TTL (default 86400s), persisted verification_method_version (v1_canary), display_state mapping (Connected, Verification stale, Not configured, Policy blocked, Access denied, Verification failed). (5) Secrets redaction: dual-layer defense with known-secret value scrubbing and regex patterns for arbitrary non-regex token formats. (6) Exclusion from R3.10 economics cohorts: tagged execution_purpose='PROVIDER_VERIFICATION' and rejected from production cohort accounting. (7) Policy authorization gate via PolicyEngine: denied policy yields POLICY_BLOCKED with zero provider calls and zero network calls. (8) Managed llama.cpp local runtime verification via ProviderRegistry['llamacpp'] adapter without shadow direct HTTP paths. (9) Authenticated API endpoints: POST /v1/providers/{provider_id}/verify, GET /v1/providers/{provider_id}/verification, GET /v1/providers protected by IPC token authentication. (10) Desktop UI Settings integration: 'Test connection' button, typed badges, last verified timestamp, sanitized error messages, and removal of testCredential fallback to establish connected. 24/24 dedicated tests passing, 239/239 R3 tests passing, 1047/1047 full regression passing."
+- id: R3.12
+  title: "Optional low-cost inference providers"
+  task_status: deferred
+  capability_maturity: "Deferred to 0.6"
+  migration: INTEGRATE
+  owner: "Runtime & Model Architecture"
+  depends_on: ["R3.1"]
+  evidence: []
+  notes: "DEFERRED to 0.6 per canonical roadmap. Optional low-cost inference providers deferred to 0.6 release cycle."
 ```
 
 ---
 
 ## 8. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `1047 passed, 3 warnings` (`uv run pytest -q`)
-- **Combined R3 Model Layer Suites:** `239 passed in 32.58s` (`uv run pytest tests/test_r3_*.py`)
-- **R3 Hard-Exit E2E Suite:** `3 passed in 3.16s` (`tests/test_r3_hard_exit_e2e.py`)
+- **Full Regression Suite:** `1049 passed, 1 skipped, 3 warnings in 122.94s` (`uv run pytest -q`)
+- **Combined R3 Model Layer Suites:** `241 passed, 1 skipped in 35.73s` (`uv run pytest tests/test_r3_*.py`)
+- **R3 Hard-Exit E2E Suite:** `5 passed, 1 skipped in 9.22s` (`tests/test_r3_hard_exit_e2e.py`)
 - **R3.11 Provider Connection Verification Suite:** `24 passed in 4.08s` (`uv run pytest tests/test_r3_provider_verification.py`)
 - **R3.10 Cost-Per-Success Suite:** `31 passed in 5.44s` (`uv run pytest tests/test_r3_model_economics.py`)
 - **R3.9 Quality/Cost/Latency Suite:** `32 passed in 3.76s` (`uv run pytest tests/test_r3_routing_objective.py`)
