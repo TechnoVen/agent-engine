@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 import re
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Optional, Set, Union
 import uuid
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -53,9 +53,37 @@ def generate_schedule_id() -> str:
     return f"sch_{uuid.uuid4().hex[:12]}"
 
 
+def generate_queue_entry_id() -> str:
+    """Generate canonical queue entry ID with 'qent_' prefix."""
+    return f"qent_{uuid.uuid4().hex[:12]}"
+
+
 def current_timestamp_iso() -> str:
     """Return UTC ISO 8601 timestamp string."""
     return datetime.now(timezone.utc).isoformat()
+
+
+def format_utc_iso(dt: Optional[datetime] = None) -> str:
+    """Return standard formatted UTC ISO 8601 timestamp string (with 'Z')."""
+    if dt is None:
+        dt = datetime.now(timezone.utc)
+    elif dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def parse_utc_iso(iso_str: str) -> datetime:
+    """Parse an ISO 8601 string into a timezone-aware UTC datetime."""
+    return datetime.fromisoformat(iso_str.replace("Z", "+00:00")).astimezone(timezone.utc)
+
+
+def normalize_utc_iso(val: Union[str, datetime]) -> str:
+    """Normalize a string or datetime into a standard canonical UTC ISO 8601 string."""
+    if isinstance(val, str):
+        return format_utc_iso(parse_utc_iso(val))
+    return format_utc_iso(val)
 
 
 SENSITIVE_KEY_PATTERN = re.compile(
@@ -183,6 +211,12 @@ class JobEventType(str, Enum):
     ARTIFACT_ATTACHED = "artifact_attached"
     DEPENDENCY_ADDED = "dependency_added"
     SCHEDULE_LINKED = "schedule_linked"
+    # R4.2 Durable Queue lifecycle events
+    JOB_ENQUEUED = "job_enqueued"
+    LEASE_ACQUIRED = "lease_acquired"
+    LEASE_EXTENDED = "lease_extended"
+    LEASE_RELEASED = "lease_released"
+    LEASE_RECLAIMED = "lease_reclaimed"
 
 
 class JobDependencyType(str, Enum):
@@ -249,6 +283,11 @@ class JobEvent(BaseModel):
     job_id: str = Field(..., description="Target job identifier")
     attempt_id: Optional[str] = Field(None, description="Optional attempt context")
     event_type: JobEventType = Field(..., description="Lifecycle event classification")
+    sequence_number: int = Field(
+        default=0,
+        ge=0,
+        description="Per-job monotonic sequence number for total deterministic order",
+    )
     timestamp: str = Field(default_factory=current_timestamp_iso)
     metadata: Dict[str, Any] = Field(
         default_factory=dict, description="Bounded non-sensitive event parameters"
@@ -284,7 +323,13 @@ class JobArtifact(BaseModel):
 
 
 class JobSchedule(BaseModel):
-    """Durable schedule specification for recurring or scheduled job creation."""
+    """Durable schedule specification for recurring or scheduled job creation.
+
+    Forward-Compatibility Note (Milestones R4.2 -> R4.7):
+    A JobSchedule represents an enduring recurring schedule or template definition.
+    Recurring schedule executions in R4.7 spawn brand new, distinct Job instances
+    referencing schedule_id. A JobSchedule is NEVER mutated or reused as a single historical Job.
+    """
 
     schedule_id: str = Field(default_factory=generate_schedule_id)
     job_template_id: Optional[str] = Field(None, description="Optional template reference")
@@ -299,3 +344,79 @@ class JobSchedule(BaseModel):
     updated_at: str = Field(default_factory=current_timestamp_iso)
 
     model_config = ConfigDict(extra="ignore")
+
+
+class JobLease(BaseModel):
+    """Opaque delivery lease granted to a worker upon claiming an enqueued job."""
+
+    job_id: str = Field(..., description="Target job identifier")
+    queue_entry_id: str = Field(..., description="Associated queue entry identifier")
+    lease_owner: str = Field(..., description="Worker or process identifier holding the lease")
+    lease_token: str = Field(
+        ..., description="Cryptographically strong internal lease authority token"
+    )
+    lease_generation: int = Field(..., ge=1, description="Monotonic lease generation number")
+    lease_acquired_at: str = Field(..., description="UTC ISO timestamp when lease was acquired")
+    lease_expires_at: str = Field(..., description="UTC ISO timestamp when lease expires")
+
+    model_config = ConfigDict(extra="ignore")
+
+    def __repr__(self) -> str:
+        return (
+            f"JobLease(job_id={self.job_id!r}, "
+            f"queue_entry_id={self.queue_entry_id!r}, "
+            f"lease_owner={self.lease_owner!r}, "
+            f"lease_token='[MASKED]', "
+            f"lease_generation={self.lease_generation}, "
+            f"lease_acquired_at={self.lease_acquired_at!r}, "
+            f"lease_expires_at={self.lease_expires_at!r})"
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
+
+    def safe_summary(self) -> Dict[str, Any]:
+        """Return non-sensitive lease summary without the secret lease token."""
+        return {
+            "job_id": self.job_id,
+            "queue_entry_id": self.queue_entry_id,
+            "lease_owner": self.lease_owner,
+            "lease_generation": self.lease_generation,
+            "lease_acquired_at": self.lease_acquired_at,
+            "lease_expires_at": self.lease_expires_at,
+        }
+
+
+class JobQueueEntry(BaseModel):
+    """Persistent delivery entry for a job awaiting or under active lease."""
+
+    queue_entry_id: str = Field(default_factory=generate_queue_entry_id)
+    job_id: str = Field(..., description="Target job identifier")
+    enqueued_at: str = Field(default_factory=current_timestamp_iso)
+    available_at: str = Field(default_factory=current_timestamp_iso)
+    lease_owner: Optional[str] = Field(None, description="Current worker holding lease if leased")
+    lease_token: Optional[str] = Field(None, description="Opaque internal lease token if leased")
+    lease_generation: int = Field(default=0, ge=0, description="Current lease generation")
+    lease_acquired_at: Optional[str] = Field(None, description="Timestamp lease was acquired")
+    lease_expires_at: Optional[str] = Field(None, description="Timestamp lease expires")
+    created_at: str = Field(default_factory=current_timestamp_iso)
+    updated_at: str = Field(default_factory=current_timestamp_iso)
+
+    model_config = ConfigDict(extra="ignore")
+
+    def __repr__(self) -> str:
+        masked_token = "'[MASKED]'" if self.lease_token else "None"
+        return (
+            f"JobQueueEntry(queue_entry_id={self.queue_entry_id!r}, "
+            f"job_id={self.job_id!r}, "
+            f"enqueued_at={self.enqueued_at!r}, "
+            f"available_at={self.available_at!r}, "
+            f"lease_owner={self.lease_owner!r}, "
+            f"lease_token={masked_token}, "
+            f"lease_generation={self.lease_generation}, "
+            f"lease_acquired_at={self.lease_acquired_at!r}, "
+            f"lease_expires_at={self.lease_expires_at!r})"
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()

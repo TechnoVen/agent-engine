@@ -120,8 +120,46 @@ def _migration_001_initial_job_domain(conn: sqlite3.Connection) -> None:
         conn.execute(stmt)
 
 
+def _migration_002_persistent_job_queue(conn: sqlite3.Connection) -> None:
+    """Migration 002: Persistent Job Queue table and deterministic event sequence numbering."""
+    ddl_statements = [
+        """
+        CREATE TABLE IF NOT EXISTS job_queue (
+            queue_entry_id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL UNIQUE REFERENCES jobs(job_id) ON DELETE CASCADE,
+            enqueued_at TEXT NOT NULL,
+            available_at TEXT NOT NULL,
+            lease_owner TEXT,
+            lease_token TEXT,
+            lease_generation INTEGER NOT NULL DEFAULT 0,
+            lease_acquired_at TEXT,
+            lease_expires_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_job_queue_available_expires ON job_queue(available_at, lease_expires_at);",
+        "CREATE INDEX IF NOT EXISTS idx_job_queue_job_id ON job_queue(job_id);",
+        "ALTER TABLE job_events ADD COLUMN sequence_number INTEGER NOT NULL DEFAULT 0;",
+        "CREATE INDEX IF NOT EXISTS idx_events_job_seq ON job_events(job_id, sequence_number);",
+    ]
+
+    for stmt in ddl_statements:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" in str(e).lower():
+                pass
+            else:
+                raise
+
+    # Backfill sequence_number for any existing pre-v2 rows using rowid
+    conn.execute("UPDATE job_events SET sequence_number = rowid WHERE sequence_number = 0;")
+
+
 MIGRATION_REGISTRY: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "001_initial_job_domain", _migration_001_initial_job_domain),
+    (2, "002_persistent_job_queue", _migration_002_persistent_job_queue),
 ]
 
 

@@ -1,13 +1,14 @@
 """core/jobs/__init__.py
 
-Canonical Job Domain (Task R4.1).
-Part of Milestone R4 (Canonical Job Domain).
+Canonical Job Domain & Persistent Local Queue (Tasks R4.1 & R4.2).
+Part of Milestone R4 (Task R4.1 Canonical Job Domain, Task R4.2 Persistent Local Job Queue).
 
 Governing Principles:
 - Job != Execution: A Job represents requested/background durable work.
 - JobAttempt may reference a canonical Execution (execution_id).
 - ExecutionCoordinator remains the authoritative execution system.
-- Jobs and related records persist independently of UI and runtime workers.
+- Jobs and queue records persist independently of UI and runtime workers.
+- Queue claim != JobAttempt start != Execution start.
 """
 
 from __future__ import annotations
@@ -15,13 +16,20 @@ from __future__ import annotations
 from core.jobs.exceptions import (
     DependencyCycleError,
     DuplicateDependencyError,
+    DuplicateQueueEntryError,
     InvalidAttemptNumberError,
+    InvalidLeaseError,
     InvalidStateTransitionError,
     JobDomainError,
+    JobNotClaimableError,
     JobNotFoundError,
+    JobQueueError,
+    LeaseExpiredError,
     ScheduleNotFoundError,
     SecurityRedactionError,
     SelfDependencyError,
+    StaleLeaseError,
+    QueueEntryNotFoundError,
 )
 from core.jobs.migrations import (
     apply_job_migrations,
@@ -38,16 +46,26 @@ from core.jobs.models import (
     JobDependencyType,
     JobEvent,
     JobEventType,
+    JobLease,
+    JobQueueEntry,
     JobSchedule,
     JobStatus,
+    format_utc_iso,
     generate_attempt_id,
     generate_dependency_id,
     generate_event_id,
     generate_job_artifact_id,
     generate_job_id,
+    generate_queue_entry_id,
     generate_schedule_id,
+    normalize_utc_iso,
+    parse_utc_iso,
     sanitize_bounded_dict,
     validate_job_state_transition,
+)
+from core.jobs.queue import (
+    PersistentJobQueue,
+    SQLiteJobQueue,
 )
 from core.jobs.repository import JobRepository
 from core.jobs.sqlite import SQLiteJobRepository
@@ -60,6 +78,8 @@ __all__ = [
     "JobDependency",
     "JobArtifact",
     "JobSchedule",
+    "JobLease",
+    "JobQueueEntry",
     # Enums & Constants
     "JobStatus",
     "JobAttemptStatus",
@@ -77,9 +97,18 @@ __all__ = [
     "DependencyCycleError",
     "ScheduleNotFoundError",
     "SecurityRedactionError",
-    # Repository Interfaces & Impls
+    "JobQueueError",
+    "QueueEntryNotFoundError",
+    "DuplicateQueueEntryError",
+    "JobNotClaimableError",
+    "InvalidLeaseError",
+    "LeaseExpiredError",
+    "StaleLeaseError",
+    # Repository & Queue Interfaces & Impls
     "JobRepository",
     "SQLiteJobRepository",
+    "PersistentJobQueue",
+    "SQLiteJobQueue",
     # Migrations
     "apply_job_migrations",
     "get_current_job_schema_version",
@@ -92,4 +121,8 @@ __all__ = [
     "generate_dependency_id",
     "generate_job_artifact_id",
     "generate_schedule_id",
+    "generate_queue_entry_id",
+    "format_utc_iso",
+    "parse_utc_iso",
+    "normalize_utc_iso",
 ]

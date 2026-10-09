@@ -49,7 +49,14 @@ DEFAULT_JOBS_DB_PATH = str(PROJECT_ROOT / "data" / "agent_engine.db")
 
 
 class SQLiteJobRepository(JobRepository):
-    """Thread-safe SQLite repository implementing the canonical JobRepository contract."""
+    """Thread-safe SQLite repository implementing the canonical JobRepository contract.
+
+    Deletion Policy (Carry-Forward Durability Invariant):
+    Public runtime code MUST NOT hard-delete jobs or casually erase attempts, lifecycle events,
+    execution bindings, or artifacts. Normal lifecycle transitions are strictly state-based.
+    Hard deletion via database cascades is strictly restricted to unit tests and administrative
+    retention purge routines.
+    """
 
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or DEFAULT_JOBS_DB_PATH
@@ -94,14 +101,40 @@ class SQLiteJobRepository(JobRepository):
     # Job CRUD
     # --------------------------------------------------------------------------
 
+    def _insert_event(self, cursor: sqlite3.Cursor, event: JobEvent) -> JobEvent:
+        """Atomically insert an audit event with a monotonic per-job sequence number."""
+        cursor.execute(
+            "SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM job_events WHERE job_id = ?",
+            (event.job_id,),
+        )
+        event.sequence_number = cursor.fetchone()[0]
+        cursor.execute(
+            """
+            INSERT INTO job_events (
+                event_id, job_id, attempt_id, event_type, sequence_number, timestamp, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.event_id,
+                event.job_id,
+                event.attempt_id,
+                event.event_type.value,
+                event.sequence_number,
+                event.timestamp,
+                json.dumps(sanitize_bounded_dict(event.metadata)),
+            ),
+        )
+        return event
+
     def create_job(self, job: Job) -> Job:
         with self._lock:
             conn = self._get_connection()
             try:
                 with conn:
+                    cursor = conn.cursor()
                     # Sanitize summary metadata to guarantee secret prevention
                     clean_summary = sanitize_bounded_dict(job.payload_summary)
-                    conn.execute(
+                    cursor.execute(
                         """
                         INSERT INTO jobs (
                             job_id, job_type, status, payload_reference,
@@ -137,22 +170,9 @@ class SQLiteJobRepository(JobRepository):
                             "initial_status": job.status.value,
                         },
                     )
-                    conn.execute(
-                        """
-                        INSERT INTO job_events (
-                            event_id, job_id, attempt_id, event_type, timestamp, metadata_json
-                        ) VALUES (?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            init_event.event_id,
-                            init_event.job_id,
-                            init_event.attempt_id,
-                            init_event.event_type.value,
-                            init_event.timestamp,
-                            json.dumps(sanitize_bounded_dict(init_event.metadata)),
-                        ),
-                    )
+                    self._insert_event(cursor, init_event)
                 return job
+
             finally:
                 if not self._is_memory:
                     conn.close()
@@ -225,21 +245,7 @@ class SQLiteJobRepository(JobRepository):
                         timestamp=now_iso,
                         metadata=event_meta,
                     )
-                    cursor.execute(
-                        """
-                        INSERT INTO job_events (
-                            event_id, job_id, attempt_id, event_type, timestamp, metadata_json
-                        ) VALUES (?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            state_event.event_id,
-                            state_event.job_id,
-                            state_event.attempt_id,
-                            state_event.event_type.value,
-                            state_event.timestamp,
-                            json.dumps(sanitize_bounded_dict(state_event.metadata)),
-                        ),
-                    )
+                    self._insert_event(cursor, state_event)
 
                 return self.get_job(job_id)  # type: ignore[return-value]
             finally:
@@ -346,21 +352,7 @@ class SQLiteJobRepository(JobRepository):
                             "execution_id": attempt.execution_id,
                         },
                     )
-                    cursor.execute(
-                        """
-                        INSERT INTO job_events (
-                            event_id, job_id, attempt_id, event_type, timestamp, metadata_json
-                        ) VALUES (?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            attempt_event.event_id,
-                            attempt_event.job_id,
-                            attempt_event.attempt_id,
-                            attempt_event.event_type.value,
-                            attempt_event.timestamp,
-                            json.dumps(sanitize_bounded_dict(attempt_event.metadata)),
-                        ),
-                    )
+                    self._insert_event(cursor, attempt_event)
 
                     # If execution_id was bound, emit explicit event
                     if execution_id:
@@ -371,21 +363,7 @@ class SQLiteJobRepository(JobRepository):
                             timestamp=attempt.started_at,
                             metadata={"execution_id": execution_id},
                         )
-                        cursor.execute(
-                            """
-                            INSERT INTO job_events (
-                                event_id, job_id, attempt_id, event_type, timestamp, metadata_json
-                            ) VALUES (?, ?, ?, ?, ?, ?)
-                            """,
-                            (
-                                exec_event.event_id,
-                                exec_event.job_id,
-                                exec_event.attempt_id,
-                                exec_event.event_type.value,
-                                exec_event.timestamp,
-                                json.dumps(sanitize_bounded_dict(exec_event.metadata)),
-                            ),
-                        )
+                        self._insert_event(cursor, exec_event)
 
                 return attempt
             finally:
@@ -484,22 +462,7 @@ class SQLiteJobRepository(JobRepository):
                     if not cursor.fetchone():
                         raise JobNotFoundError(f"Job {event.job_id} does not exist.")
 
-                    clean_meta = sanitize_bounded_dict(event.metadata)
-                    cursor.execute(
-                        """
-                        INSERT INTO job_events (
-                            event_id, job_id, attempt_id, event_type, timestamp, metadata_json
-                        ) VALUES (?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            event.event_id,
-                            event.job_id,
-                            event.attempt_id,
-                            event.event_type.value,
-                            event.timestamp,
-                            json.dumps(clean_meta),
-                        ),
-                    )
+                    self._insert_event(cursor, event)
                 return event
             finally:
                 if not self._is_memory:
@@ -516,14 +479,14 @@ class SQLiteJobRepository(JobRepository):
             try:
                 cursor = conn.cursor()
                 query = """
-                    SELECT event_id, job_id, attempt_id, event_type, timestamp, metadata_json
+                    SELECT event_id, job_id, attempt_id, event_type, sequence_number, timestamp, metadata_json
                     FROM job_events WHERE job_id = ?
                 """
                 params: List[Any] = [job_id]
                 if attempt_id is not None:
                     query += " AND attempt_id = ?"
                     params.append(attempt_id)
-                query += " ORDER BY timestamp ASC, event_id ASC LIMIT ?"
+                query += " ORDER BY timestamp ASC, sequence_number ASC, event_id ASC LIMIT ?"
                 params.append(limit)
 
                 cursor.execute(query, params)
@@ -601,21 +564,7 @@ class SQLiteJobRepository(JobRepository):
                             "dependency_type": dependency.dependency_type.value,
                         },
                     )
-                    cursor.execute(
-                        """
-                        INSERT INTO job_events (
-                            event_id, job_id, attempt_id, event_type, timestamp, metadata_json
-                        ) VALUES (?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            dep_event.event_id,
-                            dep_event.job_id,
-                            dep_event.attempt_id,
-                            dep_event.event_type.value,
-                            dep_event.timestamp,
-                            json.dumps(dep_event.metadata),
-                        ),
-                    )
+                    self._insert_event(cursor, dep_event)
 
                 return dependency
             finally:
@@ -700,21 +649,7 @@ class SQLiteJobRepository(JobRepository):
                             "role": artifact.role,
                         },
                     )
-                    cursor.execute(
-                        """
-                        INSERT INTO job_events (
-                            event_id, job_id, attempt_id, event_type, timestamp, metadata_json
-                        ) VALUES (?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            art_event.event_id,
-                            art_event.job_id,
-                            art_event.attempt_id,
-                            art_event.event_type.value,
-                            art_event.timestamp,
-                            json.dumps(art_event.metadata),
-                        ),
-                    )
+                    self._insert_event(cursor, art_event)
                 return artifact
             finally:
                 if not self._is_memory:
@@ -853,11 +788,13 @@ class SQLiteJobRepository(JobRepository):
     def _row_to_event(row: sqlite3.Row) -> JobEvent:
         meta_raw = row["metadata_json"]
         meta = json.loads(meta_raw) if meta_raw else {}
+        seq = row["sequence_number"] if "sequence_number" in row.keys() else 0
         return JobEvent(
             event_id=row["event_id"],
             job_id=row["job_id"],
             attempt_id=row["attempt_id"],
             event_type=JobEventType(row["event_type"]),
+            sequence_number=seq,
             timestamp=row["timestamp"],
             metadata=meta,
         )

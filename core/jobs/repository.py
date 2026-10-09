@@ -27,7 +27,14 @@ from core.jobs.models import (
 
 
 class JobRepository(ABC):
-    """Abstract interface defining the durable persistence contract for jobs."""
+    """Abstract interface defining the durable persistence contract for jobs.
+
+    Deletion Policy (Carry-Forward Durability Invariant):
+    Public runtime code MUST NOT hard-delete jobs or casually erase attempts, lifecycle events,
+    execution bindings, or artifacts. Normal lifecycle transitions are strictly state-based.
+    Hard deletion via database cascades is strictly restricted to unit tests and administrative
+    retention purge routines.
+    """
 
     @abstractmethod
     def create_job(self, job: Job) -> Job:
