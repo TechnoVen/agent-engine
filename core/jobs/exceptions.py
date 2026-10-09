@@ -69,3 +69,11 @@ class LeaseExpiredError(InvalidLeaseError):
 
 class StaleLeaseError(InvalidLeaseError):
     """Raised when an operation references a superseded lease generation or token."""
+
+
+class UnsupportedJobTypeError(JobDomainError):
+    """Raised when a job type is not recognized or supported by the worker runtime."""
+
+
+class WorkerLeaseLostError(JobQueueError):
+    """Raised when a worker loses its lease during execution and can no longer mutate state."""

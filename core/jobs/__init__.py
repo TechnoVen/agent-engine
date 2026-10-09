@@ -30,6 +30,8 @@ from core.jobs.exceptions import (
     SelfDependencyError,
     StaleLeaseError,
     QueueEntryNotFoundError,
+    UnsupportedJobTypeError,
+    WorkerLeaseLostError,
 )
 from core.jobs.migrations import (
     apply_job_migrations,
@@ -69,6 +71,12 @@ from core.jobs.queue import (
 )
 from core.jobs.repository import JobRepository
 from core.jobs.sqlite import SQLiteJobRepository
+from core.jobs.worker import (
+    JobExecutionRequestFactory,
+    JobWorker,
+    WorkerContext,
+    generate_worker_id,
+)
 
 __all__ = [
     # Domain Models
@@ -104,11 +112,18 @@ __all__ = [
     "InvalidLeaseError",
     "LeaseExpiredError",
     "StaleLeaseError",
+    "UnsupportedJobTypeError",
+    "WorkerLeaseLostError",
     # Repository & Queue Interfaces & Impls
     "JobRepository",
     "SQLiteJobRepository",
     "PersistentJobQueue",
     "SQLiteJobQueue",
+    # Worker Service
+    "JobWorker",
+    "JobExecutionRequestFactory",
+    "WorkerContext",
+    "generate_worker_id",
     # Migrations
     "apply_job_migrations",
     "get_current_job_schema_version",

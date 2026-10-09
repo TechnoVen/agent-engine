@@ -98,7 +98,15 @@ def sanitize_bounded_dict(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         return {}
     cleaned: Dict[str, Any] = {}
     for k, v in data.items():
-        if SENSITIVE_KEY_PATTERN.search(k):
+        if k in (
+            "token_budget",
+            "max_tokens",
+            "total_tokens",
+            "prompt_tokens",
+            "completion_tokens",
+        ):
+            cleaned[k] = v
+        elif SENSITIVE_KEY_PATTERN.search(k):
             cleaned[k] = "[REDACTED_CREDENTIAL]"
         elif isinstance(v, dict):
             cleaned[k] = sanitize_bounded_dict(v)
@@ -141,6 +149,7 @@ VALID_JOB_TRANSITIONS: Dict[JobStatus, Set[JobStatus]] = {
         JobStatus.PARTIAL,
         JobStatus.FAILED,
         JobStatus.CANCELLED,
+        JobStatus.BLOCKED,
     },
     JobStatus.WAITING: {
         JobStatus.READY,
@@ -217,6 +226,12 @@ class JobEventType(str, Enum):
     LEASE_EXTENDED = "lease_extended"
     LEASE_RELEASED = "lease_released"
     LEASE_RECLAIMED = "lease_reclaimed"
+    # R4.3 Worker lifecycle events
+    WORKER_ATTEMPT_STARTED = "worker_attempt_started"
+    WORKER_LEASE_LOST = "worker_lease_lost"
+    ATTEMPT_RECONCILED = "attempt_reconciled"
+    JOB_COMPLETED = "job_completed"
+    JOB_FAILED = "job_failed"
 
 
 class JobDependencyType(str, Enum):
@@ -268,6 +283,10 @@ class JobAttempt(BaseModel):
         None, description="Reference to canonical R1 Execution instance"
     )
     status: JobAttemptStatus = Field(default=JobAttemptStatus.PENDING)
+    worker_id: Optional[str] = Field(None, description="Authoritative worker identifier")
+    lease_generation: Optional[int] = Field(
+        None, description="Queue lease generation under which attempt was started"
+    )
     started_at: str = Field(default_factory=current_timestamp_iso)
     finished_at: Optional[str] = None
     failure_classification: Optional[str] = None

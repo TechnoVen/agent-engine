@@ -81,6 +81,8 @@ class JobRepository(ABC):
         self,
         job_id: str,
         execution_id: Optional[str] = None,
+        worker_id: Optional[str] = None,
+        lease_generation: Optional[int] = None,
     ) -> JobAttempt:
         """Atomically create a new execution attempt with an incremented attempt_number.
 

@@ -119,6 +119,7 @@ class PersistentJobQueue(ABC):
         lease_generation: int,
         duration_seconds: float,
         now: Optional[Union[datetime, str]] = None,
+        record_event: bool = True,
     ) -> JobLease:
         """Extend the expiration time of an active, unexpired lease.
 
@@ -398,13 +399,13 @@ class SQLiteJobQueue(PersistentJobQueue):
                     SELECT q.queue_entry_id, q.job_id, q.lease_generation, q.lease_expires_at
                     FROM job_queue q
                     JOIN jobs j ON q.job_id = j.job_id
-                    WHERE j.status = 'ready'
+                    WHERE (j.status = 'ready' OR (j.status = 'running' AND q.lease_expires_at IS NOT NULL AND q.lease_expires_at <= ?))
                       AND q.available_at <= ?
                       AND (q.lease_expires_at IS NULL OR q.lease_expires_at <= ?)
                     ORDER BY q.available_at ASC, q.enqueued_at ASC, q.queue_entry_id ASC
                     LIMIT 1
                     """,
-                    (now_iso, now_iso),
+                    (now_iso, now_iso, now_iso),
                 )
                 row = cursor.fetchone()
                 if not row:
@@ -592,6 +593,7 @@ class SQLiteJobQueue(PersistentJobQueue):
         lease_generation: int,
         duration_seconds: float,
         now: Optional[Union[datetime, str]] = None,
+        record_event: bool = True,
     ) -> JobLease:
         if not lease_token:
             raise ValueError("lease_token must be provided.")
@@ -665,18 +667,19 @@ class SQLiteJobQueue(PersistentJobQueue):
                     conn.rollback()
                     raise InvalidLeaseError(f"Failed to extend lease for job {job_id}.")
 
-                # Append audit event: strictly NO token in metadata
-                ext_event = JobEvent(
-                    job_id=job_id,
-                    event_type=JobEventType.LEASE_EXTENDED,
-                    timestamp=now_iso,
-                    metadata={
-                        "worker_id": lease_owner,
-                        "lease_generation": lease_generation,
-                        "new_lease_expires_at": new_expires_iso,
-                    },
-                )
-                self._insert_event(cursor, ext_event)
+                # Append audit event: strictly NO token in metadata (if requested)
+                if record_event:
+                    ext_event = JobEvent(
+                        job_id=job_id,
+                        event_type=JobEventType.LEASE_EXTENDED,
+                        timestamp=now_iso,
+                        metadata={
+                            "worker_id": lease_owner,
+                            "lease_generation": lease_generation,
+                            "new_lease_expires_at": new_expires_iso,
+                        },
+                    )
+                    self._insert_event(cursor, ext_event)
 
                 conn.commit()
                 return JobLease(
@@ -767,11 +770,11 @@ class SQLiteJobQueue(PersistentJobQueue):
                     SELECT COUNT(*)
                     FROM job_queue q
                     JOIN jobs j ON q.job_id = j.job_id
-                    WHERE j.status = 'ready'
+                    WHERE (j.status = 'ready' OR (j.status = 'running' AND q.lease_expires_at IS NOT NULL AND q.lease_expires_at <= ?))
                       AND q.available_at <= ?
                       AND (q.lease_expires_at IS NULL OR q.lease_expires_at <= ?)
                     """,
-                    (now_iso, now_iso),
+                    (now_iso, now_iso, now_iso),
                 )
                 return cursor.fetchone()[0]
             finally:

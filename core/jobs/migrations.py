@@ -142,6 +142,9 @@ def _migration_002_persistent_job_queue(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_job_queue_job_id ON job_queue(job_id);",
         "ALTER TABLE job_events ADD COLUMN sequence_number INTEGER NOT NULL DEFAULT 0;",
         "CREATE INDEX IF NOT EXISTS idx_events_job_seq ON job_events(job_id, sequence_number);",
+        "ALTER TABLE job_attempts ADD COLUMN worker_id TEXT;",
+        "ALTER TABLE job_attempts ADD COLUMN lease_generation INTEGER;",
+        "CREATE INDEX IF NOT EXISTS idx_attempts_worker_gen ON job_attempts(worker_id, lease_generation);",
     ]
 
     for stmt in ddl_statements:

@@ -296,6 +296,8 @@ class SQLiteJobRepository(JobRepository):
         self,
         job_id: str,
         execution_id: Optional[str] = None,
+        worker_id: Optional[str] = None,
+        lease_generation: Optional[int] = None,
     ) -> JobAttempt:
         with self._lock:
             conn = self._get_connection()
@@ -318,6 +320,8 @@ class SQLiteJobRepository(JobRepository):
                         attempt_number=next_attempt_number,
                         execution_id=execution_id,
                         status=JobAttemptStatus.PENDING,
+                        worker_id=worker_id,
+                        lease_generation=lease_generation,
                         started_at=current_timestamp_iso(),
                     )
 
@@ -325,8 +329,9 @@ class SQLiteJobRepository(JobRepository):
                         """
                         INSERT INTO job_attempts (
                             attempt_id, job_id, attempt_number, execution_id,
-                            status, started_at, finished_at, failure_classification, failure_message
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            status, worker_id, lease_generation, started_at, finished_at,
+                            failure_classification, failure_message
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             attempt.attempt_id,
@@ -334,6 +339,8 @@ class SQLiteJobRepository(JobRepository):
                             attempt.attempt_number,
                             attempt.execution_id,
                             attempt.status.value,
+                            attempt.worker_id,
+                            attempt.lease_generation,
                             attempt.started_at,
                             attempt.finished_at,
                             attempt.failure_classification,
@@ -342,15 +349,21 @@ class SQLiteJobRepository(JobRepository):
                     )
 
                     # Append attempt event
+                    attempt_metadata: Dict[str, Any] = {
+                        "attempt_number": attempt.attempt_number,
+                        "execution_id": attempt.execution_id,
+                    }
+                    if worker_id:
+                        attempt_metadata["worker_id"] = worker_id
+                    if lease_generation is not None:
+                        attempt_metadata["lease_generation"] = lease_generation
+
                     attempt_event = JobEvent(
                         job_id=job_id,
                         attempt_id=attempt.attempt_id,
                         event_type=JobEventType.ATTEMPT_CREATED,
                         timestamp=attempt.started_at,
-                        metadata={
-                            "attempt_number": attempt.attempt_number,
-                            "execution_id": attempt.execution_id,
-                        },
+                        metadata=attempt_metadata,
                     )
                     self._insert_event(cursor, attempt_event)
 
@@ -378,7 +391,8 @@ class SQLiteJobRepository(JobRepository):
                 cursor.execute(
                     """
                     SELECT attempt_id, job_id, attempt_number, execution_id,
-                           status, started_at, finished_at, failure_classification, failure_message
+                           status, worker_id, lease_generation,
+                           started_at, finished_at, failure_classification, failure_message
                     FROM job_attempts WHERE attempt_id = ?
                     """,
                     (attempt_id,),
@@ -437,7 +451,8 @@ class SQLiteJobRepository(JobRepository):
                 cursor.execute(
                     """
                     SELECT attempt_id, job_id, attempt_number, execution_id,
-                           status, started_at, finished_at, failure_classification, failure_message
+                           status, worker_id, lease_generation,
+                           started_at, finished_at, failure_classification, failure_message
                     FROM job_attempts WHERE job_id = ?
                     ORDER BY attempt_number ASC
                     """,
@@ -772,12 +787,16 @@ class SQLiteJobRepository(JobRepository):
 
     @staticmethod
     def _row_to_attempt(row: sqlite3.Row) -> JobAttempt:
+        worker_id = row["worker_id"] if "worker_id" in row.keys() else None
+        lease_gen = row["lease_generation"] if "lease_generation" in row.keys() else None
         return JobAttempt(
             attempt_id=row["attempt_id"],
             job_id=row["job_id"],
             attempt_number=row["attempt_number"],
             execution_id=row["execution_id"],
             status=JobAttemptStatus(row["status"]),
+            worker_id=worker_id,
+            lease_generation=lease_gen,
             started_at=row["started_at"],
             finished_at=row["finished_at"],
             failure_classification=row["failure_classification"],
