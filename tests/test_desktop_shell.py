@@ -1427,9 +1427,9 @@ def test_task_4_5_cost_dashboard_and_distillation_engine(monkeypatch):
     candidates = resp_candidates.json()
     assert len(candidates) >= 3
     for cand in candidates:
-        assert (
-            cand["monthly_calls"] >= 10000
-        ), "Distillation candidate must have >=10,000 monthly calls (Law 8)"
+        assert cand["monthly_calls"] >= 10000, (
+            "Distillation candidate must have >=10,000 monthly calls (Law 8)"
+        )
         assert cand["teacher_model"] is not None
         assert cand["student_model"] is not None
         assert cand["monthly_savings_usd"] > 0
@@ -1952,9 +1952,9 @@ def test_task_4_8_settings_screen_and_diagnostics_export(tmp_path: Path):
         "appearance",
         "diagnostics",
     ]:
-        assert (
-            f"setActiveTab('{tab}')" in settings_ts
-        ), f"Settings.tsx must have tab switch for {tab}"
+        assert f"setActiveTab('{tab}')" in settings_ts, (
+            f"Settings.tsx must have tab switch for {tab}"
+        )
 
     # 1-click export buttons & disclaimer
     assert "Export Diagnostics (.zip)" in settings_ts
@@ -1992,15 +1992,15 @@ def test_task_4_9_streamlit_demotion_and_process_lifecycle():
     dev_dash = repo_root / "tools" / "dev_dashboard.py"
     assert dev_dash.exists(), "tools/dev_dashboard.py must exist"
     dev_content = dev_dash.read_text()
-    assert (
-        "Developer tool — not for end users" in dev_content
-    ), "tools/dev_dashboard.py must contain prominent developer warning banner"
-    assert (
-        "Tauri Desktop application" in dev_content
-    ), "tools/dev_dashboard.py must reference Tauri Desktop application as official UI"
-    assert (
-        "Developer Notice (F07)" in dev_content
-    ), "tools/dev_dashboard.py must remediate F07 by noting host developer execution"
+    assert "Developer tool — not for end users" in dev_content, (
+        "tools/dev_dashboard.py must contain prominent developer warning banner"
+    )
+    assert "Tauri Desktop application" in dev_content, (
+        "tools/dev_dashboard.py must reference Tauri Desktop application as official UI"
+    )
+    assert "Developer Notice (F07)" in dev_content, (
+        "tools/dev_dashboard.py must remediate F07 by noting host developer execution"
+    )
 
     # server/dashboard.py deprecation shim
     server_dash = repo_root / "server" / "dashboard.py"

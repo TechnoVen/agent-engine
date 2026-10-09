@@ -209,9 +209,9 @@ async def test_no_chunks_emitted_after_cancellation_terminal_event(test_env):
     # Verify no OUTPUT_CHUNK occurs after CANCELLED
     subsequent_events = events_recorded[cancelled_idx + 1 :]
     for ev in subsequent_events:
-        assert (
-            ev.event_type != ExecutionEventType.OUTPUT_CHUNK
-        ), f"Leaked chunk event after CANCELLED: {ev}"
+        assert ev.event_type != ExecutionEventType.OUTPUT_CHUNK, (
+            f"Leaked chunk event after CANCELLED: {ev}"
+        )
 
 
 @pytest.mark.anyio

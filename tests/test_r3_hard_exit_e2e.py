@@ -671,12 +671,12 @@ def test_r3_hard_exit_bypasses_and_legacy_routing_audit():
 
     for py_file in core_dir.rglob("*.py"):
         content = py_file.read_text(encoding="utf-8")
-        assert not direct_client_pattern.search(
-            content
-        ), f"Unauthorized direct client import in {py_file}"
-        assert not direct_completion_pattern.search(
-            content
-        ), f"Unauthorized direct /completion call in {py_file}"
+        assert not direct_client_pattern.search(content), (
+            f"Unauthorized direct client import in {py_file}"
+        )
+        assert not direct_completion_pattern.search(content), (
+            f"Unauthorized direct /completion call in {py_file}"
+        )
 
     # 7. Repository Legacy Routing Audit (CTO Item 6):
     # Proves active production legacy percentage routing = 0.

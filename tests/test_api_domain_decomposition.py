@@ -311,9 +311,9 @@ def test_api_facade_has_no_route_decorators_or_hidden_logic_and_unique_routes():
                     dec_name = decorator.attr
                 elif isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Attribute):
                     dec_name = decorator.func.attr
-                assert (
-                    dec_name not in forbidden_decorators
-                ), f"Found forbidden route decorator @{dec_name} on function {node.name} in api.py"
+                assert dec_name not in forbidden_decorators, (
+                    f"Found forbidden route decorator @{dec_name} on function {node.name} in api.py"
+                )
 
     # Verify route uniqueness on the created FastAPI app
     app = create_app()
@@ -333,9 +333,9 @@ def test_api_facade_has_no_route_decorators_or_hidden_logic_and_unique_routes():
     # Include root healthz probe
     all_route_signatures.append(("GET", "/healthz"))
 
-    assert (
-        len(all_route_signatures) == 178
-    ), f"Expected 178 total route operations, got {len(all_route_signatures)}"
-    assert (
-        len(set(all_route_signatures)) == 178
-    ), f"Detected duplicate route registrations: {len(all_route_signatures) - len(set(all_route_signatures))}"
+    assert len(all_route_signatures) == 178, (
+        f"Expected 178 total route operations, got {len(all_route_signatures)}"
+    )
+    assert len(set(all_route_signatures)) == 178, (
+        f"Detected duplicate route registrations: {len(all_route_signatures) - len(set(all_route_signatures))}"
+    )

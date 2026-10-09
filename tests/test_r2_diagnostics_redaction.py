@@ -789,12 +789,12 @@ def test_production_seeded_canary_export_artifact_comprehensive(
 
             # Check decompressed contents: EXACTLY 0 occurrences of all 17 seeded canaries!
             for name, val in canaries.items():
-                assert (
-                    val.encode("utf-8") not in raw_bytes
-                ), f"Canary '{name}' leaked in decompressed bytes of {member_name}!"
-                assert (
-                    val not in raw_text
-                ), f"Canary '{name}' leaked in decoded text of {member_name}!"
+                assert val.encode("utf-8") not in raw_bytes, (
+                    f"Canary '{name}' leaked in decompressed bytes of {member_name}!"
+                )
+                assert val not in raw_text, (
+                    f"Canary '{name}' leaked in decoded text of {member_name}!"
+                )
 
     # 2. Raw Archive Bytes Scan (defense-in-depth check)
     raw_archive_str = bundle.payload_bytes.decode("latin-1")

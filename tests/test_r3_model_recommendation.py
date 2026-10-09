@@ -165,9 +165,9 @@ def test_02_kv_cache_monotonic_scaling_and_unknowns():
     bytes_sequence = [calculate_model_kv_cache_bytes(meta, t) for t in tokens_sequence]
 
     for i in range(len(bytes_sequence) - 1):
-        assert (
-            bytes_sequence[i] < bytes_sequence[i + 1]
-        ), f"KV cache must scale strictly monotonically: {bytes_sequence[i]} < {bytes_sequence[i + 1]}"
+        assert bytes_sequence[i] < bytes_sequence[i + 1], (
+            f"KV cache must scale strictly monotonically: {bytes_sequence[i]} < {bytes_sequence[i + 1]}"
+        )
 
     # Fallback / Unknown architecture metadata must yield 0 and not guess
     assert calculate_model_kv_cache_bytes(None, 4096) == 0

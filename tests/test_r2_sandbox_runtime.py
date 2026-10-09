@@ -87,9 +87,9 @@ def test_01_external_process_separation(sandbox_service: SandboxService, temp_wo
     worker_pid = int(res.stdout.strip())
     parent_pid = os.getpid()
 
-    assert (
-        worker_pid != parent_pid
-    ), f"Worker executed in parent process! worker_pid={worker_pid}, parent_pid={parent_pid}"
+    assert worker_pid != parent_pid, (
+        f"Worker executed in parent process! worker_pid={worker_pid}, parent_pid={parent_pid}"
+    )
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Bubblewrap requires Linux")

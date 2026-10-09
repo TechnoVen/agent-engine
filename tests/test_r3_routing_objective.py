@@ -1014,9 +1014,9 @@ def test_31_monotonicity_of_cost_latency_and_quality_utilities():
         cost_utils.append(u)
 
     for i in range(len(cost_utils) - 1):
-        assert (
-            cost_utils[i] >= cost_utils[i + 1]
-        ), f"Cost utility violation: {cost_utils[i]} < {cost_utils[i + 1]}"
+        assert cost_utils[i] >= cost_utils[i + 1], (
+            f"Cost utility violation: {cost_utils[i]} < {cost_utils[i + 1]}"
+        )
 
     # 2. Latency Monotonicity: Lower latency never produces worse latency utility
     lats = [50.0, 200.0, 800.0, 2500.0, 5000.0, 8000.0]
@@ -1029,9 +1029,9 @@ def test_31_monotonicity_of_cost_latency_and_quality_utilities():
         lat_utils.append(u)
 
     for i in range(len(lat_utils) - 1):
-        assert (
-            lat_utils[i] >= lat_utils[i + 1]
-        ), f"Latency utility violation: {lat_utils[i]} < {lat_utils[i + 1]}"
+        assert lat_utils[i] >= lat_utils[i + 1], (
+            f"Latency utility violation: {lat_utils[i]} < {lat_utils[i + 1]}"
+        )
 
     # 3. Quality Monotonicity: Higher quality score never produces worse quality utility
     class QualityStorage:
@@ -1051,9 +1051,9 @@ def test_31_monotonicity_of_cost_latency_and_quality_utilities():
         qual_utils.append(u)
 
     for i in range(len(qual_utils) - 1):
-        assert (
-            qual_utils[i] <= qual_utils[i + 1]
-        ), f"Quality utility violation: {qual_utils[i]} > {qual_utils[i + 1]}"
+        assert qual_utils[i] <= qual_utils[i + 1], (
+            f"Quality utility violation: {qual_utils[i]} > {qual_utils[i + 1]}"
+        )
 
 
 # ------------------------------------------------------------------------------

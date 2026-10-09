@@ -279,9 +279,9 @@ def test_11_production_cors_rejects_arbitrary_localhost_ports():
             "/healthz",
             headers={"Origin": origin, "Access-Control-Request-Method": "GET"},
         )
-        assert (
-            res.headers.get("access-control-allow-origin") is None
-        ), f"Production CORS should not allow arbitrary port {origin}"
+        assert res.headers.get("access-control-allow-origin") is None, (
+            f"Production CORS should not allow arbitrary port {origin}"
+        )
 
 
 def test_12_development_cors_allows_configured_dev_origins():
@@ -302,9 +302,9 @@ def test_12_development_cors_allows_configured_dev_origins():
             "/healthz",
             headers={"Origin": origin, "Access-Control-Request-Method": "GET"},
         )
-        assert (
-            res.headers.get("access-control-allow-origin") == origin
-        ), f"Dev CORS should allow dev server origin {origin}"
+        assert res.headers.get("access-control-allow-origin") == origin, (
+            f"Dev CORS should allow dev server origin {origin}"
+        )
 
 
 def test_13_hostile_web_origins_rejected_in_both_modes():
@@ -325,9 +325,9 @@ def test_13_hostile_web_origins_rejected_in_both_modes():
                 "/healthz",
                 headers={"Origin": origin, "Access-Control-Request-Method": "GET"},
             )
-            assert (
-                res.headers.get("access-control-allow-origin") is None
-            ), f"Hostile origin {origin} must be rejected in {env_mode} mode"
+            assert res.headers.get("access-control-allow-origin") is None, (
+                f"Hostile origin {origin} must be rejected in {env_mode} mode"
+            )
 
 
 def test_14_token_redaction_utility():

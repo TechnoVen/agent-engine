@@ -161,10 +161,10 @@ def test_api_openapi_matches_frozen_spec():
     app_schema = app.openapi()
     for path, methods in frozen_spec["paths"].items():
         v1_path = f"/v1{path}" if not path.startswith("/v1") else path
-        assert (
-            v1_path in app_schema["paths"]
-        ), f"FastAPI app missing route from frozen spec: {v1_path}"
+        assert v1_path in app_schema["paths"], (
+            f"FastAPI app missing route from frozen spec: {v1_path}"
+        )
         for method in methods.keys():
-            assert (
-                method.lower() in app_schema["paths"][v1_path]
-            ), f"FastAPI app missing method {method.upper()} on route {v1_path}"
+            assert method.lower() in app_schema["paths"][v1_path], (
+                f"FastAPI app missing method {method.upper()} on route {v1_path}"
+            )

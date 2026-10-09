@@ -1,7 +1,7 @@
 # Agent Engine — Canonical Implementation Status & Capability Matrix
 
 > **Status:** Authoritative Implementation Reality  
-> **Updated:** October 7, 2026 (Milestone R2 Formally Closed at S1 per CTO Review)  
+> **Updated:** October 9, 2026 (Milestone R3 Model & Resource Hub CLOSED / FROZEN FOR 0.5 AT S1 per CTO Review)  
 > **Governing Release:** 0.5 Nadir Founder MVP  
 
 ---
@@ -606,7 +606,9 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
 
 ## 7. Canonical Task Tracking Matrix (Stage R3 — Model Layer & Routing Convergence)
 
-> **Milestone R3 Status:** R3 closed at S1: Implemented and implementation-tested only, not integrated/production/release verified.
+> **Milestone R3 Status:** R3 — Model & Resource Hub  
+> **Status:** CLOSED / FROZEN FOR 0.5 AT S1  
+> **Maturity Definition:** S1 = Implemented and implementation-tested only, not integrated/production/release verified.
 
 ```yaml
 - id: R3.1
