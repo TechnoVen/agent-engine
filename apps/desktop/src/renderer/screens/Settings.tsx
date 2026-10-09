@@ -23,14 +23,24 @@ import {
   HardDrive,
   Zap,
   Download,
-  Sliders,
   Bell,
   Palette,
   Terminal,
-  FileText,
   Clock,
+  Info,
+  SlidersHorizontal,
 } from 'lucide-react';
-import { Mode, ModelTier, CredentialItem, CredentialTestResult, HardwareTelemetry, AppSettings, ProviderConnectionVerification } from '../types';
+import {
+  Mode,
+  ModelTier,
+  CredentialItem,
+  CredentialTestResult,
+  HardwareTelemetry,
+  AppSettings,
+  ProviderConnectionVerification,
+  PrivacyBoundary,
+  RoutingObjective,
+} from '../types';
 import { sidecarClient } from '../api/client';
 import { LocalModelRecommendations } from '../components/LocalModelRecommendations';
 
@@ -127,38 +137,105 @@ const PROVIDERS: ProviderConfig[] = [
 ];
 
 export type SettingsTab =
-  | 'providers'
+  | 'general'
+  | 'appearance'
   | 'models'
+  | 'connections'
+  | 'storage'
+  | 'security'
+  | 'notifications'
+  | 'developer'
+  | 'about'
+  // Legacy aliases for backward compatibility with existing tests and deep links:
+  | 'providers'
   | 'local'
   | 'adapters'
   | 'channels'
-  | 'storage'
-  | 'security'
-  | 'appearance'
   | 'diagnostics';
 
 const getInitialTab = (): SettingsTab => {
   const hash = typeof window !== 'undefined' ? window.location.hash : '';
   const match = hash.match(/[?&]tab=([a-z]+)/);
-  const validTabs: SettingsTab[] = [
-    'providers',
-    'models',
-    'local',
-    'adapters',
-    'channels',
-    'storage',
-    'security',
-    'appearance',
-    'diagnostics',
-  ];
-  if (match && validTabs.includes(match[1] as SettingsTab)) {
-    return match[1] as SettingsTab;
+  if (match) {
+    const raw = match[1];
+    if (raw === 'providers' || raw === 'adapters') return 'connections';
+    if (raw === 'local') return 'models';
+    if (raw === 'channels') return 'notifications';
+    if (raw === 'diagnostics') return 'developer';
+    const canonicalTabs: SettingsTab[] = [
+      'general',
+      'appearance',
+      'models',
+      'connections',
+      'storage',
+      'security',
+      'notifications',
+      'developer',
+      'about',
+    ];
+    if (canonicalTabs.includes(raw as SettingsTab)) {
+      return raw as SettingsTab;
+    }
   }
-  return 'providers';
+  return 'general';
 };
 
 export const Settings: React.FC<SettingsProps> = () => {
   const [activeTab, setActiveTab] = useState<SettingsTab>(getInitialTab);
+  const [connectionSubTab, setConnectionSubTab] = useState<'providers' | 'adapters'>('providers');
+  const [routingObjective, setRoutingObjective] = useState<RoutingObjective>(() => {
+    return (localStorage.getItem('ae_routing_objective') as RoutingObjective) || 'balanced';
+  });
+  const [privacyBoundary, setPrivacyBoundary] = useState<PrivacyBoundary>(() => {
+    return (localStorage.getItem('ae_privacy_boundary') as PrivacyBoundary) || 'local_only';
+  });
+  const [workspacePath, setWorkspacePath] = useState<string>(() => {
+    return localStorage.getItem('ae_workspace_path') || '~/code/agent_engine';
+  });
+  const [startupBehavior, setStartupBehavior] = useState<string>(() => {
+    return localStorage.getItem('ae_startup_behavior') || 'restore_session';
+  });
+  const [language, setLanguage] = useState<string>('en-US');
+
+  const handleSelectRoutingObjective = (obj: RoutingObjective) => {
+    setRoutingObjective(obj);
+    localStorage.setItem('ae_routing_objective', obj);
+    window.dispatchEvent(new CustomEvent('routing-objective-changed', { detail: obj }));
+    showToast(`Routing strategy set to ${obj.replace('_', ' ').toUpperCase()}`);
+  };
+
+  const handleSelectPrivacyBoundary = (boundary: PrivacyBoundary) => {
+    setPrivacyBoundary(boundary);
+    localStorage.setItem('ae_privacy_boundary', boundary);
+    window.dispatchEvent(new CustomEvent('privacy-boundary-changed', { detail: boundary }));
+    showToast(`Privacy boundary set to ${boundary.replace('_', ' ').toUpperCase()}`);
+  };
+
+  // Backward compatibility alias handler for legacy tests and deep links:
+  const handleSelectLegacyTab = (legacy: string) => {
+    switch (legacy) {
+      case 'providers':
+        setActiveTab('providers');
+        setConnectionSubTab('providers');
+        break;
+      case 'adapters':
+        setActiveTab('adapters');
+        setConnectionSubTab('adapters');
+        break;
+      case 'local':
+        setActiveTab('local');
+        break;
+      case 'channels':
+        setActiveTab('channels');
+        break;
+      case 'diagnostics':
+        setActiveTab('diagnostics');
+        break;
+      default:
+        break;
+    }
+  };
+
   const [credentials, setCredentials] = useState<Record<string, CredentialItem>>({});
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
   const [baseUrlInputs, setBaseUrlInputs] = useState<Record<string, string>>({});
@@ -209,8 +286,12 @@ export const Settings: React.FC<SettingsProps> = () => {
 
   useEffect(() => {
     const handleHashChange = () => {
-      const tab = getInitialTab();
-      setActiveTab(tab);
+      const match = window.location.hash.match(/[?&]tab=([a-z]+)/);
+      if (match) {
+        handleSelectLegacyTab(match[1]);
+      } else {
+        setActiveTab(getInitialTab());
+      }
     };
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
@@ -483,9 +564,9 @@ export const Settings: React.FC<SettingsProps> = () => {
             <SettingsIcon className="w-4 h-4" />
           </div>
           <div>
-            <h1 className="text-base font-bold text-text-primary">Settings & LLM Providers</h1>
+            <h1 className="text-base font-bold text-text-primary">Settings</h1>
             <p className="text-xs text-text-tertiary">
-              Manage LLM inference endpoints, OS keychain credentials, security boundaries, and telemetry.
+              Configure model routing, connections, security boundaries, and workspace preferences.
             </p>
           </div>
         </div>
@@ -493,62 +574,54 @@ export const Settings: React.FC<SettingsProps> = () => {
         {/* Tab Switcher Pills */}
         <div className="flex items-center gap-1 p-1 bg-bg-surface rounded-lg border border-border-subtle overflow-x-auto max-w-full">
           <button
-            onClick={() => setActiveTab('providers')}
+            onClick={() => setActiveTab('general')}
             className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 ${
-              activeTab === 'providers'
+              activeTab === 'general'
                 ? 'bg-accent text-white shadow-sm'
                 : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
             }`}
           >
-            <Key className="w-3.5 h-3.5" />
-            Providers & Keys
+            <SlidersHorizontal className="w-3.5 h-3.5" />
+            General
+          </button>
+          <button
+            onClick={() => setActiveTab('appearance')}
+            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 ${
+              activeTab === 'appearance'
+                ? 'bg-accent text-white shadow-sm'
+                : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+            }`}
+          >
+            <Palette className="w-3.5 h-3.5" />
+            Appearance
           </button>
           <button
             onClick={() => setActiveTab('models')}
             className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 ${
-              activeTab === 'models'
-                ? 'bg-accent text-white shadow-sm'
-                : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
-            }`}
-          >
-            <Sliders className="w-3.5 h-3.5" />
-            Models
-          </button>
-          <button
-            onClick={() => setActiveTab('local')}
-            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 ${
-              activeTab === 'local'
+              activeTab === 'models' || activeTab === 'local'
                 ? 'bg-accent text-white shadow-sm'
                 : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
             }`}
           >
             <Cpu className="w-3.5 h-3.5" />
-            Local Runtime & Hardware
+            Models
             {hardwareTelem?.vram_warning && (
               <span className="w-2 h-2 rounded-full bg-danger animate-pulse" />
             )}
           </button>
           <button
-            onClick={() => setActiveTab('adapters')}
+            onClick={() => {
+              setActiveTab('connections');
+              setConnectionSubTab('providers');
+            }}
             className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 ${
-              activeTab === 'adapters'
+              activeTab === 'connections' || activeTab === 'providers' || activeTab === 'adapters'
                 ? 'bg-accent text-white shadow-sm'
                 : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
             }`}
           >
-            <Terminal className="w-3.5 h-3.5" />
-            Adapters
-          </button>
-          <button
-            onClick={() => setActiveTab('channels')}
-            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 ${
-              activeTab === 'channels'
-                ? 'bg-accent text-white shadow-sm'
-                : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
-            }`}
-          >
-            <Bell className="w-3.5 h-3.5" />
-            Channels
+            <Key className="w-3.5 h-3.5" />
+            Connections
           </button>
           <button
             onClick={() => setActiveTab('storage')}
@@ -573,26 +646,37 @@ export const Settings: React.FC<SettingsProps> = () => {
             Security
           </button>
           <button
-            onClick={() => setActiveTab('appearance')}
+            onClick={() => setActiveTab('notifications')}
             className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 ${
-              activeTab === 'appearance'
+              activeTab === 'notifications' || activeTab === 'channels'
                 ? 'bg-accent text-white shadow-sm'
                 : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
             }`}
           >
-            <Palette className="w-3.5 h-3.5" />
-            Appearance
+            <Bell className="w-3.5 h-3.5" />
+            Notifications
           </button>
           <button
-            onClick={() => setActiveTab('diagnostics')}
+            onClick={() => setActiveTab('developer')}
             className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 ${
-              activeTab === 'diagnostics'
+              activeTab === 'developer' || activeTab === 'diagnostics'
                 ? 'bg-accent text-white shadow-sm'
                 : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
             }`}
           >
-            <FileText className="w-3.5 h-3.5" />
-            Diagnostics
+            <Terminal className="w-3.5 h-3.5" />
+            Developer
+          </button>
+          <button
+            onClick={() => setActiveTab('about')}
+            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 ${
+              activeTab === 'about'
+                ? 'bg-accent text-white shadow-sm'
+                : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+            }`}
+          >
+            <Info className="w-3.5 h-3.5" />
+            About
           </button>
         </div>
       </div>
@@ -628,16 +712,153 @@ export const Settings: React.FC<SettingsProps> = () => {
             </button>
           </div>
 
-          {activeTab === 'providers' && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
+          {activeTab === 'general' && (
+            <div className="p-6 rounded-xl bg-bg-elevated border border-border-subtle space-y-6">
+              <div className="flex items-center justify-between border-b border-border-subtle pb-4">
                 <div>
-                  <h2 className="text-sm font-bold text-text-primary">Configured Providers</h2>
-                  <p className="text-xs text-text-tertiary">
-                    Configure API keys, local runtime endpoints, and test live roundtrip connectivity.
+                  <h2 className="text-sm font-bold text-text-primary flex items-center gap-2">
+                    <SlidersHorizontal className="w-4 h-4 text-accent" />
+                    General Preferences
+                  </h2>
+                  <p className="text-xs text-text-secondary mt-1">
+                    Configure default workspace directory, startup behavior, and local environment settings.
                   </p>
                 </div>
+                <button
+                  onClick={() => {
+                    localStorage.setItem('ae_workspace_path', workspacePath);
+                    localStorage.setItem('ae_startup_behavior', startupBehavior);
+                    showToast('General preferences saved successfully.');
+                  }}
+                  className="px-3.5 py-1.5 rounded-lg bg-accent text-white text-xs font-semibold hover:bg-accent-hover transition-colors flex items-center gap-2 shadow-sm"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  Save General
+                </button>
               </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5 text-xs">
+                <div className="space-y-1.5">
+                  <label className="text-text-primary font-medium">Default Workspace Directory</label>
+                  <input
+                    type="text"
+                    value={workspacePath}
+                    onChange={(e) => setWorkspacePath(e.target.value)}
+                    placeholder="~/code/agent_engine"
+                    className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
+                  />
+                  <p className="text-[11px] text-text-tertiary">
+                    Primary project root opened when launching Agent Engine desktop shell.
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-text-primary font-medium">Startup Behavior</label>
+                  <select
+                    value={startupBehavior}
+                    onChange={(e) => setStartupBehavior(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
+                  >
+                    <option value="restore_session">Restore Last Active Session</option>
+                    <option value="blank_prompt">Open Blank Prompt Workspace</option>
+                    <option value="recent_list">Show Recent Tasks Directory</option>
+                  </select>
+                  <p className="text-[11px] text-text-tertiary">
+                    Action performed when the desktop application launches.
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-text-primary font-medium">Interface Language</label>
+                  <select
+                    value={language}
+                    onChange={(e) => setLanguage(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
+                  >
+                    <option value="en-US">English (US) — Canonical</option>
+                    <option value="es" disabled>Español (Coming later)</option>
+                    <option value="de" disabled>Deutsch (Coming later)</option>
+                    <option value="ja" disabled>日本語 (Coming later)</option>
+                  </select>
+                  <p className="text-[11px] text-text-tertiary">
+                    Desktop shell localization language (Release 0.5 is English-only).
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-text-primary font-medium">Application Updates Channel</label>
+                  <div className="p-3 rounded-lg bg-bg-base border border-border-subtle flex items-center justify-between">
+                    <div>
+                      <div className="font-semibold text-text-primary">Founder Release Channel</div>
+                      <div className="text-[11px] text-text-tertiary">Version 0.5 Nadir Edition (Local IPC)</div>
+                    </div>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-accent/15 text-accent border border-accent/30 font-semibold">
+                      Up to date
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {(activeTab === 'connections' || activeTab === 'providers' || activeTab === 'adapters') && (
+            <div className="space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-border-subtle">
+                <div>
+                  <h2 className="text-sm font-bold text-text-primary flex items-center gap-2">
+                    <Key className="w-4 h-4 text-accent" />
+                    Connections & Tool Adapters
+                  </h2>
+                  <p className="text-xs text-text-tertiary">
+                    Configure LLM provider endpoints, OS keychain credentials, canary connectivity, and tool adapters.
+                  </p>
+                </div>
+
+                {/* Sub-tab segmented pills */}
+                <div className="flex items-center gap-1 p-1 bg-bg-surface rounded-lg border border-border-subtle">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConnectionSubTab('providers');
+                      if (activeTab === 'adapters') setActiveTab('connections');
+                    }}
+                    className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 ${
+                      (activeTab === 'adapters' ? false : connectionSubTab === 'providers')
+                        ? 'bg-accent text-white shadow-sm'
+                        : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+                    }`}
+                  >
+                    <Globe className="w-3.5 h-3.5" />
+                    AI Providers ({Object.keys(credentials).length}/{PROVIDERS.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConnectionSubTab('adapters');
+                      if (activeTab === 'providers') setActiveTab('connections');
+                    }}
+                    className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 ${
+                      (activeTab === 'adapters' || (activeTab !== 'providers' && connectionSubTab === 'adapters'))
+                        ? 'bg-accent text-white shadow-sm'
+                        : 'text-text-secondary hover:text-text-primary hover:bg-bg-hover'
+                    }`}
+                  >
+                    <Terminal className="w-3.5 h-3.5" />
+                    Tool Adapters (6)
+                  </button>
+                </div>
+              </div>
+
+              {(activeTab === 'adapters' ? false : connectionSubTab === 'providers') && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-xs font-bold text-text-primary uppercase tracking-wider">Configured AI Providers</h3>
+                      <p className="text-[11px] text-text-tertiary">
+                        Configure API keys, local runtime endpoints, and test live canary roundtrip connectivity.
+                      </p>
+                    </div>
+                  </div>
 
               {/* Provider Cards Grid */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -898,143 +1119,377 @@ export const Settings: React.FC<SettingsProps> = () => {
             </div>
           )}
 
-          {activeTab === 'models' && (
-            <div className="p-6 rounded-xl bg-bg-elevated border border-border-subtle space-y-6">
-              <div className="flex items-center justify-between border-b border-border-subtle pb-4">
-                <div>
-                  <h2 className="text-sm font-bold text-text-primary flex items-center gap-2">
-                    <Sliders className="w-4 h-4 text-accent" />
-                    Model Routing & Context Parameters
-                  </h2>
-                  <p className="text-xs text-text-secondary mt-1">
-                    Configure Law 1 tiered routing thresholds, default inference models, and context limitations.
-                  </p>
+            {(activeTab === 'adapters' || (activeTab !== 'providers' && connectionSubTab === 'adapters')) && (
+              <div className="p-6 rounded-xl bg-bg-elevated border border-border-subtle space-y-6">
+                <div className="flex items-center justify-between border-b border-border-subtle pb-4">
+                  <div>
+                    <h2 className="text-sm font-bold text-text-primary flex items-center gap-2">
+                      <Terminal className="w-4 h-4 text-accent" />
+                      Tool Adapters & Connectors
+                    </h2>
+                    <p className="text-xs text-text-secondary mt-1">
+                      Manage execution adapters, Model Context Protocol (MCP), and external coding agent integrations.
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleSaveAppSettings}
+                    disabled={savingSettings || !appSettings}
+                    className="px-3.5 py-1.5 rounded-lg bg-accent text-white text-xs font-semibold hover:bg-accent-hover transition-colors flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {savingSettings ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                    Save Adapters
+                  </button>
                 </div>
-                <button
-                  onClick={handleSaveAppSettings}
-                  disabled={savingSettings || !appSettings}
-                  className="px-3.5 py-1.5 rounded-lg bg-accent text-white text-xs font-semibold hover:bg-accent-hover transition-colors flex items-center gap-2 disabled:opacity-50"
-                >
-                  {savingSettings ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                  Save Models
-                </button>
+
+                {appSettings && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                    <label className="flex items-center gap-3 p-3.5 rounded-lg bg-bg-surface border border-border-subtle cursor-pointer hover:border-accent/40 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={appSettings.adapters.mcp_enabled}
+                        onChange={(e) =>
+                          setAppSettings({
+                            ...appSettings,
+                            adapters: { ...appSettings.adapters, mcp_enabled: e.target.checked },
+                          })
+                        }
+                        className="rounded accent-accent w-4 h-4"
+                      />
+                      <div>
+                        <div className="font-semibold text-text-primary">Model Context Protocol (MCP)</div>
+                        <div className="text-[11px] text-text-tertiary">Allow agents to discover and call MCP tools.</div>
+                      </div>
+                    </label>
+
+                    <label className="flex items-center gap-3 p-3.5 rounded-lg bg-bg-surface border border-border-subtle cursor-pointer hover:border-accent/40 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={appSettings.adapters.claude_code_adapter}
+                        onChange={(e) =>
+                          setAppSettings({
+                            ...appSettings,
+                            adapters: { ...appSettings.adapters, claude_code_adapter: e.target.checked },
+                          })
+                        }
+                        className="rounded accent-accent w-4 h-4"
+                      />
+                      <div>
+                        <div className="font-semibold text-text-primary">Claude Code Adapter</div>
+                        <div className="text-[11px] text-text-tertiary">Enable bridge to Anthropic Claude Code commands.</div>
+                      </div>
+                    </label>
+
+                    <label className="flex items-center gap-3 p-3.5 rounded-lg bg-bg-surface border border-border-subtle cursor-pointer hover:border-accent/40 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={appSettings.adapters.codex_adapter}
+                        onChange={(e) =>
+                          setAppSettings({
+                            ...appSettings,
+                            adapters: { ...appSettings.adapters, codex_adapter: e.target.checked },
+                          })
+                        }
+                        className="rounded accent-accent w-4 h-4"
+                      />
+                      <div>
+                        <div className="font-semibold text-text-primary">Codex CLI Adapter</div>
+                        <div className="text-[11px] text-text-tertiary">OpenAI Codex syntax transform & tool pipeline.</div>
+                      </div>
+                    </label>
+
+                    <label className="flex items-center gap-3 p-3.5 rounded-lg bg-bg-surface border border-border-subtle cursor-pointer hover:border-accent/40 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={appSettings.adapters.openclaw_adapter}
+                        onChange={(e) =>
+                          setAppSettings({
+                            ...appSettings,
+                            adapters: { ...appSettings.adapters, openclaw_adapter: e.target.checked },
+                          })
+                        }
+                        className="rounded accent-accent w-4 h-4"
+                      />
+                      <div>
+                        <div className="font-semibold text-text-primary">OpenClaw Autonomous Crawler</div>
+                        <div className="text-[11px] text-text-tertiary">Autonomous repository mapping adapter.</div>
+                      </div>
+                    </label>
+
+                    <label className="flex items-center gap-3 p-3.5 rounded-lg bg-bg-surface border border-border-subtle cursor-pointer hover:border-accent/40 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={appSettings.adapters.goose_adapter}
+                        onChange={(e) =>
+                          setAppSettings({
+                            ...appSettings,
+                            adapters: { ...appSettings.adapters, goose_adapter: e.target.checked },
+                          })
+                        }
+                        className="rounded accent-accent w-4 h-4"
+                      />
+                      <div>
+                        <div className="font-semibold text-text-primary">Goose Agent Adapter</div>
+                        <div className="text-[11px] text-text-tertiary">Block Goose protocol bridge & extensions.</div>
+                      </div>
+                    </label>
+
+                    <label className="flex items-center gap-3 p-3.5 rounded-lg bg-bg-surface border border-border-subtle cursor-pointer hover:border-accent/40 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={appSettings.adapters.cursor_adapter}
+                        onChange={(e) =>
+                          setAppSettings({
+                            ...appSettings,
+                            adapters: { ...appSettings.adapters, cursor_adapter: e.target.checked },
+                          })
+                        }
+                        className="rounded accent-accent w-4 h-4"
+                      />
+                      <div>
+                        <div className="font-semibold text-text-primary">Cursor IDE Adapter</div>
+                        <div className="text-[11px] text-text-tertiary">Bi-directional editor patch sync.</div>
+                      </div>
+                    </label>
+                  </div>
+                )}
               </div>
+            )}
+          </div>
+        )}
 
-              {appSettings && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-5 text-xs">
-                  <div className="space-y-1.5">
-                    <label className="text-text-primary font-medium">Default Model Tier</label>
-                    <select
-                      value={appSettings.models.default_tier}
-                      onChange={(e) =>
-                        setAppSettings({
-                          ...appSettings,
-                          models: { ...appSettings.models, default_tier: e.target.value as ModelTier },
-                        })
-                      }
-                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
-                    >
-                      <option value="instant">Instant (Deterministic / Local)</option>
-                      <option value="swarm">Swarm (Mid-Tier Reasoning)</option>
-                      <option value="reasoning">Reasoning (Frontier)</option>
-                    </select>
-                    <p className="text-[11px] text-text-tertiary">Tier 1: 90% deterministic cache / local inference model.</p>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-text-primary font-medium">Fallback Model Tier</label>
-                    <select
-                      value={appSettings.models.fallback_tier}
-                      onChange={(e) =>
-                        setAppSettings({
-                          ...appSettings,
-                          models: { ...appSettings.models, fallback_tier: e.target.value as ModelTier },
-                        })
-                      }
-                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
-                    >
-                      <option value="instant">Instant (Deterministic / Local)</option>
-                      <option value="swarm">Swarm (Mid-Tier Reasoning)</option>
-                      <option value="reasoning">Reasoning (Frontier)</option>
-                    </select>
-                    <p className="text-[11px] text-text-tertiary">Tier 2: 9% mid-tier reasoning model for failover.</p>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-text-primary font-medium">Max Context Tokens</label>
-                    <input
-                      type="number"
-                      value={appSettings.models.max_context_tokens}
-                      onChange={(e) =>
-                        setAppSettings({
-                          ...appSettings,
-                          models: { ...appSettings.models, max_context_tokens: parseInt(e.target.value) || 4000 },
-                        })
-                      }
-                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
-                    />
-                    <p className="text-[11px] text-text-tertiary">Token budget allocated before context pruning.</p>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-text-primary font-medium">Hard Ceiling Tokens</label>
-                    <input
-                      type="number"
-                      value={appSettings.models.hard_ceiling_tokens}
-                      onChange={(e) =>
-                        setAppSettings({
-                          ...appSettings,
-                          models: { ...appSettings.models, hard_ceiling_tokens: parseInt(e.target.value) || 32000 },
-                        })
-                      }
-                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
-                    />
-                    <p className="text-[11px] text-text-tertiary">Maximum token ceiling per task invocation.</p>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-text-primary font-medium">Temperature: {appSettings.models.temperature}</label>
-                    <input
-                      type="range"
-                      min="0.0"
-                      max="1.0"
-                      step="0.05"
-                      value={appSettings.models.temperature}
-                      onChange={(e) =>
-                        setAppSettings({
-                          ...appSettings,
-                          models: { ...appSettings.models, temperature: parseFloat(e.target.value) },
-                        })
-                      }
-                      className="w-full accent-accent"
-                    />
-                    <p className="text-[11px] text-text-tertiary">0.0 for deterministic code, 0.7 for creative generation.</p>
-                  </div>
-
-                  <label className="flex items-center gap-3 p-3.5 rounded-lg bg-bg-surface border border-border-subtle cursor-pointer hover:border-accent/40 transition-colors">
-                    <input
-                      type="checkbox"
-                      checked={appSettings.models.bypass_cache}
-                      onChange={(e) =>
-                        setAppSettings({
-                          ...appSettings,
-                          models: { ...appSettings.models, bypass_cache: e.target.checked },
-                        })
-                      }
-                      className="rounded accent-accent w-4 h-4"
-                    />
-                    <div>
-                      <div className="font-semibold text-text-primary">Bypass Prompt Cache</div>
-                      <div className="text-[11px] text-text-tertiary">Force direct model generation without checking deterministic cache.</div>
-                    </div>
-                  </label>
-                </div>
-              )}
-            </div>
-          )}
-
-          {activeTab === 'local' && (
+          {(activeTab === 'models' || activeTab === 'local') && (
             <div className="space-y-6">
+              <div className="p-6 rounded-xl bg-bg-elevated border border-border-subtle space-y-6">
+                <div className="flex items-center justify-between border-b border-border-subtle pb-4">
+                  <div>
+                    <h2 className="text-sm font-bold text-text-primary flex items-center gap-2">
+                      <Cpu className="w-4 h-4 text-accent" />
+                      Model Routing & Execution Truth
+                    </h2>
+                    <p className="text-xs text-text-secondary mt-1">
+                      Configure autonomous routing strategy, privacy boundaries, and task context limits.
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleSaveAppSettings}
+                    disabled={savingSettings || !appSettings}
+                    className="px-3.5 py-1.5 rounded-lg bg-accent text-white text-xs font-semibold hover:bg-accent-hover transition-colors flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {savingSettings ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                    Save Models
+                  </button>
+                </div>
+
+                {/* Routing Strategy Cards */}
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold text-text-primary">
+                    Routing Strategy
+                  </label>
+                  <p className="text-[11px] text-text-tertiary mb-2">
+                    Determines model selection trade-offs between accuracy, speed, cost, and local isolation.
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                    {[
+                      { id: 'balanced', label: 'Balanced', desc: 'Balances quality, cost and responsiveness.' },
+                      { id: 'quality_first', label: 'Quality First', desc: 'Prioritizes reasoning capability and accuracy.' },
+                      { id: 'cost_first', label: 'Cost First', desc: 'Prioritizes lowest cost and local execution.' },
+                      { id: 'latency_first', label: 'Latency First', desc: 'Prioritizes fastest time-to-first-token.' },
+                    ].map((opt) => {
+                      const isSelected = routingObjective === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => handleSelectRoutingObjective(opt.id as RoutingObjective)}
+                          className={`p-3.5 rounded-xl text-left border transition-all flex flex-col justify-between ${
+                            isSelected
+                              ? 'bg-accent/10 border-accent text-text-primary ring-1 ring-accent'
+                              : 'bg-bg-surface border-border-subtle text-text-secondary hover:text-text-primary hover:border-border-strong'
+                          }`}
+                        >
+                          <div>
+                            <div className="font-bold text-xs flex items-center justify-between">
+                              <span>{opt.label}</span>
+                              {isSelected && <CheckCircle2 className="w-3.5 h-3.5 text-accent" />}
+                            </div>
+                            <div className="text-[11px] text-text-tertiary mt-1 leading-snug">
+                              {opt.desc}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Privacy Boundary Cards */}
+                <div className="space-y-2 pt-2 border-t border-border-subtle">
+                  <label className="text-xs font-semibold text-text-primary">
+                    Privacy Boundary
+                  </label>
+                  <p className="text-[11px] text-text-tertiary mb-2">
+                    Defines strict network boundaries and external API access for model inference.
+                  </p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                    {[
+                      { id: 'local_only', label: 'Local Only', desc: 'Task data stays on this device. Zero cloud API calls.' },
+                      { id: 'approved_cloud', label: 'Approved Cloud', desc: 'Only cloud providers explicitly configured & verified may receive task data.' },
+                      { id: 'any_configured', label: 'Any Configured', desc: 'Any configured provider endpoint may be selected.' },
+                    ].map((opt) => {
+                      const isSelected = privacyBoundary === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => handleSelectPrivacyBoundary(opt.id as PrivacyBoundary)}
+                          className={`p-3.5 rounded-xl text-left border transition-all flex flex-col justify-between ${
+                            isSelected
+                              ? 'bg-accent/10 border-accent text-text-primary ring-1 ring-accent'
+                              : 'bg-bg-surface border-border-subtle text-text-secondary hover:text-text-primary hover:border-border-strong'
+                          }`}
+                        >
+                          <div>
+                            <div className="font-bold text-xs flex items-center justify-between">
+                              <span>{opt.label}</span>
+                              {isSelected && <CheckCircle2 className="w-3.5 h-3.5 text-accent" />}
+                            </div>
+                            <div className="text-[11px] text-text-tertiary mt-1 leading-snug">
+                              {opt.desc}
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Context Parameters */}
+                {appSettings && (
+                  <div className="pt-2 border-t border-border-subtle space-y-4">
+                    <label className="text-xs font-semibold text-text-primary">
+                      Context Token Limits & Generation Controls
+                    </label>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5 text-xs">
+                      <div className="space-y-1.5">
+                        <label className="text-text-primary font-medium">Max Context Tokens</label>
+                        <input
+                          type="number"
+                          value={appSettings.models.max_context_tokens}
+                          onChange={(e) =>
+                            setAppSettings({
+                              ...appSettings,
+                              models: { ...appSettings.models, max_context_tokens: parseInt(e.target.value) || 4000 },
+                            })
+                          }
+                          className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
+                        />
+                        <p className="text-[11px] text-text-tertiary">Token budget allocated before context pruning.</p>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-text-primary font-medium">Hard Ceiling Tokens</label>
+                        <input
+                          type="number"
+                          value={appSettings.models.hard_ceiling_tokens}
+                          onChange={(e) =>
+                            setAppSettings({
+                              ...appSettings,
+                              models: { ...appSettings.models, hard_ceiling_tokens: parseInt(e.target.value) || 32000 },
+                            })
+                          }
+                          className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
+                        />
+                        <p className="text-[11px] text-text-tertiary">Maximum token ceiling per task invocation.</p>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-text-primary font-medium">Temperature: {appSettings.models.temperature}</label>
+                        <input
+                          type="range"
+                          min="0.0"
+                          max="1.0"
+                          step="0.05"
+                          value={appSettings.models.temperature}
+                          onChange={(e) =>
+                            setAppSettings({
+                              ...appSettings,
+                              models: { ...appSettings.models, temperature: parseFloat(e.target.value) },
+                            })
+                          }
+                          className="w-full accent-accent"
+                        />
+                        <p className="text-[11px] text-text-tertiary">0.0 for deterministic code, 0.7 for creative generation.</p>
+                      </div>
+
+                      <label className="flex items-center gap-3 p-3.5 rounded-lg bg-bg-surface border border-border-subtle cursor-pointer hover:border-accent/40 transition-colors">
+                        <input
+                          type="checkbox"
+                          checked={appSettings.models.bypass_cache}
+                          onChange={(e) =>
+                            setAppSettings({
+                              ...appSettings,
+                              models: { ...appSettings.models, bypass_cache: e.target.checked },
+                            })
+                          }
+                          className="rounded accent-accent w-4 h-4"
+                        />
+                        <div>
+                          <div className="font-semibold text-text-primary">Bypass Prompt Cache</div>
+                          <div className="text-[11px] text-text-tertiary">Force direct model generation without checking deterministic cache.</div>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+                )}
+
+                {/* Developer Mode Only: Advanced Low-Level Tier Mappings */}
+                {developerMode && appSettings && (
+                  <div className="p-4 rounded-xl bg-bg-surface border border-border-subtle space-y-3 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-accent font-mono text-[11px] uppercase">
+                        ⚙ Advanced Tier Mapping (Developer Mode Only)
+                      </span>
+                      <span className="text-[10px] text-text-tertiary">Low-level backend failover tiers</span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-text-secondary">Default Internal Tier</label>
+                        <select
+                          value={appSettings.models.default_tier}
+                          onChange={(e) =>
+                            setAppSettings({
+                              ...appSettings,
+                              models: { ...appSettings.models, default_tier: e.target.value as ModelTier },
+                            })
+                          }
+                          className="w-full px-3 py-1.5 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs"
+                        >
+                          <option value="instant">Instant (Deterministic / Local)</option>
+                          <option value="swarm">Swarm (Mid-Tier Reasoning)</option>
+                          <option value="reasoning">Reasoning (Frontier)</option>
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-text-secondary">Fallback Internal Tier</label>
+                        <select
+                          value={appSettings.models.fallback_tier}
+                          onChange={(e) =>
+                            setAppSettings({
+                              ...appSettings,
+                              models: { ...appSettings.models, fallback_tier: e.target.value as ModelTier },
+                            })
+                          }
+                          className="w-full px-3 py-1.5 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs"
+                        >
+                          <option value="instant">Instant (Deterministic / Local)</option>
+                          <option value="swarm">Swarm (Mid-Tier Reasoning)</option>
+                          <option value="reasoning">Reasoning (Frontier)</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
               {/* Local Runtime Configuration Card */}
               <div className="p-6 rounded-xl bg-bg-elevated border border-border-subtle space-y-4">
                 <div className="flex items-center justify-between border-b border-border-subtle pb-3">
@@ -1493,143 +1948,8 @@ export const Settings: React.FC<SettingsProps> = () => {
             </div>
           )}
 
-          {activeTab === 'adapters' && (
-            <div className="p-6 rounded-xl bg-bg-elevated border border-border-subtle space-y-6">
-              <div className="flex items-center justify-between border-b border-border-subtle pb-4">
-                <div>
-                  <h2 className="text-sm font-bold text-text-primary flex items-center gap-2">
-                    <Terminal className="w-4 h-4 text-accent" />
-                    Tool Adapters & Connectors
-                  </h2>
-                  <p className="text-xs text-text-secondary mt-1">
-                    Manage execution adapters, Model Context Protocol (MCP), and external coding agent integrations.
-                  </p>
-                </div>
-                <button
-                  onClick={handleSaveAppSettings}
-                  disabled={savingSettings || !appSettings}
-                  className="px-3.5 py-1.5 rounded-lg bg-accent text-white text-xs font-semibold hover:bg-accent-hover transition-colors flex items-center gap-2 disabled:opacity-50"
-                >
-                  {savingSettings ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                  Save Adapters
-                </button>
-              </div>
 
-              {appSettings && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
-                  <label className="flex items-center gap-3 p-3.5 rounded-lg bg-bg-surface border border-border-subtle cursor-pointer hover:border-accent/40 transition-colors">
-                    <input
-                      type="checkbox"
-                      checked={appSettings.adapters.mcp_enabled}
-                      onChange={(e) =>
-                        setAppSettings({
-                          ...appSettings,
-                          adapters: { ...appSettings.adapters, mcp_enabled: e.target.checked },
-                        })
-                      }
-                      className="rounded accent-accent w-4 h-4"
-                    />
-                    <div>
-                      <div className="font-semibold text-text-primary">Model Context Protocol (MCP)</div>
-                      <div className="text-[11px] text-text-tertiary">Allow agents to discover and call MCP tools.</div>
-                    </div>
-                  </label>
-
-                  <label className="flex items-center gap-3 p-3.5 rounded-lg bg-bg-surface border border-border-subtle cursor-pointer hover:border-accent/40 transition-colors">
-                    <input
-                      type="checkbox"
-                      checked={appSettings.adapters.claude_code_adapter}
-                      onChange={(e) =>
-                        setAppSettings({
-                          ...appSettings,
-                          adapters: { ...appSettings.adapters, claude_code_adapter: e.target.checked },
-                        })
-                      }
-                      className="rounded accent-accent w-4 h-4"
-                    />
-                    <div>
-                      <div className="font-semibold text-text-primary">Claude Code Adapter</div>
-                      <div className="text-[11px] text-text-tertiary">Enable bridge to Anthropic Claude Code commands.</div>
-                    </div>
-                  </label>
-
-                  <label className="flex items-center gap-3 p-3.5 rounded-lg bg-bg-surface border border-border-subtle cursor-pointer hover:border-accent/40 transition-colors">
-                    <input
-                      type="checkbox"
-                      checked={appSettings.adapters.codex_adapter}
-                      onChange={(e) =>
-                        setAppSettings({
-                          ...appSettings,
-                          adapters: { ...appSettings.adapters, codex_adapter: e.target.checked },
-                        })
-                      }
-                      className="rounded accent-accent w-4 h-4"
-                    />
-                    <div>
-                      <div className="font-semibold text-text-primary">Codex CLI Adapter</div>
-                      <div className="text-[11px] text-text-tertiary">OpenAI Codex syntax transform & tool pipeline.</div>
-                    </div>
-                  </label>
-
-                  <label className="flex items-center gap-3 p-3.5 rounded-lg bg-bg-surface border border-border-subtle cursor-pointer hover:border-accent/40 transition-colors">
-                    <input
-                      type="checkbox"
-                      checked={appSettings.adapters.openclaw_adapter}
-                      onChange={(e) =>
-                        setAppSettings({
-                          ...appSettings,
-                          adapters: { ...appSettings.adapters, openclaw_adapter: e.target.checked },
-                        })
-                      }
-                      className="rounded accent-accent w-4 h-4"
-                    />
-                    <div>
-                      <div className="font-semibold text-text-primary">OpenClaw Autonomous Crawler</div>
-                      <div className="text-[11px] text-text-tertiary">Autonomous repository mapping adapter.</div>
-                    </div>
-                  </label>
-
-                  <label className="flex items-center gap-3 p-3.5 rounded-lg bg-bg-surface border border-border-subtle cursor-pointer hover:border-accent/40 transition-colors">
-                    <input
-                      type="checkbox"
-                      checked={appSettings.adapters.goose_adapter}
-                      onChange={(e) =>
-                        setAppSettings({
-                          ...appSettings,
-                          adapters: { ...appSettings.adapters, goose_adapter: e.target.checked },
-                        })
-                      }
-                      className="rounded accent-accent w-4 h-4"
-                    />
-                    <div>
-                      <div className="font-semibold text-text-primary">Goose Agent Adapter</div>
-                      <div className="text-[11px] text-text-tertiary">Block Goose protocol bridge & extensions.</div>
-                    </div>
-                  </label>
-
-                  <label className="flex items-center gap-3 p-3.5 rounded-lg bg-bg-surface border border-border-subtle cursor-pointer hover:border-accent/40 transition-colors">
-                    <input
-                      type="checkbox"
-                      checked={appSettings.adapters.cursor_adapter}
-                      onChange={(e) =>
-                        setAppSettings({
-                          ...appSettings,
-                          adapters: { ...appSettings.adapters, cursor_adapter: e.target.checked },
-                        })
-                      }
-                      className="rounded accent-accent w-4 h-4"
-                    />
-                    <div>
-                      <div className="font-semibold text-text-primary">Cursor IDE Adapter</div>
-                      <div className="text-[11px] text-text-tertiary">Bi-directional editor patch sync.</div>
-                    </div>
-                  </label>
-                </div>
-              )}
-            </div>
-          )}
-
-          {activeTab === 'channels' && (
+          {(activeTab === 'notifications' || activeTab === 'channels') && (
             <div className="p-6 rounded-xl bg-bg-elevated border border-border-subtle space-y-6">
               <div className="flex items-center justify-between border-b border-border-subtle pb-4">
                 <div>
@@ -2009,20 +2329,31 @@ export const Settings: React.FC<SettingsProps> = () => {
                 <div>
                   <h2 className="text-sm font-bold text-text-primary flex items-center gap-2">
                     <Palette className="w-4 h-4 text-accent" />
-                    Appearance & Theme Customization
+                    Appearance & Theme
                   </h2>
                   <p className="text-xs text-text-secondary mt-1">
-                    Personalize desktop shell appearance, layout density, and typography.
+                    Release 0.5 desktop visual presentation and dark-theme canonical settings.
                   </p>
                 </div>
-                <button
-                  onClick={handleSaveAppSettings}
-                  disabled={savingSettings || !appSettings}
-                  className="px-3.5 py-1.5 rounded-lg bg-accent text-white text-xs font-semibold hover:bg-accent-hover transition-colors flex items-center gap-2 disabled:opacity-50"
-                >
-                  {savingSettings ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                  Save Appearance
-                </button>
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    Dark Theme Active (Release 0.5)
+                  </span>
+                </div>
+              </div>
+
+              {/* Single Canonical Theme Notice */}
+              <div className="p-4 rounded-xl bg-accent/10 border border-accent/20 flex items-start gap-3">
+                <div className="w-8 h-8 rounded-lg bg-accent/20 border border-accent/30 flex items-center justify-center shrink-0 text-accent">
+                  <Palette className="w-4 h-4" />
+                </div>
+                <div className="text-xs space-y-1">
+                  <div className="font-semibold text-text-primary">Canonical Dark-Only Desktop Surface</div>
+                  <div className="text-text-secondary leading-relaxed">
+                    Release 0.5 Nadir Edition is standardized exclusively on the Canonical Dark Theme. Light Theme and Follow System OS options are deferred for future roadmap releases.
+                  </div>
+                </div>
               </div>
 
               {appSettings && (
@@ -2039,82 +2370,82 @@ export const Settings: React.FC<SettingsProps> = () => {
                       }
                       className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
                     >
-                      <option value="dark">Dark Theme (Default)</option>
-                      <option value="light">Light Theme</option>
-                      <option value="system">Follow System OS</option>
+                      <option value="dark">Dark Theme (Default & Only 0.5 Release Theme)</option>
+                      <option value="light" disabled>Light Theme (Coming later — Deferred for 0.5)</option>
+                      <option value="system" disabled>Follow System OS (Coming later — Deferred for 0.5)</option>
                     </select>
+                    <p className="text-[11px] text-text-tertiary">
+                      Release 0.5 is Dark-Only Founder MVP. Light and System themes deferred.
+                    </p>
                   </div>
 
-                  <div className="space-y-1.5">
-                    <label className="text-text-primary font-medium">UI Density</label>
+                  <div className="space-y-1.5 opacity-60">
+                    <div className="flex items-center justify-between">
+                      <label className="text-text-primary font-medium">UI Density</label>
+                      <span className="text-[10px] font-mono text-text-tertiary uppercase">Planned for R4 (Preview)</span>
+                    </div>
                     <select
-                      value={appSettings.appearance.ui_density}
-                      onChange={(e) =>
-                        setAppSettings({
-                          ...appSettings,
-                          appearance: {
-                            ...appSettings.appearance,
-                            ui_density: e.target.value as 'comfortable' | 'compact',
-                          },
-                        })
-                      }
-                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
+                      value="comfortable"
+                      disabled
+                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-secondary text-xs cursor-not-allowed"
                     >
-                      <option value="comfortable">Comfortable</option>
+                      <option value="comfortable">Comfortable (Canonical Desktop Dense)</option>
                       <option value="compact">Compact</option>
                     </select>
+                    <p className="text-[11px] text-text-tertiary">
+                      Desktop dense spacing is hardwired as canonical for Release 0.5.
+                    </p>
                   </div>
 
-                  <div className="space-y-1.5">
-                    <label className="text-text-primary font-medium">Font Size</label>
+                  <div className="space-y-1.5 opacity-60">
+                    <div className="flex items-center justify-between">
+                      <label className="text-text-primary font-medium">Font Size</label>
+                      <span className="text-[10px] font-mono text-text-tertiary uppercase">Planned for R4 (Preview)</span>
+                    </div>
                     <select
-                      value={appSettings.appearance.font_size}
-                      onChange={(e) =>
-                        setAppSettings({
-                          ...appSettings,
-                          appearance: {
-                            ...appSettings.appearance,
-                            font_size: e.target.value as 'sm' | 'base' | 'lg',
-                          },
-                        })
-                      }
-                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
+                      value="base"
+                      disabled
+                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-secondary text-xs cursor-not-allowed"
                     >
+                      <option value="base">Base (13px System Default)</option>
                       <option value="sm">Small (12px)</option>
-                      <option value="base">Base (14px)</option>
-                      <option value="lg">Large (16px)</option>
+                      <option value="lg">Large (14px)</option>
                     </select>
+                    <p className="text-[11px] text-text-tertiary">
+                      Standard typography hierarchy is hardwired for Release 0.5.
+                    </p>
                   </div>
 
-                  <div className="space-y-1.5">
-                    <label className="text-text-primary font-medium">Code Font Family</label>
+                  <div className="space-y-1.5 opacity-60">
+                    <div className="flex items-center justify-between">
+                      <label className="text-text-primary font-medium">Code Font Family</label>
+                      <span className="text-[10px] font-mono text-text-tertiary uppercase">Planned for R4 (Preview)</span>
+                    </div>
                     <input
                       type="text"
-                      value={appSettings.appearance.code_font_family}
-                      onChange={(e) =>
-                        setAppSettings({
-                          ...appSettings,
-                          appearance: { ...appSettings.appearance, code_font_family: e.target.value },
-                        })
-                      }
-                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
+                      value="JetBrains Mono, Menlo, monospace"
+                      disabled
+                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-secondary font-mono text-xs cursor-not-allowed"
                     />
+                    <p className="text-[11px] text-text-tertiary">
+                      Monospace font stack is hardwired for code readability.
+                    </p>
                   </div>
                 </div>
               )}
             </div>
           )}
 
-          {activeTab === 'diagnostics' && (
+          {(activeTab === 'developer' || activeTab === 'diagnostics') && (
             <div className="p-6 rounded-xl bg-bg-elevated border border-border-subtle space-y-6">
               <div className="flex items-center justify-between border-b border-border-subtle pb-4">
                 <div>
                   <h2 className="text-sm font-bold text-text-primary flex items-center gap-2">
-                    <FileText className="w-4 h-4 text-accent" />
-                    System Diagnostics & Bug Report Bundle
+                    <Terminal className="w-4 h-4 text-accent" />
+                    Developer Tools & Diagnostics
                   </h2>
                   <p className="text-xs text-text-secondary mt-1">
-                    Generate diagnostic packages with sanitized environment metadata and schema specifications.
+                    Advanced engineering controls, diagnostic bundles, and local daemon status.
                   </p>
                 </div>
               </div>
@@ -2194,7 +2525,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                 <div className="font-bold text-text-primary font-sans text-xs mb-2">Active Runtime Metadata</div>
                 <div className="flex justify-between border-b border-border-subtle/50 pb-1">
                   <span>Engine Shell:</span>
-                  <span className="text-text-primary">Agent Engine Desktop v0.1.0</span>
+                  <span className="text-text-primary">Agent Engine Desktop v0.5 Nadir Edition (Founder MVP)</span>
                 </div>
                 <div className="flex justify-between border-b border-border-subtle/50 pb-1">
                   <span>Sidecar Daemon:</span>
@@ -2209,6 +2540,114 @@ export const Settings: React.FC<SettingsProps> = () => {
                   <span className="text-text-primary">
                     {hardwareTelem?.gpu_model || 'Integrated / CPU'} ({hardwareTelem?.tokens_per_second.toFixed(1) || '0.0'} tok/s)
                   </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'about' && (
+            <div className="p-6 rounded-xl bg-bg-elevated border border-border-subtle space-y-6">
+              <div className="flex items-center justify-between border-b border-border-subtle pb-4">
+                <div>
+                  <h2 className="text-sm font-bold text-text-primary flex items-center gap-2">
+                    <Info className="w-4 h-4 text-accent" />
+                    About Agent Engine
+                  </h2>
+                  <p className="text-xs text-text-secondary mt-1">
+                    System specifications, platform architecture, and verification status.
+                  </p>
+                </div>
+                <span className="px-2.5 py-1 rounded-md text-[11px] font-mono bg-accent/15 text-accent border border-accent/30 font-semibold">
+                  v0.5-nadir
+                </span>
+              </div>
+
+              {/* Founder MVP Status Card */}
+              <div className="p-5 rounded-xl bg-bg-surface border border-border-subtle space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-bold text-xs">
+                      <ShieldCheck className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <div className="text-xs font-bold text-text-primary">Release 0.5 Nadir Edition — Founder MVP</div>
+                      <div className="text-[11px] text-text-secondary">Milestone R3 Complete & Frozen • Dark-Only Desktop Surface</div>
+                    </div>
+                  </div>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
+                    Verified
+                  </span>
+                </div>
+                <p className="text-xs text-text-secondary leading-relaxed">
+                  Agent Engine provides desktop-dense AI orchestration with strict local sidecar isolation, OS keychain credential encryption, and zero-trust execution boundaries.
+                </p>
+              </div>
+
+              {/* Architecture Specifications Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-mono">
+                <div className="p-4 rounded-xl bg-bg-surface border border-border-subtle space-y-2">
+                  <div className="font-sans font-bold text-text-primary text-xs flex items-center gap-2">
+                    <Cpu className="w-3.5 h-3.5 text-accent" />
+                    Core Architecture
+                  </div>
+                  <div className="flex justify-between border-b border-border-subtle/50 pb-1 text-text-secondary">
+                    <span>Desktop Shell:</span>
+                    <span className="text-text-primary">Tauri v2 (Rust 2021)</span>
+                  </div>
+                  <div className="flex justify-between border-b border-border-subtle/50 pb-1 text-text-secondary">
+                    <span>Sidecar Daemon:</span>
+                    <span className="text-text-primary">FastAPI (Python 3.12+)</span>
+                  </div>
+                  <div className="flex justify-between border-b border-border-subtle/50 pb-1 text-text-secondary">
+                    <span>IPC Communication:</span>
+                    <span className="text-text-primary">Localhost REST + SSE</span>
+                  </div>
+                  <div className="flex justify-between text-text-secondary">
+                    <span>Theme Surface:</span>
+                    <span className="text-text-primary">Dark Only (Canonical)</span>
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-bg-surface border border-border-subtle space-y-2">
+                  <div className="font-sans font-bold text-text-primary text-xs flex items-center gap-2">
+                    <Lock className="w-3.5 h-3.5 text-accent" />
+                    Security & Zero-Trust
+                  </div>
+                  <div className="flex justify-between border-b border-border-subtle/50 pb-1 text-text-secondary">
+                    <span>Credential Vault:</span>
+                    <span className="text-text-primary">{activeBackendName}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-border-subtle/50 pb-1 text-text-secondary">
+                    <span>Local Encryption:</span>
+                    <span className="text-text-primary">AES-256-GCM (ADR-008)</span>
+                  </div>
+                  <div className="flex justify-between border-b border-border-subtle/50 pb-1 text-text-secondary">
+                    <span>Network Policy:</span>
+                    <span className="text-text-primary">Privacy-Enforced Routing</span>
+                  </div>
+                  <div className="flex justify-between text-text-secondary">
+                    <span>Milestone State:</span>
+                    <span className="text-text-primary">R3 Frozen / R4 Paused</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Documentation & Guidelines Links */}
+              <div className="p-4 rounded-xl bg-bg-surface border border-border-subtle space-y-2 text-xs">
+                <div className="font-sans font-bold text-text-primary text-xs">Specifications & Architecture Guides</div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 font-mono text-[11px]">
+                  <div className="p-2 rounded-lg bg-bg-base border border-border-subtle">
+                    <span className="text-accent font-semibold">docs/GUI_CANONICAL_REDESIGN.md</span>
+                    <div className="text-[10px] text-text-tertiary mt-0.5">Interaction architecture</div>
+                  </div>
+                  <div className="p-2 rounded-lg bg-bg-base border border-border-subtle">
+                    <span className="text-accent font-semibold">docs/reviews/GUI_CANONICAL_MIGRATION_REVIEW.md</span>
+                    <div className="text-[10px] text-text-tertiary mt-0.5">Founder MVP audit</div>
+                  </div>
+                  <div className="p-2 rounded-lg bg-bg-base border border-border-subtle">
+                    <span className="text-accent font-semibold">ADR-008</span>
+                    <div className="text-[10px] text-text-tertiary mt-0.5">Zero-trust security policy</div>
+                  </div>
                 </div>
               </div>
             </div>
