@@ -160,7 +160,7 @@ export const Data: React.FC = () => {
             value={filterText}
             onChange={(e) => setFilterText(e.target.value)}
             placeholder="Filter table rows..."
-            className="w-full pl-8 pr-3 py-1 bg-bg-base border border-border-subtle rounded text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
+            className="w-full pl-8 pr-3 py-1 bg-bg-base border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
           />
         </div>
 
@@ -171,7 +171,7 @@ export const Data: React.FC = () => {
             value={analysisPrompt}
             onChange={(e) => setAnalysisPrompt(e.target.value)}
             placeholder="Ask question about this dataset (e.g. Find outliers or calculate average cost)..."
-            className="w-full px-3 py-1 bg-bg-base border border-border-subtle rounded text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
+            className="w-full px-3 py-1 bg-bg-base border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
           />
           <button
             type="button"

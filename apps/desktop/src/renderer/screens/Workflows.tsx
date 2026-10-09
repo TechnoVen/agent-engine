@@ -650,7 +650,7 @@ export const Workflows: React.FC<WorkflowsProps> = () => {
               placeholder="Search workflows by title, tag, or description..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-bg-elevated border border-border-subtle focus:border-accent rounded-lg pl-9 pr-3 py-1.5 text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none transition-all"
+              className="w-full bg-bg-base border border-border-subtle focus:border-accent rounded-lg pl-9 pr-3 py-1.5 text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none transition-all"
             />
           </div>
 
@@ -1216,7 +1216,7 @@ export const Workflows: React.FC<WorkflowsProps> = () => {
                     type="text"
                     value={selectedNode.id}
                     readOnly
-                    className="w-full mt-1 bg-bg-elevated border border-border-subtle rounded-lg px-2.5 py-1 text-xs font-mono text-text-secondary cursor-not-allowed"
+                    className="w-full mt-1 bg-bg-base border border-border-subtle rounded-lg px-2.5 py-1 text-xs font-mono text-text-secondary cursor-not-allowed"
                   />
                 </div>
 
@@ -1233,7 +1233,7 @@ export const Workflows: React.FC<WorkflowsProps> = () => {
                         nodes: prev.nodes.map((n) => (n.id === selectedNode.id ? { ...n, name: val } : n)),
                       }));
                     }}
-                    className="w-full mt-1 bg-bg-elevated border border-border-subtle focus:border-accent rounded-lg px-2.5 py-1 text-xs text-text-primary focus:outline-none transition-all"
+                    className="w-full mt-1 bg-bg-base border border-border-subtle focus:border-accent rounded-lg px-2.5 py-1 text-xs text-text-primary focus:outline-none transition-all"
                   />
                 </div>
 
@@ -1250,7 +1250,7 @@ export const Workflows: React.FC<WorkflowsProps> = () => {
                         nodes: prev.nodes.map((n) => (n.id === selectedNode.id ? { ...n, description: val } : n)),
                       }));
                     }}
-                    className="w-full mt-1 bg-bg-elevated border border-border-subtle focus:border-accent rounded-lg px-2.5 py-1 text-xs text-text-primary focus:outline-none transition-all"
+                    className="w-full mt-1 bg-bg-base border border-border-subtle focus:border-accent rounded-lg px-2.5 py-1 text-xs text-text-primary focus:outline-none transition-all"
                   />
                 </div>
 
@@ -1266,7 +1266,7 @@ export const Workflows: React.FC<WorkflowsProps> = () => {
                         nodes: prev.nodes.map((n) => (n.id === selectedNode.id ? { ...n, type: val } : n)),
                       }));
                     }}
-                    className="w-full mt-1 bg-bg-elevated border border-border-subtle focus:border-accent rounded-lg px-2.5 py-1 text-xs text-text-primary focus:outline-none transition-all capitalize"
+                    className="w-full mt-1 bg-bg-base border border-border-subtle focus:border-accent rounded-lg px-2.5 py-1 text-xs text-text-primary focus:outline-none transition-all capitalize"
                   >
                     {PALETTE_NODES.map((p) => (
                       <option key={p.type} value={p.type}>
@@ -1293,7 +1293,7 @@ export const Workflows: React.FC<WorkflowsProps> = () => {
                         // ignore syntax error while typing
                       }
                     }}
-                    className="w-full mt-1 bg-bg-elevated border border-border-subtle font-mono text-[11px] text-text-primary rounded-lg p-2 focus:outline-none focus:border-accent"
+                    className="w-full mt-1 bg-bg-base border border-border-subtle font-mono text-[11px] text-text-primary rounded-lg p-2 focus:outline-none focus:border-accent"
                   />
                   <span className="text-[10px] text-text-tertiary">
                     Use Mustache binding like <code className="text-accent">{`{{upstream_id.output}}`}</code>
@@ -1317,7 +1317,7 @@ export const Workflows: React.FC<WorkflowsProps> = () => {
                         // ignore syntax error while typing
                       }
                     }}
-                    className="w-full mt-1 bg-bg-elevated border border-border-subtle font-mono text-[11px] text-text-primary rounded-lg p-2 focus:outline-none focus:border-accent"
+                    className="w-full mt-1 bg-bg-base border border-border-subtle font-mono text-[11px] text-text-primary rounded-lg p-2 focus:outline-none focus:border-accent"
                   />
                 </div>
 
@@ -1421,7 +1421,7 @@ export const Workflows: React.FC<WorkflowsProps> = () => {
               <textarea
                 value={yamlText}
                 onChange={(e) => setYamlText(e.target.value)}
-                className="w-full h-96 bg-bg-base border border-border-subtle font-mono text-xs text-text-primary rounded-xl p-3 focus:outline-none focus:border-accent"
+                className="w-full h-96 bg-bg-base border border-border-subtle font-mono text-xs text-text-primary rounded-lg p-3 focus:outline-none focus:border-accent"
               />
             </div>
 
@@ -1476,7 +1476,7 @@ export const Workflows: React.FC<WorkflowsProps> = () => {
                 rows={5}
                 value={runInputsJson}
                 onChange={(e) => setRunInputsJson(e.target.value)}
-                className="w-full bg-bg-base border border-border-subtle font-mono text-xs text-text-primary rounded-xl p-3 focus:outline-none focus:border-accent"
+                className="w-full bg-bg-base border border-border-subtle font-mono text-xs text-text-primary rounded-lg p-3 focus:outline-none focus:border-accent"
               />
               <p className="text-[11px] text-text-tertiary">
                 These inputs will populate the root <code className="text-accent">$workflow.input</code> state.

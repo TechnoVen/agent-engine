@@ -439,7 +439,7 @@ export const Tasks: React.FC<TasksScreenProps> = ({
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search tasks, persona, schedule..."
-                className="w-full pl-8 pr-3 py-1.5 bg-bg-elevated border border-border-subtle rounded-xl text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
+                className="w-full pl-8 pr-3 py-1.5 bg-bg-base border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
               />
             </div>
           </div>
@@ -670,7 +670,7 @@ export const Tasks: React.FC<TasksScreenProps> = ({
                       value={taskName}
                       onChange={(e) => setTaskName(e.target.value)}
                       placeholder="e.g. Nightly AST Security Scan"
-                      className="w-full px-3 py-2 bg-bg-base border border-border-subtle rounded-xl text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
+                      className="w-full px-3 py-2 bg-bg-base border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
                     />
                   </div>
 
@@ -686,14 +686,14 @@ export const Tasks: React.FC<TasksScreenProps> = ({
                           value={taskCron}
                           onChange={(e) => setTaskCron(e.target.value)}
                           placeholder="0 2 * * *"
-                          className="flex-1 px-3 py-2 bg-bg-base border border-border-subtle rounded-xl font-mono text-xs text-text-primary focus:outline-none focus:border-accent"
+                          className="flex-1 px-3 py-2 bg-bg-base border border-border-subtle rounded-lg font-mono text-xs text-text-primary focus:outline-none focus:border-accent"
                         />
                         {/* Quick Presets */}
                         <select
                           onChange={(e) => {
                             if (e.target.value) setTaskCron(e.target.value);
                           }}
-                          className="px-3 py-2 bg-bg-base border border-border-subtle rounded-xl text-xs text-text-secondary focus:outline-none focus:border-accent"
+                          className="px-3 py-2 bg-bg-base border border-border-subtle rounded-lg text-xs text-text-secondary focus:outline-none focus:border-accent"
                         >
                           <option value="">Presets...</option>
                           <option value="0 2 * * *">Daily 2:00 AM (Off-peak)</option>
@@ -722,7 +722,7 @@ export const Tasks: React.FC<TasksScreenProps> = ({
                       <select
                         value={taskPersona}
                         onChange={(e) => setTaskPersona(e.target.value)}
-                        className="w-full px-3 py-2 bg-bg-base border border-border-subtle rounded-xl text-xs text-text-primary focus:outline-none focus:border-accent"
+                        className="w-full px-3 py-2 bg-bg-base border border-border-subtle rounded-lg text-xs text-text-primary focus:outline-none focus:border-accent"
                       >
                         {DEFAULT_PERSONAS.map((p) => (
                           <option key={p.id} value={p.name}>
@@ -739,7 +739,7 @@ export const Tasks: React.FC<TasksScreenProps> = ({
                       <select
                         value={taskModel}
                         onChange={(e) => setTaskModel(e.target.value as ModelTier)}
-                        className="w-full px-3 py-2 bg-bg-base border border-border-subtle rounded-xl text-xs text-text-primary focus:outline-none focus:border-accent"
+                        className="w-full px-3 py-2 bg-bg-base border border-border-subtle rounded-lg text-xs text-text-primary focus:outline-none focus:border-accent"
                       >
                         <option value="instant">Instant High ($0.0002/1k)</option>
                         <option value="swarm">K3 Swarm High ($0.0015/1k)</option>
@@ -774,7 +774,7 @@ export const Tasks: React.FC<TasksScreenProps> = ({
                     <select
                       value={taskChannel}
                       onChange={(e) => setTaskChannel(e.target.value as NotificationChannel)}
-                      className="w-full px-3 py-2 bg-bg-base border border-border-subtle rounded-xl text-xs text-text-primary focus:outline-none focus:border-accent capitalize"
+                      className="w-full px-3 py-2 bg-bg-base border border-border-subtle rounded-lg text-xs text-text-primary focus:outline-none focus:border-accent capitalize"
                     >
                       <option value="slack">Slack (#agent-alerts)</option>
                       <option value="telegram">Telegram Direct</option>
@@ -793,7 +793,7 @@ export const Tasks: React.FC<TasksScreenProps> = ({
                       value={taskPrompt}
                       onChange={(e) => setTaskPrompt(e.target.value)}
                       placeholder="Describe exactly what the agent should do on each trigger..."
-                      className="w-full px-3 py-2 bg-bg-base border border-border-subtle rounded-xl text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
+                      className="w-full px-3 py-2 bg-bg-base border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
                     />
                   </div>
 

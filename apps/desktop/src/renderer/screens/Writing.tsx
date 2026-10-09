@@ -294,7 +294,7 @@ export const Writing: React.FC = () => {
             onChange={(e) => setContent(e.target.value)}
             onSelect={handleSelect}
             placeholder="Write markdown or document text here..."
-            className="flex-1 w-full p-4 bg-bg-elevated/40 border border-border-subtle rounded-lg text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-border-strong font-mono resize-none leading-relaxed overflow-y-auto"
+            className="flex-1 w-full p-4 bg-bg-base border border-border-subtle rounded-lg text-sm text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-border-strong font-mono resize-none leading-relaxed overflow-y-auto"
           />
         </div>
 
@@ -380,7 +380,7 @@ export const Writing: React.FC = () => {
                       onChange={(e) => setAssistantPrompt(e.target.value)}
                       placeholder="Ask for feedback, rewrite, or expand..."
                       rows={3}
-                      className="w-full p-2 bg-bg-base border border-border-subtle rounded text-xs text-text-primary focus:outline-none focus:border-accent resize-none"
+                      className="w-full p-2 bg-bg-base border border-border-subtle rounded-lg text-xs text-text-primary focus:outline-none focus:border-accent resize-none"
                     />
                     <button
                       type="button"
@@ -414,7 +414,7 @@ export const Writing: React.FC = () => {
                           Insert into doc
                         </button>
                       </div>
-                      <div className="flex-1 p-2 bg-bg-base border border-border-subtle rounded text-xs font-mono text-text-secondary whitespace-pre-wrap overflow-y-auto max-h-64 leading-relaxed">
+                      <div className="flex-1 p-2 bg-bg-base border border-border-subtle rounded-lg text-xs font-mono text-text-secondary whitespace-pre-wrap overflow-y-auto max-h-64 leading-relaxed">
                         {assistantResponse}
                       </div>
                     </div>
@@ -431,7 +431,7 @@ export const Writing: React.FC = () => {
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
                     placeholder="Scratchpad for references, source links, and draft points..."
-                    className="flex-1 w-full p-2.5 bg-bg-base border border-border-subtle rounded text-xs text-text-primary focus:outline-none focus:border-accent resize-none font-mono leading-relaxed"
+                    className="flex-1 w-full p-2.5 bg-bg-base border border-border-subtle rounded-lg text-xs text-text-primary focus:outline-none focus:border-accent resize-none font-mono leading-relaxed"
                   />
                 </div>
               )}

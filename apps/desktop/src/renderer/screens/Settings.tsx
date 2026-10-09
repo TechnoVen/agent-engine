@@ -137,8 +137,28 @@ export type SettingsTab =
   | 'appearance'
   | 'diagnostics';
 
+const getInitialTab = (): SettingsTab => {
+  const hash = typeof window !== 'undefined' ? window.location.hash : '';
+  const match = hash.match(/[?&]tab=([a-z]+)/);
+  const validTabs: SettingsTab[] = [
+    'providers',
+    'models',
+    'local',
+    'adapters',
+    'channels',
+    'storage',
+    'security',
+    'appearance',
+    'diagnostics',
+  ];
+  if (match && validTabs.includes(match[1] as SettingsTab)) {
+    return match[1] as SettingsTab;
+  }
+  return 'providers';
+};
+
 export const Settings: React.FC<SettingsProps> = () => {
-  const [activeTab, setActiveTab] = useState<SettingsTab>('providers');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(getInitialTab);
   const [credentials, setCredentials] = useState<Record<string, CredentialItem>>({});
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
   const [baseUrlInputs, setBaseUrlInputs] = useState<Record<string, string>>({});
@@ -186,6 +206,15 @@ export const Settings: React.FC<SettingsProps> = () => {
       console.error('Failed to load app settings', err);
     }
   };
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      const tab = getInitialTab();
+      setActiveTab(tab);
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
 
   // Poll hardware telemetry (every 2s when on hardware tab or when local models run)
   useEffect(() => {
@@ -903,7 +932,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                           models: { ...appSettings.models, default_tier: e.target.value as ModelTier },
                         })
                       }
-                      className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
+                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
                     >
                       <option value="instant">Instant (Deterministic / Local)</option>
                       <option value="swarm">Swarm (Mid-Tier Reasoning)</option>
@@ -922,7 +951,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                           models: { ...appSettings.models, fallback_tier: e.target.value as ModelTier },
                         })
                       }
-                      className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
+                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
                     >
                       <option value="instant">Instant (Deterministic / Local)</option>
                       <option value="swarm">Swarm (Mid-Tier Reasoning)</option>
@@ -942,7 +971,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                           models: { ...appSettings.models, max_context_tokens: parseInt(e.target.value) || 4000 },
                         })
                       }
-                      className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
+                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
                     />
                     <p className="text-[11px] text-text-tertiary">Token budget allocated before context pruning.</p>
                   </div>
@@ -958,7 +987,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                           models: { ...appSettings.models, hard_ceiling_tokens: parseInt(e.target.value) || 32000 },
                         })
                       }
-                      className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
+                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
                     />
                     <p className="text-[11px] text-text-tertiary">Maximum token ceiling per task invocation.</p>
                   </div>
@@ -1041,7 +1070,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                             local_runtime: { ...appSettings.local_runtime, ollama_base_url: e.target.value },
                           })
                         }
-                        className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
+                        className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
                       />
                     </div>
 
@@ -1056,7 +1085,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                             local_runtime: { ...appSettings.local_runtime, llamacpp_base_url: e.target.value },
                           })
                         }
-                        className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
+                        className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
                       />
                     </div>
 
@@ -1074,7 +1103,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                             },
                           })
                         }
-                        className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
+                        className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
                       />
                     </div>
 
@@ -1092,7 +1121,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                             },
                           })
                         }
-                        className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
+                        className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
                       />
                     </div>
 
@@ -1110,7 +1139,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                             },
                           })
                         }
-                        className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
+                        className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
                       />
                     </div>
 
@@ -1711,7 +1740,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                           })
                         }
                         placeholder="https://hooks.slack.com/services/..."
-                        className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
+                        className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
                       />
                     </div>
 
@@ -1727,7 +1756,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                           })
                         }
                         placeholder="https://discord.com/api/webhooks/..."
-                        className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
+                        className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
                       />
                     </div>
 
@@ -1743,7 +1772,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                           })
                         }
                         placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz"
-                        className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
+                        className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
                       />
                     </div>
                   </div>
@@ -1790,7 +1819,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                             },
                           })
                         }
-                        className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
+                        className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
                       >
                         <option value="sqlite">SQLite (Local Embedded)</option>
                         <option value="postgres">PostgreSQL (Enterprise / Dedicated)</option>
@@ -1812,7 +1841,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                             },
                           })
                         }
-                        className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
+                        className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
                       />
                       <p className="text-[11px] text-text-tertiary">Automatic retention threshold for audit logs.</p>
                     </div>
@@ -1830,7 +1859,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                             storage: { ...appSettings.storage, sqlite_path: e.target.value },
                           })
                         }
-                        className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
+                        className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
                       />
                     </div>
 
@@ -1845,7 +1874,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                             storage: { ...appSettings.storage, chroma_path: e.target.value },
                           })
                         }
-                        className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
+                        className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
                       />
                     </div>
                   </div>
@@ -1891,7 +1920,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                           },
                         })
                       }
-                      className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
+                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
                     >
                       <option value="strict">Strict (Fail-Closed, Every Tool Evaluated)</option>
                       <option value="permissive">Permissive (Log Violations Only)</option>
@@ -1912,7 +1941,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                           },
                         })
                       }
-                      className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
+                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
                     >
                       <option value="standard">Standard (Subprocess Isolation)</option>
                       <option value="isolated">Isolated (Strict Virtual Container)</option>
@@ -1933,7 +1962,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                           },
                         })
                       }
-                      className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
+                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
                     />
                     <p className="text-[11px] text-text-tertiary">Timeout before pending approvals automatically expire.</p>
                   </div>
@@ -2008,7 +2037,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                           appearance: { ...appSettings.appearance, theme: e.target.value as any },
                         })
                       }
-                      className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
+                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
                     >
                       <option value="dark">Dark Theme (Default)</option>
                       <option value="light">Light Theme</option>
@@ -2029,7 +2058,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                           },
                         })
                       }
-                      className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
+                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
                     >
                       <option value="comfortable">Comfortable</option>
                       <option value="compact">Compact</option>
@@ -2049,7 +2078,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                           },
                         })
                       }
-                      className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
+                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"
                     >
                       <option value="sm">Small (12px)</option>
                       <option value="base">Base (14px)</option>
@@ -2068,7 +2097,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                           appearance: { ...appSettings.appearance, code_font_family: e.target.value },
                         })
                       }
-                      className="w-full px-3 py-2 rounded-lg bg-bg-surface border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
+                      className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary font-mono text-xs focus:outline-none focus:border-accent"
                     />
                   </div>
                 </div>

@@ -3,7 +3,9 @@
 @tailwind utilities;
 
 :root {
+  color-scheme: dark;
   --bg-base: #0a0a0a;
+  --bg-surface: #101010;
   --bg-elevated: #141414;
   --bg-hover: #1c1c1c;
   --border-subtle: #1f1f1f;
@@ -17,6 +19,20 @@
   --warning: #f59e0b;
   --danger: #ef4444;
   --code-bg: #1a1a1a;
+}
+
+/* Base dark form controls */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+select,
+textarea {
+  background-color: var(--bg-base);
+  color: var(--text-primary);
+  border-color: var(--border-subtle);
+}
+
+select option {
+  background-color: #0a0a0a;
+  color: #f5f5f5;
 }
 
 /* Custom sleek dark scrollbars */

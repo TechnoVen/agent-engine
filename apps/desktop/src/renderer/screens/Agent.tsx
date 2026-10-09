@@ -168,7 +168,7 @@ export const Agent: React.FC<AgentScreenProps> = () => {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search observational memories..."
-                className="w-full sm:w-1/3 px-3 py-1.5 bg-bg-elevated border border-border-subtle rounded text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
+                className="w-full sm:w-1/3 px-3 py-1.5 bg-bg-base border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
               />
             </div>
 
@@ -178,7 +178,7 @@ export const Agent: React.FC<AgentScreenProps> = () => {
                 value={newMemory}
                 onChange={(e) => setNewMemory(e.target.value)}
                 placeholder="Add verified user fact or preference..."
-                className="flex-1 px-3 py-1.5 bg-bg-elevated border border-border-subtle rounded text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
+                className="flex-1 px-3 py-1.5 bg-bg-base border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
               />
               <button
                 type="submit"
@@ -229,7 +229,7 @@ export const Agent: React.FC<AgentScreenProps> = () => {
                 value={instructions}
                 onChange={(e) => setInstructions(e.target.value)}
                 rows={6}
-                className="w-full p-3 bg-bg-elevated border border-border-subtle rounded-lg text-xs font-mono text-text-primary focus:outline-none focus:border-accent leading-relaxed resize-none"
+                className="w-full p-3 bg-bg-base border border-border-subtle rounded-lg text-xs font-mono text-text-primary focus:outline-none focus:border-accent leading-relaxed resize-none"
               />
               <div className="flex items-center justify-between">
                 <span className="text-[11px] text-text-tertiary font-mono">

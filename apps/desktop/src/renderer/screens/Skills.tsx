@@ -396,7 +396,7 @@ export const Skills: React.FC<SkillsScreenProps> = () => {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search skills, tags, prompt..."
-                className="w-full bg-bg-base border border-border-subtle rounded-md pl-8 pr-3 py-1.5 text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
+                className="w-full bg-bg-base border border-border-subtle rounded-lg pl-8 pr-3 py-1.5 text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent"
               />
               {searchQuery && (
                 <button

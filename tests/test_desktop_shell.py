@@ -2232,3 +2232,28 @@ def test_real_project_integration_and_truthful_empty_states():
 
     workflows_content = (RENDERER_ROOT / "screens" / "Workflows.tsx").read_text(encoding="utf-8")
     assert "Preview · Runtime not available yet · Coming in R4" in workflows_content
+
+
+def test_canonical_dark_form_field_styling():
+    """Verify that form controls across the desktop renderer use canonical dark styling."""
+    tailwind_cfg = (REPO_ROOT / "apps" / "desktop" / "tailwind.config.js").read_text(
+        encoding="utf-8"
+    )
+    assert "'bg-surface': '#101010'" in tailwind_cfg
+    assert "'bg-base': '#0a0a0a'" in tailwind_cfg
+
+    index_css = (RENDERER_ROOT / "index.css").read_text(encoding="utf-8")
+    assert "color-scheme: dark;" in index_css
+    assert "background-color: var(--bg-base);" in index_css
+    assert "select option {" in index_css
+
+    # Check Settings appearance tab uses dark form fields
+    settings_ts = (RENDERER_ROOT / "screens" / "Settings.tsx").read_text(encoding="utf-8")
+    assert "appSettings.appearance.theme" in settings_ts
+    assert "bg-bg-base" in settings_ts
+    # Verify no appearance selects use bg-bg-surface
+    assert "appearance: { ...appSettings.appearance, theme: e.target.value as any }" in settings_ts
+    assert (
+        'className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"'
+        in settings_ts
+    )

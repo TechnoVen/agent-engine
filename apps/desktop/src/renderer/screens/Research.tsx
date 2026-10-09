@@ -149,7 +149,7 @@ export const Research: React.FC = () => {
               onChange={(e) => setNotes(e.target.value)}
               placeholder="Record hypotheses, claims to verify, or source URLs..."
               rows={6}
-              className="w-full p-2.5 bg-bg-base border border-border-subtle rounded-md text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent font-mono resize-none leading-relaxed"
+              className="w-full p-2.5 bg-bg-base border border-border-subtle rounded-lg text-xs text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent font-mono resize-none leading-relaxed"
             />
           </div>
         </div>

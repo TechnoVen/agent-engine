@@ -1386,7 +1386,7 @@ export const Policies: React.FC<PoliciesScreenProps> = () => {
                       setAuditPageSize(Number(e.target.value));
                       setAuditPage(1);
                     }}
-                    className="bg-bg-elevated border border-border-subtle rounded px-2 py-1 text-text-primary focus:outline-none"
+                    className="bg-bg-base border border-border-subtle rounded-lg px-2 py-1 text-text-primary focus:outline-none focus:border-accent"
                   >
                     <option value={10}>10</option>
                     <option value={25}>25</option>
