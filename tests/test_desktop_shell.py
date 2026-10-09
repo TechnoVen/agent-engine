@@ -138,13 +138,17 @@ def test_kimi_universal_shell_components():
     sidebar = (RENDERER_ROOT / "shell" / "Sidebar.tsx").read_text()
     assert "New Chat" in sidebar
     assert "Ctrl K" in sidebar
-    assert "w-[280px]" in sidebar
+    assert "w-[240px]" in sidebar
 
     topbar = (RENDERER_ROOT / "shell" / "TopBar.tsx").read_text()
-    assert "Instant High" in topbar
-    assert "K3 Swarm High" in topbar
-    assert "K3 High" in topbar
+    assert "Agent Engine" in topbar
+    assert "System Status" in topbar
     assert "Sidecar 8000" in topbar
+
+    preferences = (RENDERER_ROOT / "components" / "ExecutionPreferences.tsx").read_text()
+    assert "Local Only" in preferences
+    assert "Approved Cloud" in preferences
+    assert "Balanced" in preferences
 
     home = (RENDERER_ROOT / "screens" / "Home.tsx").read_text()
     assert "Explore Inspiration" in home
@@ -388,13 +392,11 @@ def test_task_3_3_message_and_home_approval_integration():
 
     home_file = RENDERER_ROOT / "screens" / "Home.tsx"
     home_content = home_file.read_text()
-    assert "detectDangerousToolCall" in home_content
     assert "handleApproveToolCall" in home_content
     assert "handleRejectToolCall" in home_content
     assert "handleEditToolCall" in home_content
     assert "submitApprovalDecision" in home_content
-    assert "destructive_fs_rm_all" in home_content or "rm -rf" in home_content
-    assert "db_drop_prod" in home_content or "drop table" in home_content
+    assert "onApprovalRequired" in home_content
 
 
 def test_task_3_4_model_tier_selector_and_pricing():
@@ -1427,9 +1429,9 @@ def test_task_4_5_cost_dashboard_and_distillation_engine(monkeypatch):
     candidates = resp_candidates.json()
     assert len(candidates) >= 3
     for cand in candidates:
-        assert cand["monthly_calls"] >= 10000, (
-            "Distillation candidate must have >=10,000 monthly calls (Law 8)"
-        )
+        assert (
+            cand["monthly_calls"] >= 10000
+        ), "Distillation candidate must have >=10,000 monthly calls (Law 8)"
         assert cand["teacher_model"] is not None
         assert cand["student_model"] is not None
         assert cand["monthly_savings_usd"] > 0
@@ -1952,9 +1954,9 @@ def test_task_4_8_settings_screen_and_diagnostics_export(tmp_path: Path):
         "appearance",
         "diagnostics",
     ]:
-        assert f"setActiveTab('{tab}')" in settings_ts, (
-            f"Settings.tsx must have tab switch for {tab}"
-        )
+        assert (
+            f"setActiveTab('{tab}')" in settings_ts
+        ), f"Settings.tsx must have tab switch for {tab}"
 
     # 1-click export buttons & disclaimer
     assert "Export Diagnostics (.zip)" in settings_ts
@@ -1992,15 +1994,15 @@ def test_task_4_9_streamlit_demotion_and_process_lifecycle():
     dev_dash = repo_root / "tools" / "dev_dashboard.py"
     assert dev_dash.exists(), "tools/dev_dashboard.py must exist"
     dev_content = dev_dash.read_text()
-    assert "Developer tool — not for end users" in dev_content, (
-        "tools/dev_dashboard.py must contain prominent developer warning banner"
-    )
-    assert "Tauri Desktop application" in dev_content, (
-        "tools/dev_dashboard.py must reference Tauri Desktop application as official UI"
-    )
-    assert "Developer Notice (F07)" in dev_content, (
-        "tools/dev_dashboard.py must remediate F07 by noting host developer execution"
-    )
+    assert (
+        "Developer tool — not for end users" in dev_content
+    ), "tools/dev_dashboard.py must contain prominent developer warning banner"
+    assert (
+        "Tauri Desktop application" in dev_content
+    ), "tools/dev_dashboard.py must reference Tauri Desktop application as official UI"
+    assert (
+        "Developer Notice (F07)" in dev_content
+    ), "tools/dev_dashboard.py must remediate F07 by noting host developer execution"
 
     # server/dashboard.py deprecation shim
     server_dash = repo_root / "server" / "dashboard.py"

@@ -20,13 +20,25 @@ import {
   DesignMode,
   DiagramsMode,
 } from './screens/Modes';
-import { Mode, ModelTier, SidecarHealth } from './types';
+import { Mode, ModelTier, SidecarHealth, PrivacyBoundary, RoutingObjective } from './types';
 import { sidecarClient } from './api/client';
 import { Sparkles } from 'lucide-react';
 
 export const App: React.FC = () => {
   const getHashMode = (): Mode => {
     const raw = window.location.hash.replace('#/', '').replace('#', '');
+    const aliasMap: Record<string, Mode> = {
+      automations: 'workflows',
+      research: 'deep-research',
+      writing: 'docs',
+      data: 'sheets',
+      developer: 'code',
+      activity: 'cost',
+      approvals: 'policies',
+      models: 'benchmarks',
+      knowledge: 'docs',
+    };
+    if (aliasMap[raw]) return aliasMap[raw];
     const validModes: Mode[] = [
       'home', 'agent', 'tasks', 'swarm', 'workflows', 'code', 'deep-research',
       'docs', 'sheets', 'slides', 'websites', 'design', 'diagrams', 'channels',
@@ -37,9 +49,13 @@ export const App: React.FC = () => {
 
   const [activeMode, setActiveModeState] = useState<Mode>(getHashMode);
   const [activeModel, setActiveModel] = useState<ModelTier>('instant');
+  const [routingObjective, setRoutingObjective] = useState<RoutingObjective>('balanced');
+  const [privacyBoundary, setPrivacyBoundary] = useState<PrivacyBoundary>('local_only');
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>('c1');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [health, setHealth] = useState<SidecarHealth>({ status: 'offline' });
+  const [isBusy, setIsBusy] = useState(false);
+  const [projectName, setProjectName] = useState('Agent Engine');
 
   const setActiveMode = (mode: Mode) => {
     setActiveModeState(mode);
@@ -104,8 +120,14 @@ export const App: React.FC = () => {
             onSelectMode={setActiveMode}
             activeModel={activeModel}
             onSelectModel={setActiveModel}
+            routingObjective={routingObjective}
+            onSelectRoutingObjective={setRoutingObjective}
+            privacyBoundary={privacyBoundary}
+            onSelectPrivacyBoundary={setPrivacyBoundary}
             inputRef={chatInputRef}
             activeSessionId={activeSessionId}
+            onBusyChange={setIsBusy}
+            onProjectNameChange={setProjectName}
           />
         );
       case 'agent':
@@ -296,10 +318,16 @@ export const App: React.FC = () => {
       onSelectSession={setActiveSessionId}
       activeModel={activeModel}
       onSelectModel={setActiveModel}
+      routingObjective={routingObjective}
+      onSelectRoutingObjective={setRoutingObjective}
+      privacyBoundary={privacyBoundary}
+      onSelectPrivacyBoundary={setPrivacyBoundary}
       sidebarCollapsed={sidebarCollapsed}
       onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
       onNewChat={handleNewChat}
       health={health}
+      isBusy={isBusy}
+      projectName={projectName}
     >
       {renderActiveScreen()}
     </Layout>

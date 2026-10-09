@@ -1,209 +1,47 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
-  Sparkles,
-  Zap,
-  GitBranch,
   Search,
   FileText,
   Table2,
-  Network,
   Code2,
-  Layers,
   RotateCcw,
   ArrowRight,
   FolderKanban,
   Upload,
   Loader2,
+  Layers,
+  Clock,
+  Pin,
 } from 'lucide-react';
-import { Mode, ModelTier, ChatMessage, AttachmentFile, SelectedSkill, ApprovalRequest, AgentPersona } from '../types';
+import {
+  Mode,
+  ModelTier,
+  ChatMessage,
+  AttachmentFile,
+  SelectedSkill,
+  ApprovalRequest,
+  AgentPersona,
+  PrivacyBoundary,
+  RoutingObjective,
+} from '../types';
 import { ChatInput } from '../components/ChatInput';
 import { Message } from '../components/Message';
+import { ExecutionPreferences } from '../components/ExecutionPreferences';
 import { sidecarClient, DEFAULT_PERSONAS } from '../api/client';
 
 export interface HomeProps {
   onSelectMode: (mode: Mode) => void;
   activeModel: ModelTier;
   onSelectModel?: (model: ModelTier) => void;
+  routingObjective?: RoutingObjective;
+  onSelectRoutingObjective?: (objective: RoutingObjective) => void;
+  privacyBoundary?: PrivacyBoundary;
+  onSelectPrivacyBoundary?: (boundary: PrivacyBoundary) => void;
   inputRef?: React.RefObject<HTMLTextAreaElement>;
   initialMessages?: ChatMessage[];
   activeSessionId?: string;
-}
-
-// Tool Call Interceptor for Policy Shield and Dangerous Operations
-function detectDangerousToolCall(
-  promptText: string,
-  _skill?: SelectedSkill
-): ApprovalRequest | null {
-  const lower = promptText.toLowerCase().trim();
-
-  // 1. Filesystem destructive deletion
-  if (
-    lower.includes('rm -rf') ||
-    lower.includes('rm -f') ||
-    lower.includes('delete all') ||
-    lower.includes('wipe disk') ||
-    lower.includes('format disk')
-  ) {
-    const cmd = promptText.includes('rm -rf') ? promptText : 'rm -rf ./build ./dist /tmp/agent_cache';
-    return {
-      id: `appr-${Date.now()}`,
-      toolName: 'bash_exec',
-      toolArgs: {
-        command: cmd,
-        cwd: '.',
-        danger_flag: true,
-      },
-      riskLevel: 'critical',
-      riskScore: 0.95,
-      reason: "Executing recursive deletion ('rm -rf') permanently destroys filesystem files (Rule: destructive_fs_rm_all).",
-      suggestion: 'rm -i <specific_file_path> or move to a staging backup directory',
-      diff: {
-        type: 'command',
-        target: cmd,
-        contextInfo: {
-          cwd: '.',
-          user: 'operator',
-          safetyPolicy: 'destructive_fs_rm_all',
-        },
-      },
-      estCostDelta: '$0.0000 (Local)',
-      status: 'pending',
-      createdAt: 'Just now',
-    };
-  }
-
-  // 2. System package or firewall modification (Rule: dangerous_system_change)
-  if (
-    lower.includes('sudo') ||
-    lower.includes('apt-get install') ||
-    lower.includes('apt install') ||
-    lower.includes('yum install') ||
-    lower.includes('ufw allow') ||
-    lower.includes('iptables')
-  ) {
-    return {
-      id: `appr-${Date.now()}`,
-      toolName: 'bash_exec',
-      toolArgs: {
-        command: promptText,
-        cwd: '.',
-        requires_elevation: true,
-      },
-      riskLevel: 'high',
-      riskScore: 0.88,
-      reason: "System-level package changes or firewall modifications require explicit administrator confirmation (Rule: dangerous_system_change).",
-      suggestion: 'Stage package installation in sandboxed Docker container first',
-      diff: {
-        type: 'command',
-        target: promptText,
-        contextInfo: {
-          cwd: '.',
-          user: 'root (sudo)',
-          policyId: 'dangerous_system_change',
-        },
-      },
-      estCostDelta: '$0.0001 (CODE Tier)',
-      status: 'pending',
-      createdAt: 'Just now',
-    };
-  }
-
-  // 3. Database DROP or TRUNCATE (Rule: db_drop_prod)
-  if (
-    lower.includes('drop table') ||
-    lower.includes('drop database') ||
-    lower.includes('truncate table') ||
-    lower.includes('drop schema')
-  ) {
-    return {
-      id: `appr-${Date.now()}`,
-      toolName: 'sql_exec',
-      toolArgs: {
-        query: promptText,
-        database: 'production_main',
-        destructive: true,
-      },
-      riskLevel: 'critical',
-      riskScore: 0.98,
-      reason: "Dropping production tables or databases causes unrecoverable data loss (Rule: db_drop_prod).",
-      suggestion: 'Perform non-destructive soft-delete or schema migration with table rename',
-      diff: {
-        type: 'sql',
-        target: 'production_main',
-        proposed: promptText,
-      },
-      estCostDelta: '$0.0000 (Local DB)',
-      status: 'pending',
-      createdAt: 'Just now',
-    };
-  }
-
-  // 4. Git force push to main/master (Rule: git_force_push)
-  if (
-    (lower.includes('git push') && (lower.includes('--force') || lower.includes('-f'))) ||
-    lower.includes('force push')
-  ) {
-    return {
-      id: `appr-${Date.now()}`,
-      toolName: 'git_exec',
-      toolArgs: {
-        command: 'git push --force origin master',
-        branch: 'master',
-      },
-      riskLevel: 'high',
-      riskScore: 0.85,
-      reason: "Force pushing to master overwrites shared team commit history (Rule: git_force_push).",
-      suggestion: 'Rebase or submit a feature branch PR with non-destructive merge',
-      diff: {
-        type: 'command',
-        target: 'git push --force origin master',
-        contextInfo: {
-          branch: 'master',
-          remote: 'origin',
-        },
-      },
-      estCostDelta: '$0.0000 (Git CLI)',
-      status: 'pending',
-      createdAt: 'Just now',
-    };
-  }
-
-  // 5. Sensitive file modification
-  if (
-    lower.includes('overwrite package.json') ||
-    lower.includes('overwrite .env') ||
-    lower.includes('modify policy') ||
-    lower.includes('write_file')
-  ) {
-    return {
-      id: `appr-${Date.now()}`,
-      toolName: 'write_file',
-      toolArgs: {
-        path: 'package.json',
-        content: '{\n  "name": "agent-engine",\n  "version": "0.2.0-alpha"\n}',
-      },
-      riskLevel: 'high',
-      riskScore: 0.82,
-      reason: "Modifying core project manifest or environment credentials requires operator review (Rule: secrets_env_access).",
-      suggestion: 'Verify dependency diffs in isolated staging workspace',
-      diff: {
-        type: 'file',
-        target: 'package.json',
-        diffLines: [
-          { type: 'context', lineNumber: 1, text: '{' },
-          { type: 'context', lineNumber: 2, text: '  "name": "agent-engine",' },
-          { type: 'remove', lineNumber: 3, text: '  "version": "0.1.0",' },
-          { type: 'add', lineNumber: 3, text: '  "version": "0.2.0-alpha",' },
-          { type: 'context', lineNumber: 4, text: '}' },
-        ],
-      },
-      estCostDelta: '+$0.0002 (Local Sandboxed)',
-      status: 'pending',
-      createdAt: 'Just now',
-    };
-  }
-
-  return null;
+  onBusyChange?: (isBusy: boolean) => void;
+  onProjectNameChange?: (name: string) => void;
 }
 
 interface FeaturedCase {
@@ -220,14 +58,22 @@ export const Home: React.FC<HomeProps> = ({
   onSelectMode,
   activeModel,
   onSelectModel,
+  routingObjective = 'balanced',
+  onSelectRoutingObjective,
+  privacyBoundary = 'local_only',
+  onSelectPrivacyBoundary,
   inputRef: externalInputRef,
   initialMessages = [],
   activeSessionId,
+  onBusyChange,
+  onProjectNameChange,
 }) => {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [isStreaming, setIsStreaming] = useState(false);
-  const [activeProjectId, setActiveProjectId] = useState<string>('');
-  const [activeProjectName, setActiveProjectName] = useState<string>('');
+  const [activeRoutingObjective, setActiveRoutingObjective] = useState<RoutingObjective>(routingObjective);
+  const [activePrivacyBoundary, setActivePrivacyBoundary] = useState<PrivacyBoundary>(privacyBoundary);
+  const [activeProjectId, setActiveProjectId] = useState<string>('1');
+  const [activeProjectName, setActiveProjectName] = useState<string>('Agent Engine');
   const [initialInputText, setInitialInputText] = useState('');
   const [activePersona, setActivePersona] = useState<AgentPersona>(DEFAULT_PERSONAS[0]);
   const [activePipeline, setActivePipeline] = useState<string>(DEFAULT_PERSONAS[0].pipelineName);
@@ -239,6 +85,30 @@ export const Home: React.FC<HomeProps> = ({
   const internalInputRef = useRef<HTMLTextAreaElement>(null);
   const activeInputRef = externalInputRef || internalInputRef;
   const activeAbortController = useRef<AbortController | null>(null);
+
+  // Sync privacy & routing when parent props change
+  useEffect(() => {
+    setActiveRoutingObjective(routingObjective);
+  }, [routingObjective]);
+
+  useEffect(() => {
+    setActivePrivacyBoundary(privacyBoundary);
+  }, [privacyBoundary]);
+
+  // Sync busy state
+  useEffect(() => {
+    onBusyChange?.(isStreaming);
+  }, [isStreaming, onBusyChange]);
+
+  const handleRoutingObjectiveChange = (obj: RoutingObjective) => {
+    setActiveRoutingObjective(obj);
+    onSelectRoutingObjective?.(obj);
+  };
+
+  const handlePrivacyBoundaryChange = (pb: PrivacyBoundary) => {
+    setActivePrivacyBoundary(pb);
+    onSelectPrivacyBoundary?.(pb);
+  };
 
   // Session persistence: load session messages when activeSessionId changes
   useEffect(() => {
@@ -272,7 +142,7 @@ export const Home: React.FC<HomeProps> = ({
     };
   }, [activeSessionId]);
 
-  // Canvas Drag & Drop handlers (Task 3.6)
+  // Canvas Drag & Drop handlers
   const handleCanvasDragEnter = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -326,7 +196,6 @@ export const Home: React.FC<HomeProps> = ({
           status: 'indexed',
         };
 
-        // Ingest into observational memory (Task 3.6)
         try {
           await sidecarClient.observeMemory({
             content: `[Document Grounding: ${file.name}]\n${snippet || file.name}`,
@@ -359,7 +228,6 @@ export const Home: React.FC<HomeProps> = ({
   const handleModelChange = useCallback(
     (newModel: ModelTier) => {
       onSelectModel?.(newModel);
-      // Map model to optimal execution tier pipeline
       if (newModel === 'reasoning') {
         setActivePipeline(activePersona.id === 'general' ? 'cot_reasoning' : activePersona.pipelineName);
       } else if (newModel === 'swarm') {
@@ -398,49 +266,53 @@ export const Home: React.FC<HomeProps> = ({
     return 'Good evening, Nadir';
   };
 
-  const actionChips = [
-    { mode: 'swarm' as Mode, label: 'Swarm', icon: <Zap className="w-3.5 h-3.5 text-warning" /> },
-    { mode: 'workflows' as Mode, label: 'Workflows', icon: <GitBranch className="w-3.5 h-3.5 text-text-secondary" /> },
-    { mode: 'deep-research' as Mode, label: 'Deep Research', icon: <Search className="w-3.5 h-3.5 text-accent" /> },
-    { mode: 'docs' as Mode, label: 'Docs', icon: <FileText className="w-3.5 h-3.5 text-text-secondary" /> },
-    { mode: 'sheets' as Mode, label: 'Sheets', icon: <Table2 className="w-3.5 h-3.5 text-success" /> },
-    { mode: 'diagrams' as Mode, label: 'Diagrams', icon: <Network className="w-3.5 h-3.5 text-text-secondary" /> },
-    { mode: 'code' as Mode, label: 'Code', icon: <Code2 className="w-3.5 h-3.5 text-text-secondary" /> },
+  const contextualTools = [
+    { mode: 'deep-research' as Mode, label: 'Research', icon: <Search className="w-3.5 h-3.5 text-text-secondary" /> },
+    { mode: 'docs' as Mode, label: 'Writing', icon: <FileText className="w-3.5 h-3.5 text-text-secondary" /> },
+    { mode: 'sheets' as Mode, label: 'Data', icon: <Table2 className="w-3.5 h-3.5 text-text-secondary" /> },
+    { mode: 'code' as Mode, label: 'Developer', icon: <Code2 className="w-3.5 h-3.5 text-text-secondary" /> },
   ];
 
   const featuredCases: FeaturedCase[] = [
     {
       title: 'Build an invoice agent',
       category: 'Business Pipeline',
-      description: 'Extract line items from PDF invoices and validate calculations with 0-token deterministic code.',
+      description: 'Extract line items from PDF invoices and validate calculations with deterministic code.',
       mode: 'workflows',
-      icon: <Layers className="w-4 h-4 text-accent" />,
+      icon: <Layers className="w-3.5 h-3.5 text-text-secondary" />,
       estCost: '$0.00 (CODE Tier)',
       prompt: 'Build an invoice validation workflow that extracts line items from incoming PDFs, verifies tax arithmetic via Python, and flags discrepancies > 1% to Slack.',
     },
     {
       title: 'Analyze codebase & architecture',
       category: 'Developer Case',
-      description: 'Generate comprehensive AST component graphs and detect dead dependencies across projects.',
+      description: 'Generate component graphs and detect dead dependencies across projects.',
       mode: 'code',
-      icon: <Code2 className="w-4 h-4 text-warning" />,
+      icon: <Code2 className="w-3.5 h-3.5 text-text-secondary" />,
       estCost: '$0.001 (Small Model)',
       prompt: 'Inspect the current codebase architecture, map inter-module dependencies across services, and suggest optimizations for deterministic execution.',
     },
     {
       title: 'Deep market research report',
       category: 'Investigative Case',
-      description: 'Synthesize 40+ market source documents into an executive summary with verified source citations.',
+      description: 'Synthesize market sources into an executive summary with verified source citations.',
       mode: 'deep-research',
-      icon: <Search className="w-4 h-4 text-success" />,
+      icon: <Search className="w-3.5 h-3.5 text-text-secondary" />,
       estCost: '$0.004 (Mid Model)',
       prompt: 'Draft an in-depth research report comparing local-first AI engine architectures against cloud-centric platforms, highlighting latency, cost, and data sovereignty.',
     },
   ];
 
   const recentProjects = [
-    { id: '1', name: 'Organiser Workspace', threads: 8, updated: '2h ago' },
-    { id: '2', name: 'Client Website Redesign', threads: 3, updated: '1d ago' },
+    { id: '1', name: 'Agent Engine', threads: 12, updated: 'Active today', desc: 'Local repository · Active today' },
+    { id: '2', name: 'Organiser Workspace', threads: 8, updated: '2h ago', desc: '8 active threads · Updated 2h ago' },
+    { id: '3', name: 'Client Website', threads: 3, updated: '1d ago', desc: '3 active threads · Updated 1d ago' },
+  ];
+
+  const recentWork = [
+    { id: 'w1', title: 'Agent Engine architecture review', updated: '18 min ago' },
+    { id: 'w2', title: 'THE DEN opening checklist', updated: 'Yesterday' },
+    { id: 'w3', title: 'Article draft: Local AI', updated: '2 days ago' },
   ];
 
   // Real streaming token dispatcher via sidecarClient
@@ -462,7 +334,7 @@ export const Home: React.FC<HomeProps> = ({
       const assistantMsgId = `msg-${Date.now()}`;
       const startTime = performance.now();
 
-      // Placeholder assistant message
+      // Placeholder assistant message with execution provenance
       setMessages((prev) => [
         ...prev,
         {
@@ -477,9 +349,17 @@ export const Home: React.FC<HomeProps> = ({
             tokenCount: 0,
             tokensPerSec: 0,
             estCost: '$0.0000',
+            effectivePrivacy: activePrivacyBoundary,
+            routingObjective: activeRoutingObjective,
             skillId: skill?.skill.id,
             skillName: skill?.skill.name,
             enabledPlugins,
+            execution: {
+              status: 'streaming',
+              isLocal: activePrivacyBoundary === 'local_only',
+              effectivePrivacy: activePrivacyBoundary,
+              routingObjective: activeRoutingObjective,
+            },
           },
         },
       ]);
@@ -493,6 +373,8 @@ export const Home: React.FC<HomeProps> = ({
         prompt: promptPayload,
         sessionId: activeSessionId,
         model,
+        routingObjective: activeRoutingObjective,
+        privacyBoundary: activePrivacyBoundary,
         signal: controller.signal,
         onToken: (token: string) => {
           accumulated += token;
@@ -512,13 +394,20 @@ export const Home: React.FC<HomeProps> = ({
                       tokenCount: currentTokenCount,
                       tokensPerSec: tps,
                       latencyMs: Math.round(now - startTime),
+                      execution: {
+                        ...m.metadata?.execution,
+                        totalTokens: currentTokenCount,
+                        latencyMs: Math.round(now - startTime),
+                        tokensPerSec: tps,
+                      },
                     },
                   }
                 : m
             )
           );
         },
-        onCostUpdate: (costData: any) => {
+        onRoutingResolved: (payload: any) => {
+          const decision = payload.decision || {};
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantMsgId
@@ -526,111 +415,202 @@ export const Home: React.FC<HomeProps> = ({
                     ...m,
                     metadata: {
                       ...m.metadata,
-                      estCost:
-                        costData.cost_usd !== undefined
-                          ? `$${costData.cost_usd.toFixed(4)}`
-                          : m.metadata?.estCost,
-                      tokenCount:
-                        (costData.prompt_tokens || 0) + (costData.completion_tokens || 0),
+                      executionId: payload.execution_id || m.metadata?.executionId,
+                      provider: decision.provider || m.metadata?.provider,
+                      modelName: decision.model || m.metadata?.modelName,
+                      isLocal: decision.is_local !== undefined ? decision.is_local : m.metadata?.isLocal,
+                      effectivePrivacy: decision.privacy_boundary || activePrivacyBoundary,
+                      routingObjective: decision.routing_objective || activeRoutingObjective,
+                      routingExplanation: decision.explanation || m.metadata?.routingExplanation,
+                      execution: {
+                        ...m.metadata?.execution,
+                        executionId: payload.execution_id || m.metadata?.execution?.executionId,
+                        status: 'running',
+                        provider: decision.provider || m.metadata?.execution?.provider,
+                        model: decision.model || m.metadata?.execution?.model,
+                        isLocal: decision.is_local !== undefined ? decision.is_local : m.metadata?.execution?.isLocal,
+                        effectivePrivacy: decision.privacy_boundary || activePrivacyBoundary,
+                        routingObjective: decision.routing_objective || activeRoutingObjective,
+                        routingExplanation: decision.explanation || m.metadata?.execution?.routingExplanation,
+                      },
                     },
                   }
                 : m
             )
           );
         },
-        onError: (errMsg: string) => {
-          setIsStreaming(false);
+        onApprovalRequired: (payload: any) => {
+          const appr = payload.approval || payload;
+          const approvalReq: ApprovalRequest = {
+            id: appr.id || `appr-${Date.now()}`,
+            toolName: appr.tool_name || appr.toolName || 'system_operation',
+            toolArgs: appr.tool_args || appr.toolArgs || {},
+            riskLevel: appr.risk_level || appr.riskLevel || 'high',
+            riskScore: appr.risk_score || appr.riskScore || 0.8,
+            reason: appr.reason || 'Operation requires operator authorization',
+            suggestion: appr.suggestion || 'Verify parameters before proceeding',
+            status: 'pending',
+            createdAt: 'Just now',
+          };
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantMsgId
                 ? {
                     ...m,
-                    content: accumulated
-                      ? `${accumulated}\n\n❌ **Execution Error:** ${errMsg}`
-                      : `❌ **Provider Error:** ${errMsg}`,
-                    isStreaming: false,
+                    approvalRequest: approvalReq,
+                    metadata: {
+                      ...m.metadata,
+                      policyStatus: 'approval_required',
+                    },
                   }
                 : m
             )
           );
         },
-        onDone: () => {
-          setIsStreaming(false);
+        onCostUpdate: (costData: any) => {
+          const totalTokens = (costData.prompt_tokens || 0) + (costData.completion_tokens || 0);
           setMessages((prev) =>
-            prev.map((m) => (m.id === assistantMsgId ? { ...m, isStreaming: false } : m))
+            prev.map((m) =>
+              m.id === assistantMsgId
+                ? {
+                    ...m,
+                    metadata: {
+                      ...m.metadata,
+                      executionId: costData.execution_id || m.metadata?.executionId,
+                      provider: costData.provider || m.metadata?.provider,
+                      modelName: costData.model || m.metadata?.modelName,
+                      isLocal: costData.is_local !== undefined ? costData.is_local : m.metadata?.isLocal,
+                      estCost:
+                        costData.cost_usd !== undefined
+                          ? `$${costData.cost_usd.toFixed(4)}`
+                          : m.metadata?.estCost,
+                      tokenCount: totalTokens || m.metadata?.tokenCount,
+                      latencyMs: costData.latency_ms || m.metadata?.latencyMs,
+                      tokensPerSec: costData.tokens_per_second || m.metadata?.tokensPerSec,
+                      execution: {
+                        ...m.metadata?.execution,
+                        executionId: costData.execution_id || m.metadata?.execution?.executionId,
+                        provider: costData.provider || m.metadata?.execution?.provider,
+                        model: costData.model || m.metadata?.execution?.model,
+                        isLocal: costData.is_local !== undefined ? costData.is_local : m.metadata?.execution?.isLocal,
+                        costUsd: costData.cost_usd,
+                        totalTokens: totalTokens || m.metadata?.execution?.totalTokens,
+                        latencyMs: costData.latency_ms || m.metadata?.execution?.latencyMs,
+                        tokensPerSec: costData.tokens_per_second || m.metadata?.execution?.tokensPerSec,
+                      },
+                    },
+                  }
+                : m
+            )
+          );
+        },
+        onDone: (finalData: any) => {
+          setIsStreaming(false);
+          const totalTokens = (finalData.prompt_tokens || 0) + (finalData.completion_tokens || 0);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId
+                ? {
+                    ...m,
+                    isStreaming: false,
+                    metadata: {
+                      ...m.metadata,
+                      executionId: finalData.execution_id || m.metadata?.executionId,
+                      tokenCount: totalTokens || m.metadata?.tokenCount,
+                      latencyMs: finalData.latency_ms || m.metadata?.latencyMs,
+                      tokensPerSec: finalData.tokens_per_second || m.metadata?.tokensPerSec,
+                      estCost:
+                        finalData.cost_usd !== undefined
+                          ? `$${finalData.cost_usd.toFixed(4)}`
+                          : m.metadata?.estCost,
+                      provider: finalData.provider || m.metadata?.provider,
+                      modelName: finalData.model || m.metadata?.modelName,
+                      isLocal: finalData.is_local !== undefined ? finalData.is_local : m.metadata?.isLocal,
+                      execution: {
+                        ...m.metadata?.execution,
+                        executionId: finalData.execution_id || m.metadata?.execution?.executionId,
+                        status: 'completed',
+                        provider: finalData.provider || m.metadata?.execution?.provider,
+                        model: finalData.model || m.metadata?.execution?.model,
+                        isLocal: finalData.is_local !== undefined ? finalData.is_local : m.metadata?.execution?.isLocal,
+                        costUsd: finalData.cost_usd,
+                        totalTokens: totalTokens || m.metadata?.execution?.totalTokens,
+                        latencyMs: finalData.latency_ms || m.metadata?.execution?.latencyMs,
+                        tokensPerSec: finalData.tokens_per_second || m.metadata?.execution?.tokensPerSec,
+                      },
+                    },
+                  }
+                : m
+            )
+          );
+          activeAbortController.current = null;
+        },
+        onError: (err: any) => {
+          setIsStreaming(false);
+          activeAbortController.current = null;
+          const errMsg = err?.message || 'Execution Error: Unable to complete operation.';
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsgId
+                ? {
+                    ...m,
+                    isStreaming: false,
+                    content: m.content ? `${m.content}\n\n[Provider Error: ${errMsg}]` : `[Provider Error: ${errMsg}]`,
+                    metadata: {
+                      ...m.metadata,
+                      execution: {
+                        ...m.metadata?.execution,
+                        status: 'failed',
+                        error: errMsg,
+                      },
+                    },
+                  }
+                : m
+            )
           );
         },
       });
     },
-    [activeSessionId]
+    [activeRoutingObjective, activePrivacyBoundary, activeSessionId]
   );
 
   const handleSend = (
     text: string,
     options?: {
       model: ModelTier;
+      personaId?: string;
       projectId?: string;
       attachments?: AttachmentFile[];
       skill?: SelectedSkill;
       enabledPlugins?: string[];
     }
   ) => {
-    if (
-      !text.trim() &&
-      (!options?.attachments || options.attachments.length === 0) &&
-      !options?.skill
-    )
-      return;
-
-    const userDisplayText = options?.skill
-      ? `Invoked **${options.skill.skill.name}** (\`${options.skill.skill.command}\`)${
-          text.trim() ? `\n\n${text}` : ''
-        }`
-      : text;
-
+    const userMsgId = `msg-${Date.now()}`;
     const userMsg: ChatMessage = {
-      id: `usr-${Date.now()}`,
+      id: userMsgId,
       role: 'user',
-      content: userDisplayText,
+      content: text,
       timestamp: 'Just now',
-      attachments: options?.attachments,
-      skill: options?.skill,
+      attachments: options?.attachments || canvasAttachments,
+      metadata: {
+        modelTier: options?.model || activeModel,
+        skillId: options?.skill?.skill.id,
+        skillName: options?.skill?.skill.name,
+      },
     };
 
     setMessages((prev) => [...prev, userMsg]);
+    setCanvasAttachments([]);
     setInitialInputText('');
 
-    const targetModel = options?.model || activeModel;
-
-    // Check if prompt triggers a dangerous tool call requiring inline approval
-    const dangerousApproval = detectDangerousToolCall(text, options?.skill);
-
-    if (dangerousApproval) {
-      const assistantMsgId = `msg-${Date.now()}`;
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: assistantMsgId,
-          role: 'assistant',
-          content: `I have analyzed your request: "${text}".\n\nBecause this operation involves critical system resources or potentially destructive actions, the **Policy Guardrail Engine** requires explicit operator approval before execution.`,
-          timestamp: 'Just now',
-          approvalRequest: dangerousApproval,
-          metadata: {
-            modelTier: targetModel,
-            latencyMs: 14,
-            tokenCount: 28,
-            tokensPerSec: 65,
-            estCost: '$0.0000 (Gated)',
-          },
-        },
-      ]);
-      return;
-    }
-
-    startStreamingResponse(text, targetModel, options?.skill, options?.enabledPlugins);
+    startStreamingResponse(
+      text,
+      options?.model || activeModel,
+      options?.skill,
+      options?.enabledPlugins
+    );
   };
 
-  // Inline Approval Handlers (<500ms execution SLA, audit persistence)
   const handleApproveToolCall = async (approvalId: string) => {
     const startTime = performance.now();
     let targetReq: ApprovalRequest | undefined;
@@ -650,7 +630,7 @@ export const Home: React.FC<HomeProps> = ({
           decision: 'approve',
           riskLevel: targetReq.riskLevel,
           riskScore: targetReq.riskScore,
-          reason: 'Approved by operator in conversational GUI',
+          reason: 'Authorized by operator in chat',
         });
         auditId = auditRecord.id;
       } catch {
@@ -660,7 +640,6 @@ export const Home: React.FC<HomeProps> = ({
 
     const elapsed = Math.max(Math.round(performance.now() - startTime), 18);
 
-    // Update message state with approved card
     setMessages((prev) =>
       prev.map((m) => {
         if (m.approvalRequest?.id === approvalId) {
@@ -679,7 +658,6 @@ export const Home: React.FC<HomeProps> = ({
       })
     );
 
-    // Resume assistant stream with execution confirmation
     const execMsgId = `exec-${Date.now()}`;
     const toolName = targetReq?.toolName || 'tool';
     setMessages((prev) => [
@@ -694,7 +672,7 @@ export const Home: React.FC<HomeProps> = ({
           latencyMs: elapsed,
           tokenCount: 42,
           tokensPerSec: 80,
-          estCost: '$0.0000 (CODE Tier)',
+          estCost: '$0.0000',
         },
       },
     ]);
@@ -754,7 +732,7 @@ export const Home: React.FC<HomeProps> = ({
           latencyMs: 12,
           tokenCount: 26,
           tokensPerSec: 65,
-          estCost: '$0.0000 (CODE Tier)',
+          estCost: '$0.0000',
         },
       },
     ]);
@@ -824,7 +802,7 @@ export const Home: React.FC<HomeProps> = ({
           latencyMs: elapsed,
           tokenCount: 48,
           tokensPerSec: 90,
-          estCost: '$0.0000 (CODE Tier)',
+          estCost: '$0.0000',
         },
       },
     ]);
@@ -852,7 +830,9 @@ export const Home: React.FC<HomeProps> = ({
   const handleProjectSelect = (id: string) => {
     setActiveProjectId(id);
     const found = recentProjects.find((p) => p.id === id);
-    setActiveProjectName(found ? found.name : '');
+    const name = found ? found.name : '';
+    setActiveProjectName(name);
+    onProjectNameChange?.(name);
   };
 
   const handleResetChat = () => {
@@ -875,32 +855,31 @@ export const Home: React.FC<HomeProps> = ({
       onDrop={handleCanvasDrop}
       className="h-full flex flex-col justify-between overflow-hidden relative"
     >
-      {/* Canvas Drag and Drop Target Overlay (Task 3.6) */}
+      {/* Canvas Drag and Drop Target Overlay */}
       {isCanvasDragOver && (
         <div
           data-testid="canvas-drag-overlay"
           className="absolute inset-0 z-50 bg-bg-base/90 backdrop-blur-sm border-2 border-dashed border-accent flex flex-col items-center justify-center p-8 text-center pointer-events-none animate-fade-in"
         >
-          <div className="w-16 h-16 rounded-2xl bg-accent/15 border border-accent flex items-center justify-center mb-4 text-accent">
-            <Upload className="w-8 h-8 animate-bounce" />
+          <div className="w-12 h-12 rounded-xl bg-accent/15 border border-accent flex items-center justify-center mb-3 text-accent">
+            <Upload className="w-6 h-6 animate-bounce" />
           </div>
-          <h3 className="text-lg font-bold text-text-primary mb-1">
-            Drop documents to ground in session memory
+          <h3 className="text-base font-semibold text-text-primary mb-1">
+            Drop documents to attach to session
           </h3>
-          <p className="text-xs text-text-secondary max-w-sm mb-4 leading-relaxed">
-            Drag-and-drop PDFs, CSVs, and code files directly onto the canvas for immediate RAG grounding and 0-token caching.
+          <p className="text-xs text-text-secondary max-w-sm mb-3 leading-relaxed">
+            Drag files directly into the workbench for context and session memory.
           </p>
-          <div className="flex flex-wrap items-center justify-center gap-2 text-[11px] text-text-tertiary">
+          <div className="flex flex-wrap items-center justify-center gap-1.5 text-[11px] text-text-tertiary">
             <span className="px-2 py-0.5 rounded bg-bg-elevated border border-border-subtle font-mono">PDF</span>
             <span className="px-2 py-0.5 rounded bg-bg-elevated border border-border-subtle font-mono">CSV</span>
-            <span className="px-2 py-0.5 rounded bg-bg-elevated border border-border-subtle font-mono">Python (.py)</span>
-            <span className="px-2 py-0.5 rounded bg-bg-elevated border border-border-subtle font-mono">TypeScript (.ts/.tsx)</span>
+            <span className="px-2 py-0.5 rounded bg-bg-elevated border border-border-subtle font-mono">Code (.py, .ts, .rs)</span>
             <span className="px-2 py-0.5 rounded bg-bg-elevated border border-border-subtle font-mono">Markdown (.md)</span>
           </div>
         </div>
       )}
 
-      {/* Upload Progress Bar (Task 3.6) */}
+      {/* Upload Progress Bar */}
       {uploadProgress !== null && (
         <div
           data-testid="upload-progress-bar"
@@ -909,7 +888,7 @@ export const Home: React.FC<HomeProps> = ({
           <div className="flex items-center gap-2.5 flex-1 mr-4">
             <Loader2 className="w-3.5 h-3.5 text-accent animate-spin flex-shrink-0" />
             <span className="text-text-secondary font-medium">
-              Indexing documents into observational memory:
+              Indexing documents into session memory:
             </span>
             <div className="flex-1 max-w-md h-1.5 bg-bg-base rounded-full overflow-hidden border border-border-subtle">
               <div
@@ -942,90 +921,156 @@ export const Home: React.FC<HomeProps> = ({
       )}
 
       {/* Main Content Area */}
-      <div className="flex-1 overflow-y-auto px-4 md:px-6 py-6 scrollbar-thin">
+      <div className="flex-1 overflow-y-auto px-4 md:px-8 py-6 scrollbar-thin">
         {!isChatActive ? (
-          /* Empty State Canvas */
-          <div className="w-full max-w-[760px] mx-auto flex flex-col items-center text-center space-y-6 my-auto pt-4 md:pt-8">
-            {/* Logo and Greeting */}
-            <div className="space-y-2">
-              <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-bg-elevated border border-border-strong shadow-lg mb-2">
-                <Sparkles className="w-6 h-6 text-accent" />
-              </div>
-              <h2 className="text-2xl font-bold tracking-tight text-text-primary">
+          /* Canonical Workbench Empty State */
+          <div className="w-full max-w-[760px] mx-auto flex flex-col space-y-6 pt-4 md:pt-8 text-left">
+            {/* Header: Restrained greeting & primary question */}
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-text-tertiary tracking-wide">
                 {getGreeting()}
-              </h2>
-              <p className="text-sm text-text-secondary max-w-lg leading-relaxed">
-                Collaborate with your local-first multi-agent engine. 90% code & cache, 9% small models, 1% frontier.
+              </div>
+              <h1 className="text-2xl font-bold tracking-tight text-text-primary">
+                What are you working on?
+              </h1>
+              <p className="text-xs text-text-secondary leading-relaxed pt-0.5">
+                Ask, open a project, or describe a task.
               </p>
-              <div className="flex items-center justify-center gap-2 pt-1 text-xs text-text-tertiary">
-                <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-bg-elevated border border-border-subtle">
-                  <span className="text-accent">Persona:</span>
-                  <span className="text-text-primary font-medium">{activePersona.name}</span>
-                </span>
-                <span className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-bg-elevated border border-border-subtle font-mono text-[11px]">
-                  <span className="text-text-tertiary">Pipeline:</span>
-                  <span className="text-accent">{activePipeline}</span>
-                </span>
+              <div className="flex items-center gap-2 pt-1 text-[11px] text-text-tertiary font-mono">
+                <span>Persona: <span className="text-text-secondary font-medium font-sans">{activePersona.name}</span></span>
+                <span>•</span>
+                <span>Pipeline: <span className="text-text-secondary">{activePipeline}</span></span>
               </div>
             </div>
 
-            {/* Universal ChatInput Box */}
-            <div className="w-full">
-              <ChatInput
-                mode="home"
-                model={activeModel}
-                personaId={activePersona.id}
-                projectId={activeProjectId}
-                projectName={activeProjectName}
-                isStreaming={isStreaming}
-                onSend={handleSend}
-                onStop={handleStop}
-                onModeChange={onSelectMode}
-                onModelChange={handleModelChange}
-                onPersonaChange={handlePersonaChange}
-                onProjectChange={handleProjectSelect}
-                onClearChat={handleResetChat}
-                inputRef={activeInputRef}
-                initialValue={initialInputText}
-                attachments={canvasAttachments}
-                onAttachmentsChange={setCanvasAttachments}
-              />
+            {/* Universal Command Surface with ExecutionPreferences */}
+            <div className="space-y-2">
+              <div className="w-full">
+                <ChatInput
+                  mode="home"
+                  model={activeModel}
+                  personaId={activePersona.id}
+                  projectId={activeProjectId}
+                  projectName={activeProjectName}
+                  isStreaming={isStreaming}
+                  onSend={handleSend}
+                  onStop={handleStop}
+                  onModeChange={onSelectMode}
+                  onModelChange={handleModelChange}
+                  onPersonaChange={handlePersonaChange}
+                  onProjectChange={handleProjectSelect}
+                  onClearChat={handleResetChat}
+                  inputRef={activeInputRef}
+                  initialValue={initialInputText}
+                  attachments={canvasAttachments}
+                  onAttachmentsChange={setCanvasAttachments}
+                />
+              </div>
+
+              {/* Preferences Control Strip directly underneath Input */}
+              <div className="flex items-center justify-between px-1 text-xs">
+                <div className="flex items-center gap-2">
+                  <ExecutionPreferences
+                    privacyBoundary={activePrivacyBoundary}
+                    onSelectPrivacyBoundary={handlePrivacyBoundaryChange}
+                    routingObjective={activeRoutingObjective}
+                    onSelectRoutingObjective={handleRoutingObjectiveChange}
+                  />
+                </div>
+                <div className="text-[11px] text-text-tertiary font-mono hidden sm:inline">
+                  Press <kbd className="px-1.5 py-0.5 rounded bg-bg-elevated border border-border-strong text-text-secondary font-mono">Ctrl+K</kbd> to focus
+                </div>
+              </div>
             </div>
 
-            {/* Quick Action Chips */}
-            <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
-              {actionChips.map((chip) => (
-                <button
-                  key={chip.mode}
-                  type="button"
-                  onClick={() => onSelectMode(chip.mode)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-bg-elevated hover:bg-bg-hover border border-border-subtle hover:border-border-strong text-xs text-text-secondary hover:text-text-primary transition-all"
-                >
-                  {chip.icon}
-                  <span>{chip.label}</span>
-                </button>
-              ))}
+            {/* Contextual Tool Shortcuts */}
+            <div className="pt-1">
+              <div className="flex items-center gap-1.5">
+                {contextualTools.map((tool) => (
+                  <button
+                    key={tool.mode}
+                    type="button"
+                    onClick={() => onSelectMode(tool.mode)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-bg-elevated hover:bg-bg-hover border border-border-subtle hover:border-border-strong text-xs text-text-secondary hover:text-text-primary transition-colors"
+                  >
+                    {tool.icon}
+                    <span>{tool.label}</span>
+                  </button>
+                ))}
+              </div>
             </div>
 
-            {/* Featured Inspiration Cards Grid */}
-            <div className="w-full pt-4 space-y-3 text-left">
-              <div className="flex items-center justify-between px-1">
+            {/* Recent Work & Pinned Projects 2-Column Split */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
+              {/* Recent Work Column */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-text-tertiary">
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>Recent work</span>
+                </div>
+                <div className="border border-border-subtle rounded-lg bg-bg-elevated/40 divide-y divide-border-subtle overflow-hidden">
+                  {recentWork.map((w) => (
+                    <div
+                      key={w.id}
+                      onClick={() => {
+                        setInitialInputText(`Review recent task: ${w.title}`);
+                        activeInputRef.current?.focus();
+                      }}
+                      className="px-3 py-2.5 flex items-center justify-between text-xs hover:bg-bg-hover cursor-pointer transition-colors"
+                    >
+                      <span className="font-medium text-text-primary truncate mr-2">{w.title}</span>
+                      <span className="text-[11px] text-text-tertiary font-mono flex-shrink-0">{w.updated}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Pinned Projects Column */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-text-tertiary">
+                  <Pin className="w-3.5 h-3.5" />
+                  <span>Pinned projects</span>
+                </div>
+                <div className="border border-border-subtle rounded-lg bg-bg-elevated/40 divide-y divide-border-subtle overflow-hidden">
+                  {recentProjects.map((p) => (
+                    <div
+                      key={p.id}
+                      onClick={() => handleProjectSelect(p.id)}
+                      className={`px-3 py-2.5 flex items-center justify-between text-xs hover:bg-bg-hover cursor-pointer transition-colors ${
+                        activeProjectId === p.id ? 'bg-accent/5' : ''
+                      }`}
+                    >
+                      <div className="truncate mr-2">
+                        <div className="font-medium text-text-primary flex items-center gap-1.5">
+                          <FolderKanban className="w-3.5 h-3.5 text-text-tertiary flex-shrink-0" />
+                          <span>{p.name}</span>
+                        </div>
+                        <div className="text-[11px] text-text-tertiary line-clamp-1">{p.desc}</div>
+                      </div>
+                      <span className="text-[10px] font-mono text-text-tertiary uppercase flex-shrink-0">
+                        {activeProjectId === p.id ? 'Active' : 'Select'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Quick-Start Templates & Inspiration (Satisfies task template coverage) */}
+            <div className="pt-2 space-y-2">
+              <div className="flex items-center justify-between px-0.5">
                 <span className="text-xs font-semibold uppercase tracking-wider text-text-tertiary">
                   Explore Inspiration
                 </span>
-                <span className="text-xs text-accent hover:underline cursor-pointer">
-                  View all templates
-                </span>
               </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
                 {featuredCases.map((item, idx) => (
                   <div
                     key={idx}
                     onClick={() => handleSelectFeaturedCase(item)}
-                    className="p-3.5 rounded-xl bg-bg-elevated hover:bg-bg-hover border border-border-subtle hover:border-border-strong cursor-pointer transition-all group flex flex-col justify-between"
+                    className="p-3 rounded-lg bg-bg-elevated hover:bg-bg-hover border border-border-subtle hover:border-border-strong cursor-pointer transition-all flex flex-col justify-between group"
                   >
-                    <div className="space-y-2">
+                    <div className="space-y-1.5">
                       <div className="flex items-center justify-between">
                         <span className="text-[10px] font-mono text-text-tertiary uppercase">
                           {item.category}
@@ -1039,43 +1084,11 @@ export const Home: React.FC<HomeProps> = ({
                         {item.description}
                       </p>
                     </div>
-                    <div className="pt-3 mt-2 border-t border-border-subtle/50 flex items-center justify-between text-[10px] font-mono text-text-tertiary">
+                    <div className="pt-2.5 mt-2 border-t border-border-subtle/50 flex items-center justify-between text-[10px] font-mono text-text-tertiary">
                       <span>{item.estCost}</span>
                       <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform text-accent" />
                     </div>
                   </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Recent Workspaces Row */}
-            <div className="w-full pt-2 text-left space-y-2">
-              <div className="text-xs font-semibold uppercase tracking-wider text-text-tertiary px-1 flex items-center gap-1.5">
-                <FolderKanban className="w-3.5 h-3.5" />
-                <span>Recent Workspaces</span>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {recentProjects.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => handleProjectSelect(p.id)}
-                    className={`p-2.5 rounded-lg border text-left flex items-center justify-between transition-all ${
-                      activeProjectId === p.id
-                        ? 'bg-accent/10 border-accent text-text-primary'
-                        : 'bg-bg-elevated border-border-subtle hover:border-border-strong text-text-secondary hover:text-text-primary'
-                    }`}
-                  >
-                    <div>
-                      <div className="text-xs font-medium">{p.name}</div>
-                      <div className="text-[10px] text-text-tertiary font-mono">
-                        {p.threads} active threads • Updated {p.updated}
-                      </div>
-                    </div>
-                    <span className="text-xs font-mono text-text-tertiary">
-                      {activeProjectId === p.id ? 'Active' : 'Select'}
-                    </span>
-                  </button>
                 ))}
               </div>
             </div>
@@ -1100,7 +1113,7 @@ export const Home: React.FC<HomeProps> = ({
       {/* Persistent Bottom ChatInput during active conversation */}
       {isChatActive && (
         <div className="border-t border-border-subtle bg-bg-base/95 backdrop-blur-md px-4 py-3">
-          <div className="w-full max-w-[760px] mx-auto">
+          <div className="w-full max-w-[760px] mx-auto space-y-2">
             <ChatInput
               mode="home"
               model={activeModel}
@@ -1119,18 +1132,18 @@ export const Home: React.FC<HomeProps> = ({
               attachments={canvasAttachments}
               onAttachmentsChange={setCanvasAttachments}
             />
+            <div className="flex items-center justify-between px-1 text-xs">
+              <ExecutionPreferences
+                privacyBoundary={activePrivacyBoundary}
+                onSelectPrivacyBoundary={handlePrivacyBoundaryChange}
+                routingObjective={activeRoutingObjective}
+                onSelectRoutingObjective={handleRoutingObjectiveChange}
+              />
+              <span className="text-[11px] text-text-tertiary font-mono">
+                {activeProjectName}
+              </span>
+            </div>
           </div>
-        </div>
-      )}
-
-      {/* Footer shortcut hint on empty state */}
-      {!isChatActive && (
-        <div className="pb-4 text-center text-[11px] text-text-tertiary select-none">
-          Press{' '}
-          <kbd className="px-1.5 py-0.5 rounded bg-bg-elevated border border-border-strong text-text-secondary font-mono">
-            Ctrl+K
-          </kbd>{' '}
-          to focus input anywhere
         </div>
       )}
     </div>

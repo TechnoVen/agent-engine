@@ -21,6 +21,25 @@ export type Mode =
   | 'settings'
   | 'projects';
 
+export type PrivacyBoundary = 'local_only' | 'approved_cloud' | 'any_configured';
+
+export type RoutingObjective = 'balanced' | 'quality_first' | 'cost_first' | 'latency_first';
+
+export interface PrivacyBoundaryOption {
+  id: PrivacyBoundary;
+  label: string;
+  description: string;
+  icon?: string;
+}
+
+export interface RoutingObjectiveOption {
+  id: RoutingObjective;
+  label: string;
+  description: string;
+  icon?: string;
+}
+
+/** @deprecated Legacy model tier aliases from pre-R3 prototypes; use RoutingObjective and PrivacyBoundary */
 export type ModelTier = 'instant' | 'swarm' | 'reasoning';
 
 export interface ModelTierOption {
@@ -164,6 +183,30 @@ export interface ObservationRecord {
   session_id?: string;
 }
 
+export interface ExecutionProvenance {
+  executionId?: string;
+  status?: string;
+  provider?: string;
+  model?: string;
+  isLocal?: boolean;
+  effectivePrivacy?: PrivacyBoundary;
+  routingObjective?: RoutingObjective;
+  routingExplanation?: string;
+  selectionReason?: string;
+  latencyMs?: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  costUsd?: number;
+  estCost?: string;
+  tokensPerSec?: number;
+  policyStatus?: string;
+  qualityEvidenceSource?: string;
+  costEvidenceSource?: string;
+  latencyEvidence?: string;
+  candidateRejections?: Array<{ candidate: string; provider?: string; stage?: string; reason: string }>;
+}
+
 export interface MessageMetadata {
   modelTier?: ModelTier;
   modelName?: string;
@@ -175,6 +218,15 @@ export interface MessageMetadata {
   skillId?: string;
   skillName?: string;
   enabledPlugins?: string[];
+  executionId?: string;
+  provider?: string;
+  isLocal?: boolean;
+  effectivePrivacy?: PrivacyBoundary;
+  routingObjective?: RoutingObjective;
+  routingExplanation?: string;
+  costUsd?: number;
+  policyStatus?: string;
+  execution?: ExecutionProvenance;
 }
 
 export interface ChatMessage {

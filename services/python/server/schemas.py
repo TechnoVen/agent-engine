@@ -65,6 +65,8 @@ class ChatRequest(BaseModel):
     stream: bool = True
     skill_id: Optional[str] = None
     project_id: Optional[str] = None
+    routing_objective: Optional[str] = None
+    privacy_boundary: Optional[str] = None
 
 
 class ChatResponse(BaseModel):

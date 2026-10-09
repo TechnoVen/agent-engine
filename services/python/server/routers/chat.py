@@ -27,6 +27,13 @@ from core.execution import (
     ExecutionResult,
     ExecutionStatus,
 )
+from core.context.models import ContentAuthority
+from core.privacy.models import DataRoutingClass, DataRoutingPolicy
+from core.router.models import (
+    ExecutionRoutingPreferences,
+    RoutingObjectiveProfile,
+    RoutingPreferenceSource,
+)
 from core.session import (
     MessageRole,
 )
@@ -96,15 +103,42 @@ async def chat_completions(req: ChatRequest):
 
     # 2. Build Canonical ExecutionRequest and dispatch through ExecutionCoordinator
     coordinator = get_execution_coordinator()
+
+    routing_prefs = None
+    if req.routing_objective:
+        try:
+            routing_prefs = ExecutionRoutingPreferences(
+                objective_profile=RoutingObjectiveProfile(req.routing_objective.lower()),
+                source=RoutingPreferenceSource.USER_DIRECTIVE,
+                authority=ContentAuthority.USER_DIRECTIVE,
+            )
+        except Exception as e:
+            logger.warning("Invalid routing objective '%s': %s", req.routing_objective, e)
+
+    routing_policy = None
+    if req.privacy_boundary:
+        try:
+            routing_policy = DataRoutingPolicy(
+                routing_class=DataRoutingClass(req.privacy_boundary.lower()),
+                allow_relaxation_by_task=True,
+            )
+        except Exception as e:
+            logger.warning("Invalid privacy boundary '%s': %s", req.privacy_boundary, e)
+
     exec_req = ExecutionRequest(
         project_id=resolved_project_id,
         session_id=session_id,
         task_type="chat",
         prompt=req.prompt,
         model_preference=req.model,
+        routing_preferences=routing_prefs,
+        routing_policy=routing_policy,
         inputs={
             "stream": req.stream,
             "skill_id": req.skill_id,
+            "is_trusted_authority": True,
+            "ipc_authenticated": True,
+            "privacy_class": req.privacy_boundary,
         },
     )
 
@@ -154,6 +188,16 @@ async def chat_completions(req: ChatRequest):
                             "Streaming queue full for session %s, dropping chunk backpressure",
                             session_id,
                         )
+            elif event.event_type == ExecutionEventType.ROUTING_RESOLVED:
+                try:
+                    chunk_queue.put_nowait({"event": "routing_resolved", "payload": event.payload})
+                except Exception:
+                    pass
+            elif event.event_type == ExecutionEventType.APPROVAL_REQUIRED:
+                try:
+                    chunk_queue.put_nowait({"event": "approval_required", "payload": event.payload})
+                except Exception:
+                    pass
             elif event.event_type == ExecutionEventType.CANCELLED:
                 try:
                     chunk_queue.put_nowait(
@@ -224,6 +268,26 @@ async def chat_completions(req: ChatRequest):
                         }
                         yield f"data: {json.dumps(payload)}\n\n"
 
+                    elif ev_type == "routing_resolved":
+                        payload = {
+                            "event": "routing_resolved",
+                            "session_id": session_id,
+                            "execution_id": exec_req.id,
+                            **item.get("payload", {}),
+                            "timestamp": datetime.datetime.now().isoformat(),
+                        }
+                        yield f"data: {json.dumps(payload)}\n\n"
+
+                    elif ev_type == "approval_required":
+                        payload = {
+                            "event": "approval_required",
+                            "session_id": session_id,
+                            "execution_id": exec_req.id,
+                            **item.get("payload", {}),
+                            "timestamp": datetime.datetime.now().isoformat(),
+                        }
+                        yield f"data: {json.dumps(payload)}\n\n"
+
                     elif ev_type == "cancelled":
                         reason = item.get("reason", "Execution cancelled")
                         payload = {
@@ -252,14 +316,31 @@ async def chat_completions(req: ChatRequest):
 
                     elif ev_type == "result":
                         final_result = item["result"]
+                        is_local = (final_result.provider_used or "").lower() in (
+                            "local",
+                            "llamacpp",
+                            "ollama",
+                        )
                         cost_event = {
                             "event": "cost_update",
                             "session_id": session_id,
+                            "execution_id": final_result.execution_id,
                             "model": final_result.model_used or req.model or "default",
+                            "provider": final_result.provider_used or "unknown",
+                            "is_local": is_local,
                             "prompt_tokens": final_result.prompt_tokens,
                             "completion_tokens": final_result.completion_tokens,
+                            "total_tokens": final_result.total_tokens
+                            or (final_result.prompt_tokens + final_result.completion_tokens),
                             "cost_usd": final_result.total_cost_usd,
-                            "execution_id": final_result.execution_id,
+                            "duration_ms": final_result.duration_ms,
+                            "routing_tier": (
+                                final_result.routing_tier.value
+                                if hasattr(final_result.routing_tier, "value")
+                                else str(final_result.routing_tier)
+                                if final_result.routing_tier
+                                else None
+                            ),
                             "timestamp": datetime.datetime.now().isoformat(),
                         }
                         yield f"data: {json.dumps(cost_event)}\n\n"
@@ -268,6 +349,15 @@ async def chat_completions(req: ChatRequest):
                             "event": "done",
                             "session_id": session_id,
                             "execution_id": final_result.execution_id,
+                            "model": final_result.model_used or req.model or "default",
+                            "provider": final_result.provider_used or "unknown",
+                            "is_local": is_local,
+                            "prompt_tokens": final_result.prompt_tokens,
+                            "completion_tokens": final_result.completion_tokens,
+                            "total_tokens": final_result.total_tokens
+                            or (final_result.prompt_tokens + final_result.completion_tokens),
+                            "cost_usd": final_result.total_cost_usd,
+                            "duration_ms": final_result.duration_ms,
                             "timestamp": datetime.datetime.now().isoformat(),
                         }
                         yield f"data: {json.dumps(done_event)}\n\n"

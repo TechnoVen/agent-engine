@@ -1,19 +1,25 @@
 import React from 'react';
 import { Sidebar } from './Sidebar';
 import { TopBar } from './TopBar';
-import { Mode, ModelTier, SidecarHealth } from '../types';
+import { Mode, ModelTier, SidecarHealth, PrivacyBoundary, RoutingObjective } from '../types';
 
 interface LayoutProps {
   activeMode: Mode;
   onSelectMode: (mode: Mode) => void;
   activeSessionId?: string;
   onSelectSession?: (sessionId: string) => void;
-  activeModel: ModelTier;
-  onSelectModel: (model: ModelTier) => void;
+  activeModel?: ModelTier;
+  onSelectModel?: (model: ModelTier) => void;
+  routingObjective?: RoutingObjective;
+  onSelectRoutingObjective?: (objective: RoutingObjective) => void;
+  privacyBoundary?: PrivacyBoundary;
+  onSelectPrivacyBoundary?: (boundary: PrivacyBoundary) => void;
   sidebarCollapsed: boolean;
   onToggleSidebar: () => void;
   onNewChat: () => void;
   health: SidecarHealth;
+  isBusy?: boolean;
+  projectName?: string;
   children: React.ReactNode;
 }
 
@@ -24,10 +30,16 @@ export const Layout: React.FC<LayoutProps> = ({
   onSelectSession,
   activeModel,
   onSelectModel,
+  routingObjective,
+  onSelectRoutingObjective,
+  privacyBoundary,
+  onSelectPrivacyBoundary,
   sidebarCollapsed,
   onToggleSidebar,
   onNewChat,
   health,
+  isBusy,
+  projectName,
   children,
 }) => {
   return (
@@ -49,7 +61,13 @@ export const Layout: React.FC<LayoutProps> = ({
           activeMode={activeMode}
           activeModel={activeModel}
           onSelectModel={onSelectModel}
+          routingObjective={routingObjective}
+          onSelectRoutingObjective={onSelectRoutingObjective}
+          privacyBoundary={privacyBoundary}
+          onSelectPrivacyBoundary={onSelectPrivacyBoundary}
           health={health}
+          isBusy={isBusy}
+          projectName={projectName}
         />
         <main className="flex-1 overflow-hidden bg-bg-base relative">
           {children}

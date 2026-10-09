@@ -54,6 +54,8 @@ import {
   DownloadStatus,
   ModelEconomicsSummary,
   ProviderConnectionVerification,
+  RoutingObjective,
+  PrivacyBoundary,
 } from '../types';
 
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
@@ -161,13 +163,30 @@ class SidecarClient {
     prompt: string;
     sessionId?: string;
     model?: string;
+    routingObjective?: RoutingObjective;
+    privacyBoundary?: PrivacyBoundary;
     signal?: AbortSignal;
     onToken: (token: string) => void;
+    onRoutingResolved?: (routingData: any) => void;
+    onApprovalRequired?: (approvalData: any) => void;
     onCostUpdate?: (costData: any) => void;
     onError?: (error: string) => void;
-    onDone?: () => void;
+    onDone?: (doneData?: any) => void;
   }): Promise<void> {
-    const { prompt, sessionId, model, signal, onToken, onCostUpdate, onError, onDone } = options;
+    const {
+      prompt,
+      sessionId,
+      model,
+      routingObjective,
+      privacyBoundary,
+      signal,
+      onToken,
+      onRoutingResolved,
+      onApprovalRequired,
+      onCostUpdate,
+      onError,
+      onDone,
+    } = options;
     try {
       const res = await fetch(`${this.base}/v1/chat/completions`, {
         method: 'POST',
@@ -176,6 +195,8 @@ class SidecarClient {
           prompt,
           session_id: sessionId,
           model,
+          routing_objective: routingObjective,
+          privacy_boundary: privacyBoundary,
           stream: true,
         }),
         signal,
@@ -214,12 +235,16 @@ class SidecarClient {
               const payload = JSON.parse(jsonStr);
               if (payload.event === 'token' && payload.delta) {
                 onToken(payload.delta);
+              } else if (payload.event === 'routing_resolved') {
+                onRoutingResolved?.(payload);
+              } else if (payload.event === 'approval_required') {
+                onApprovalRequired?.(payload);
               } else if (payload.event === 'cost_update') {
                 onCostUpdate?.(payload);
               } else if (payload.event === 'error') {
                 onError?.(payload.error || 'Execution failed');
               } else if (payload.event === 'done') {
-                onDone?.();
+                onDone?.(payload);
               }
             } catch {
               // ignore malformed JSON chunk
@@ -235,6 +260,18 @@ class SidecarClient {
       }
       const msg = err instanceof Error ? err.message : String(err);
       onError?.(msg);
+    }
+  }
+
+  async getExecution(executionId: string): Promise<any | null> {
+    try {
+      const res = await fetch(`${this.base}/v1/executions/${encodeURIComponent(executionId)}`, {
+        headers: this.getHeaders(),
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
     }
   }
 
@@ -1186,7 +1223,7 @@ class SidecarClient {
       gpu_model: 'AMD Radeon Vega Series',
       vram_used_percent: 85.0,
       vram_warning: false,
-      tokens_per_second: 58.4,
+      tokens_per_second: 0.0,
     };
   }
 
@@ -1216,12 +1253,12 @@ class SidecarClient {
       vram_free_gb: 0.15,
       vram_warning: false,
       vram_warning_threshold: 95.0,
-      tokens_per_second: 58.4,
-      recent_inference_runtime: 'ollama',
-      recent_inference_model: 'qwen2.5-coder:7b',
-      ollama_active: true,
+      tokens_per_second: 0.0,
+      recent_inference_runtime: undefined,
+      recent_inference_model: undefined,
+      ollama_active: false,
       llamacpp_active: false,
-      local_runtime_active: true,
+      local_runtime_active: false,
       timestamp: new Date().toISOString(),
     };
   }
