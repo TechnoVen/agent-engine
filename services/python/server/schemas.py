@@ -1125,3 +1125,27 @@ class AdapterRunPayload(BaseModel):
     max_tokens: Optional[int] = None
     timeout_seconds: float = 60.0
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class VerifyProviderRequest(BaseModel):
+    """Request payload for verifying a provider connection."""
+
+    model_id: Optional[str] = None
+    timeout: float = 5.0
+
+
+class ProviderConnectionVerificationResponse(BaseModel):
+    """Standardized sanitized response for provider connection verification (Task R3.11)."""
+
+    provider_id: str
+    model_identity: Optional[Dict[str, Any]] = None
+    status: str
+    last_verified_at: float
+    latency_ms: float
+    failure_class: Optional[str] = None
+    sanitized_error: Optional[str] = None
+    verification_version: str = "v1"
+    probe_type: str = "real_completion_canary"
+    is_fresh: bool = False
+    display_state: str = "Not configured"
+    details: Dict[str, Any] = Field(default_factory=dict)

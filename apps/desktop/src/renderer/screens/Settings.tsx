@@ -27,8 +27,9 @@ import {
   Palette,
   Terminal,
   FileText,
+  Clock,
 } from 'lucide-react';
-import { Mode, ModelTier, CredentialItem, CredentialTestResult, HardwareTelemetry, AppSettings } from '../types';
+import { Mode, ModelTier, CredentialItem, CredentialTestResult, HardwareTelemetry, AppSettings, ProviderConnectionVerification } from '../types';
 import { sidecarClient } from '../api/client';
 import { LocalModelRecommendations } from '../components/LocalModelRecommendations';
 
@@ -143,6 +144,7 @@ export const Settings: React.FC<SettingsProps> = () => {
   const [modelSelections, setModelSelections] = useState<Record<string, string>>({});
   const [revealedKeys, setRevealedKeys] = useState<Record<string, boolean>>({});
   const [testResults, setTestResults] = useState<Record<string, CredentialTestResult>>({});
+  const [verifications, setVerifications] = useState<Record<string, ProviderConnectionVerification>>({});
   const [testingProviders, setTestingProviders] = useState<Record<string, boolean>>({});
   const [savingProviders, setSavingProviders] = useState<Record<string, boolean>>({});
   const [feedbackToast, setFeedbackToast] = useState<string | null>(null);
@@ -285,14 +287,36 @@ export const Settings: React.FC<SettingsProps> = () => {
   const handleTestConnection = async (provider: ProviderConfig) => {
     setTestingProviders((prev) => ({ ...prev, [provider.id]: true }));
     try {
-      const apiKey = keyInputs[provider.id]?.trim() || undefined;
-      const baseUrl = baseUrlInputs[provider.id]?.trim() || provider.defaultBaseUrl;
+      const selectedModel = modelSelections[provider.id] || provider.defaultModel;
+      try {
+        const ver = await sidecarClient.verifyProvider(provider.id, selectedModel);
+        setVerifications((prev) => ({ ...prev, [provider.id]: ver }));
 
-      const result = await sidecarClient.testCredential(provider.id, apiKey, baseUrl);
-      setTestResults((prev) => ({ ...prev, [provider.id]: result }));
+        setTestResults((prev) => ({
+          ...prev,
+          [provider.id]: {
+            provider: provider.id,
+            valid: ver.status === 'VERIFIED_CONNECTED',
+            latency_ms: ver.latency_ms,
+            error: ver.sanitized_error || undefined,
+          },
+        }));
 
-      if (result.valid) {
-        showToast(`Connected to ${provider.name} in ${Math.round(result.latency_ms)}ms`);
+        if (ver.status === 'VERIFIED_CONNECTED') {
+          showToast(`Connected to ${provider.name} in ${Math.round(ver.latency_ms)}ms`);
+        } else {
+          showToast(`Verification: ${ver.display_state}`);
+        }
+        return;
+      } catch (verifyErr) {
+        // Fallback gracefully when verification is unavailable
+        const apiKey = keyInputs[provider.id]?.trim() || undefined;
+        const baseUrl = baseUrlInputs[provider.id]?.trim() || provider.defaultBaseUrl;
+        const result = await sidecarClient.testCredential(provider.id, apiKey, baseUrl);
+        setTestResults((prev) => ({ ...prev, [provider.id]: result }));
+        if (result.valid) {
+          showToast(`Connected to ${provider.name} in ${Math.round(result.latency_ms)}ms`);
+        }
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -543,6 +567,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                 {PROVIDERS.map((provider) => {
                   const storedCred = credentials[provider.envKey];
                   const testResult = testResults[provider.id];
+                  const verification = verifications[provider.id];
                   const isTesting = testingProviders[provider.id];
                   const isSaving = savingProviders[provider.id];
                   const isRevealed = revealedKeys[provider.id];
@@ -696,31 +721,54 @@ export const Settings: React.FC<SettingsProps> = () => {
 
                       {/* Connection Test Status Badge & Buttons */}
                       <div className="pt-3 border-t border-border-subtle space-y-2.5">
-                        {testResult && (
-                          <div
-                            className={`px-3 py-1.5 rounded-lg text-xs flex items-center justify-between border ${
-                              testResult.valid
-                                ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                                : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
-                            }`}
-                          >
-                            <div className="flex items-center gap-1.5 truncate">
-                              {testResult.valid ? (
-                                <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
-                              ) : (
-                                <XCircle className="w-3.5 h-3.5 shrink-0 text-rose-400" />
+                        {(verification || testResult) && (() => {
+                          const isConnected = verification ? verification.status === 'VERIFIED_CONNECTED' && verification.is_fresh : testResult?.valid;
+                          const isStale = verification ? verification.status === 'VERIFIED_CONNECTED' && !verification.is_fresh : false;
+                          const isNotConfigured = verification ? verification.status === 'NOT_CONFIGURED' : false;
+                          const latency = verification ? verification.latency_ms : (testResult?.latency_ms || 0);
+                          const errMsg = verification ? (verification.sanitized_error || verification.failure_class) : testResult?.error;
+                          const lastVerified = verification?.last_verified_at ? new Date(verification.last_verified_at * 1000).toLocaleTimeString() : null;
+
+                          return (
+                            <div
+                              className={`px-3 py-1.5 rounded-lg text-xs flex items-center justify-between border ${
+                                isConnected
+                                  ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                                  : isStale
+                                  ? 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                                  : isNotConfigured
+                                  ? 'bg-bg-surface border-border-subtle text-text-tertiary'
+                                  : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+                              }`}
+                            >
+                              <div className="flex items-center gap-1.5 truncate">
+                                {isConnected ? (
+                                  <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
+                                ) : isStale ? (
+                                  <Clock className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+                                ) : isNotConfigured ? (
+                                  <ShieldCheck className="w-3.5 h-3.5 shrink-0 text-text-tertiary" />
+                                ) : (
+                                  <XCircle className="w-3.5 h-3.5 shrink-0 text-rose-400" />
+                                )}
+                                <span className="truncate">
+                                  {isConnected
+                                    ? `Connected (${Math.round(latency)}ms)`
+                                    : isStale
+                                    ? `Verification Stale (${Math.round(latency)}ms)`
+                                    : isNotConfigured
+                                    ? 'Not configured'
+                                    : `Verification failed: ${errMsg || 'Operation failed'}`}
+                                </span>
+                              </div>
+                              {lastVerified && (
+                                <span className="text-[10px] font-mono shrink-0 ml-2 text-text-tertiary">
+                                  {lastVerified}
+                                </span>
                               )}
-                              <span className="truncate">
-                                {testResult.valid
-                                  ? `Connected (${Math.round(testResult.latency_ms)}ms)`
-                                  : testResult.error || 'Connection failed'}
-                              </span>
                             </div>
-                            {testResult.valid && (
-                              <span className="text-[10px] font-mono shrink-0 ml-2">200 OK</span>
-                            )}
-                          </div>
-                        )}
+                          );
+                        })()}
 
                         <div className="flex items-center justify-end gap-2">
                           <button

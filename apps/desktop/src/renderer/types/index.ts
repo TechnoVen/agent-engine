@@ -1148,4 +1148,37 @@ export interface ModelEconomicsSummary {
   sample_freshness?: number | null;
 }
 
+export type ConnectionVerificationStatus =
+  | 'NOT_CONFIGURED'
+  | 'AUTHENTICATION_FAILED'
+  | 'NETWORK_ERROR'
+  | 'TIMEOUT'
+  | 'MODEL_NOT_FOUND'
+  | 'RATE_LIMITED'
+  | 'QUOTA_EXHAUSTED'
+  | 'PROVIDER_ERROR'
+  | 'INVALID_RESPONSE'
+  | 'VERIFIED_CONNECTED'
+  | 'UNKNOWN_FAILURE';
+
+export interface ProviderConnectionVerification {
+  provider_id: string;
+  model_identity?: {
+    provider_id: string;
+    model_id: string;
+    version?: string;
+    revision?: string;
+  } | null;
+  status: ConnectionVerificationStatus;
+  last_verified_at: number;
+  latency_ms: number;
+  failure_class?: string | null;
+  sanitized_error?: string | null;
+  verification_version: string;
+  probe_type: string;
+  is_fresh: boolean;
+  display_state: string;
+  details: Record<string, unknown>;
+}
+
 

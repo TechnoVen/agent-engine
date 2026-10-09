@@ -19,6 +19,8 @@ from core.economics import (
     ModelEconomicsSummary,
     get_economics_service,
 )
+from core.providers.registry import get_provider_registry
+from core.providers.verification.service import get_provider_verification_service
 from core.eval import EvalSample, ModelEvalReport, ModelEvalSuite, get_golden_dataset
 from core.model_download import DownloadStatus, get_download_manager
 from core.model_recommendation import (
@@ -472,3 +474,65 @@ async def get_models_economics(
         evaluator_version=evaluator_version,
         effective_privacy_class=effective_privacy_class,
     )
+
+
+@router.get("/providers", response_model=List[Dict[str, Any]])
+async def list_providers_endpoint(
+    request: Request,
+    include_disabled: bool = Query(False),
+):
+    """List registered providers with configuration, health, and latest verification summary."""
+    verify_ipc_token(request)
+    reg = get_provider_registry()
+    ver_svc = get_provider_verification_service()
+    providers = reg.list_providers(include_disabled=include_disabled)
+
+    results = []
+    for p in providers:
+        safe = p.to_safe_dict()
+        ver = ver_svc.get_verification(p.provider_id)
+        safe["verification"] = ver.to_safe_dict()
+        results.append(safe)
+    return results
+
+
+@router.post(
+    "/providers/{provider_id}/verify",
+    response_model=ProviderConnectionVerificationResponse,
+)
+async def verify_provider_endpoint(
+    request: Request,
+    provider_id: str,
+    payload: Optional[VerifyProviderRequest] = None,
+):
+    """Execute a real minimal provider operation verification probe (Task R3.11).
+
+    Directives enforced:
+    - Pins requested provider_id and model.
+    - Zero fallback routing to other providers.
+    - Passes PolicyEngine authorization gate.
+    - Classified failure taxonomy with sanitized secret redaction.
+    - Tagged as PROVIDER_VERIFICATION (excluded from R3.10 cohorts).
+    """
+    verify_ipc_token(request)
+    ver_svc = get_provider_verification_service()
+    model_id = payload.model_id if payload else None
+    timeout = payload.timeout if payload else 5.0
+
+    ver = ver_svc.verify_provider(provider_id=provider_id, model_id=model_id, timeout=timeout)
+    return ProviderConnectionVerificationResponse(**ver.to_safe_dict())
+
+
+@router.get(
+    "/providers/{provider_id}/verification",
+    response_model=ProviderConnectionVerificationResponse,
+)
+async def get_provider_verification_endpoint(
+    request: Request,
+    provider_id: str,
+):
+    """Retrieve the latest cached verification record for a provider."""
+    verify_ipc_token(request)
+    ver_svc = get_provider_verification_service()
+    ver = ver_svc.get_verification(provider_id)
+    return ProviderConnectionVerificationResponse(**ver.to_safe_dict())

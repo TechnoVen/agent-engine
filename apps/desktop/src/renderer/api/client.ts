@@ -53,6 +53,7 @@ import {
   TaskRequirements,
   DownloadStatus,
   ModelEconomicsSummary,
+  ProviderConnectionVerification,
 } from '../types';
 
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
@@ -2074,6 +2075,56 @@ class SidecarClient {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || `Failed to fetch model economics: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async verifyProvider(
+    providerId: string,
+    modelId?: string,
+    timeout?: number
+  ): Promise<ProviderConnectionVerification> {
+    const res = await fetch(`${this.base}/v1/providers/${encodeURIComponent(providerId)}/verify`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ model_id: modelId, timeout: timeout ?? 5.0 }),
+    });
+    if (!res.ok) {
+      return {
+        provider_id: providerId,
+        status: 'PROVIDER_ERROR',
+        last_verified_at: Date.now() / 1000,
+        latency_ms: 0,
+        failure_class: 'HTTP_ERROR',
+        sanitized_error: `HTTP ${res.status}: ${res.statusText}`,
+        verification_version: 'v1',
+        probe_type: 'real_completion_canary',
+        is_fresh: false,
+        display_state: 'Verification failed',
+        details: {},
+      };
+    }
+    return await res.json();
+  }
+
+  async getProviderVerification(providerId: string): Promise<ProviderConnectionVerification> {
+    const res = await fetch(`${this.base}/v1/providers/${encodeURIComponent(providerId)}/verification`, {
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      return {
+        provider_id: providerId,
+        status: 'NOT_CONFIGURED',
+        last_verified_at: 0,
+        latency_ms: 0,
+        failure_class: 'NOT_FOUND',
+        sanitized_error: `HTTP ${res.status}`,
+        verification_version: 'v1',
+        probe_type: 'real_completion_canary',
+        is_fresh: false,
+        display_state: 'Not configured',
+        details: {},
+      };
     }
     return await res.json();
   }

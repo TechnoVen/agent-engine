@@ -219,6 +219,7 @@ class AttemptEconomicsRecord(BaseModel):
     is_fallback: bool = False
     is_retry: bool = False
     is_synthetic: bool = False
+    execution_purpose: str = "PRODUCTION_TASK"
     attempt_index: int = 0
     created_at: float = Field(default_factory=time.time)
 
@@ -241,6 +242,7 @@ class LogicalTaskEconomicsRecord(BaseModel):
     evaluator_id: Optional[str] = None
     evaluator_version: Optional[str] = None
     evidence_source: EvidenceSource = EvidenceSource.PRODUCTION_OBSERVATION
+    execution_purpose: str = "PRODUCTION_TASK"
     attempt_ids: List[str] = Field(default_factory=list)
     attempts: List[AttemptEconomicsRecord] = Field(default_factory=list)
     total_cost: Money = Field(default_factory=lambda: Money(amount_micros=0, currency="USD"))

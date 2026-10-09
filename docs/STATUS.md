@@ -807,15 +807,36 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
     - "apps/desktop/src/renderer/components/ModelEconomicsComparison.tsx"
     - "apps/desktop/src/renderer/screens/Cost.tsx"
     - "tests/test_r3_model_economics.py"
-  notes: "S1 — Implemented and implementation-tested (Final closure commit pending). Completed Cost-per-success integration (Task R3.10): (1) Whole logical-task chain economics: AttemptEconomicsRecord distinct from LogicalTaskEconomicsRecord; full chain spend attributed strictly to initial routing decision without double counting. (2) Empirical Cost-Per-Success (CPS) formula: total_spend / verified_successes with zero synthetic floors or division by epsilon; returns None and NO_SUCCESS_EVIDENCE when verified_successes == 0. (3) 4-state task outcomes: SUCCESS, FAILURE, PARTIAL, UNKNOWN; COMPLETED execution status != SUCCESS; UNKNOWN is not success; PARTIAL reported separately. (4) Exact monetary arithmetic: canonical Money type with integer amount_micros (USD), rejecting mixed currency aggregation and float drift; deterministic integer ratio normalization. (5) Multidimensional cohort segmentation: EconomicsCohortKey strictly isolates initial ModelIdentity, task_family, evaluator_id/version, routing/fallback policies, privacy class, and evidence source. (6) Versioned evaluable sufficiency policy (v1_min5_evaluable5_success1) requiring evaluable completed tasks. (7) Routing integration across all profiles with nonzero cost weight (COST_FIRST, BALANCED, QUALITY_FIRST, LATENCY_FIRST). (8) Provenance and explainability: CostEvidence durable logging with is_cost_per_success and cost_per_success_status. (9) Explicit human corrections (HumanCorrectionEvent) tracked without heuristic guessing. (10) Authenticated API (GET /v1/models/economics) and Desktop comparison UI with zero secret leakage. 31/31 precision tests passing, 212/212 R3 tests passing, 1020/1020 full regression passing."
+  notes: "S1 — Closed at S1 (commit 66fd6948e2632a297961d64bd122152417a79ac0). Completed Cost-per-success integration (Task R3.10): (1) Whole logical-task chain economics: AttemptEconomicsRecord distinct from LogicalTaskEconomicsRecord; full chain spend attributed strictly to initial routing decision without double counting. (2) Empirical Cost-Per-Success (CPS) formula: total_spend / verified_successes with zero synthetic floors or division by epsilon; returns None and NO_SUCCESS_EVIDENCE when verified_successes == 0. (3) 4-state task outcomes: SUCCESS, FAILURE, PARTIAL, UNKNOWN; COMPLETED execution status != SUCCESS; UNKNOWN is not success; PARTIAL reported separately. (4) Exact monetary arithmetic: canonical Money type with integer amount_micros (USD), rejecting mixed currency aggregation and float drift; deterministic integer ratio normalization. (5) Multidimensional cohort segmentation: EconomicsCohortKey strictly isolates initial ModelIdentity, task_family, evaluator_id/version, routing/fallback policies, privacy class, and evidence source. (6) Versioned evaluable sufficiency policy (v1_min5_evaluable5_success1) requiring evaluable completed tasks. (7) Routing integration across all profiles with nonzero cost weight (COST_FIRST, BALANCED, QUALITY_FIRST, LATENCY_FIRST). (8) Provenance and explainability: CostEvidence durable logging with is_cost_per_success and cost_per_success_status. (9) Explicit human corrections (HumanCorrectionEvent) tracked without heuristic guessing. (10) Authenticated API (GET /v1/models/economics) and Desktop comparison UI with zero secret leakage. 31/31 precision tests passing, 212/212 R3 tests passing, 1020/1020 full regression passing."
+- id: R3.11
+  title: "Provider Connection Verification"
+  task_status: done
+  capability_maturity: S1
+  migration: INTEGRATE
+  owner: "Runtime & Model Architecture"
+  depends_on: ["R3.1", "R3.4", "R3.8", "R3.10"]
+  evidence:
+    - "core/providers/verification/models.py"
+    - "core/providers/verification/service.py"
+    - "core/providers/verification/__init__.py"
+    - "core/economics/models.py"
+    - "core/economics/service.py"
+    - "services/python/server/routers/models.py"
+    - "services/python/server/schemas.py"
+    - "apps/desktop/src/renderer/types/index.ts"
+    - "apps/desktop/src/renderer/api/client.ts"
+    - "apps/desktop/src/renderer/screens/Settings.tsx"
+    - "tests/test_r3_provider_verification.py"
+  notes: "S1 — Implemented and verified at S1. Implemented Provider Connection Verification (Task R3.11): (1) Real minimal provider completion operation canary verification ('Return exactly: AE_PROVIDER_OK', temp=0, max_tokens=10, retries=0); avoids false positives where /models or /health returns 200 OK while completion calls fail. (2) Strict provider/model pinning: zero fallback substitution during verification attempts. (3) Standardized failure classification taxonomy: NOT_CONFIGURED, AUTHENTICATION_FAILED, NETWORK_ERROR, TIMEOUT, MODEL_NOT_FOUND, RATE_LIMITED, QUOTA_EXHAUSTED, PROVIDER_ERROR, INVALID_RESPONSE, VERIFIED_CONNECTED, UNKNOWN_FAILURE. (4) Freshness semantics: timestamped verification, is_fresh() with configurable max_age_seconds (default 86400s), display_state mapping (Connected, Verification stale, Not configured, Verification failed). (5) Secrets redaction: zero plaintext API keys/bearer tokens in error strings or logs. (6) Exclusion from R3.10 economics cohorts: tagged execution_purpose='PROVIDER_VERIFICATION' and rejected from production cohort accounting. (7) Policy authorization gate via PolicyEngine: denied policy yields NOT_CONFIGURED with zero provider calls. (8) Managed llama.cpp local runtime verification via LocalInferenceSupervisor and completion canary. (9) Authenticated API endpoints: POST /v1/providers/{provider_id}/verify, GET /v1/providers/{provider_id}/verification, GET /v1/providers protected by IPC token authentication. (10) Desktop UI Settings integration: 'Test connection' button, typed badges, last verified timestamp, sanitized error messages, and graceful fallback. 18/18 dedicated tests passing, 230/230 R3 tests passing, 1038/1038 full regression passing."
 ```
 
 ---
 
 ## 8. Active Test Suite & Deprecation Warnings Log
 
-- **Full Regression Suite:** `1020 passed, 3 warnings` (`uv run pytest -q`)
-- **Combined R3 Model Layer Suites:** `212 passed in 33.84s` (`uv run pytest tests/test_r3_*.py`)
+- **Full Regression Suite:** `1038 passed, 3 warnings` (`uv run pytest -q`)
+- **Combined R3 Model Layer Suites:** `230 passed in 33.66s` (`uv run pytest tests/test_r3_*.py`)
+- **R3.11 Provider Connection Verification Suite:** `18 passed in 4.81s` (`uv run pytest tests/test_r3_provider_verification.py`)
 - **R3.10 Cost-Per-Success Suite:** `31 passed in 5.44s` (`uv run pytest tests/test_r3_model_economics.py`)
 - **R3.9 Quality/Cost/Latency Suite:** `32 passed in 3.76s` (`uv run pytest tests/test_r3_routing_objective.py`)
 - **R3.1 Canonical Provider Registry Suite:** `27 passed in 3.32s` (`uv run pytest tests/test_r3_provider_registry.py`)

@@ -53,7 +53,9 @@ class EconomicsService:
 
     def record_attempt(self, attempt: AttemptEconomicsRecord) -> None:
         """Record a single model execution attempt into economics projection (Directive 2 & 6)."""
-        # Directive 6: Arbitrary callers cannot manufacture forged attempt records in production
+        # Directive 6 & 19: Arbitrary callers cannot manufacture forged/synthetic/verification attempt records in production
+        if attempt.execution_purpose == "PROVIDER_VERIFICATION":
+            raise ValueError("Verification attempt record cannot enter production cohort")
         if attempt.is_synthetic or attempt.provider_id.lower() in ("forged", "spoofed"):
             is_golden = (
                 attempt.outcome_evidence is not None
@@ -116,6 +118,9 @@ class EconomicsService:
         with self._lock:
             cohort_tasks: List[LogicalTaskEconomicsRecord] = []
             for t in self._tasks.values():
+                # Directive 19: Verification traffic excluded from user task economics cohorts
+                if t.execution_purpose == "PROVIDER_VERIFICATION":
+                    continue
                 t_eval_version = t.evaluator_version or "v1"
                 # Directive 2: Match initial_model_identity strictly
                 if (
@@ -221,6 +226,9 @@ class EconomicsService:
         with self._lock:
             cohort_keys = set()
             for t in self._tasks.values():
+                # Directive 19: Verification traffic excluded from user task economics cohorts
+                if t.execution_purpose == "PROVIDER_VERIFICATION":
+                    continue
                 k = EconomicsCohortKey(
                     initial_model_identity=t.initial_model_identity,
                     task_family=t.task_family,
