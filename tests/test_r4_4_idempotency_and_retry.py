@@ -26,6 +26,8 @@ import concurrent.futures
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sqlite3
+import subprocess
+import sys
 import threading
 import time
 from typing import Any, Dict
@@ -779,3 +781,463 @@ def test_security_zero_raw_secrets_in_idempotency_records_or_events(
         assert secret_token not in (result_json or "")
     finally:
         conn.close()
+
+
+# ==============================================================================
+# 13. Result Cache Data Minimization & Canonical Default Reference
+# ==============================================================================
+
+
+def test_result_cache_data_minimization(
+    repo: SQLiteJobRepository, idem_store: SQLiteIdempotencyStore, file_db_path: str
+) -> None:
+    """Verify result caching strips bulky/private content and defaults to canonical result_reference."""
+    job = repo.create_job(Job(job_type="agent_task", payload_summary={"task": "datamin_test"}))
+    args = {"action": "generate_report"}
+
+    should_exec, rec = idem_store.reserve_operation(
+        job_id=job.job_id,
+        operation_kind="render_doc",
+        args=args,
+        attempt_id="att_datamin",
+    )
+    idem_store.record_in_progress(rec.idempotency_key, attempt_id="att_datamin")
+
+    bulky_payload = {
+        "status_code": 200,
+        "doc_id": "doc_1234",
+        "body": "Bulky body content " * 50,
+        "content": "Bulky raw content " * 50,
+        "document_text": "Massive document text " * 50,
+        "model_output": "LLM output stream " * 50,
+        "oversized_string": "Z" * 300,
+        "bounded_field": "valid_value",
+        "nested": {
+            "count": 5,
+            "body": "nested bulky body",
+            "tag": "report",
+        },
+    }
+
+    # Record success without explicit result_reference to test default canonical reference
+    idem_store.record_success(
+        rec.idempotency_key,
+        attempt_id="att_datamin",
+        result_payload=bulky_payload,
+    )
+
+    stored = idem_store.get_record(rec.idempotency_key)
+    assert stored is not None
+    assert stored.result_reference == f"ref://idempotency/{rec.idempotency_key}"
+
+    payload = stored.result_payload
+    assert payload is not None
+    assert payload["status_code"] == 200
+    assert payload["doc_id"] == "doc_1234"
+    assert payload["bounded_field"] == "valid_value"
+
+    # Bulky and oversized keys stripped
+    assert "body" not in payload
+    assert "content" not in payload
+    assert "document_text" not in payload
+    assert "model_output" not in payload
+    assert "oversized_string" not in payload
+    assert "body" not in payload["nested"]
+    assert payload["nested"]["count"] == 5
+    assert payload["nested"]["tag"] == "report"
+
+    # SQLite stored JSON bounded
+    conn = sqlite3.connect(file_db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT result_payload_json, result_reference FROM job_idempotency_records WHERE idempotency_key = ?",
+            (rec.idempotency_key,),
+        )
+        row = cur.fetchone()
+        assert row is not None
+        raw_json, ref = row
+        assert ref == f"ref://idempotency/{rec.idempotency_key}"
+        assert len(raw_json) <= 1024
+        assert "Massive document text" not in raw_json
+    finally:
+        conn.close()
+
+
+# ==============================================================================
+# 14. Abandoned Reservation On-Demand & Proactive Reconciliation
+# ==============================================================================
+
+
+def test_abandoned_reservation_on_demand_and_proactive_reconciliation(
+    repo: SQLiteJobRepository,
+    queue: SQLiteJobQueue,
+    idem_store: SQLiteIdempotencyStore,
+    file_db_path: str,
+) -> None:
+    """Verify dead attempt's in-progress reservations are reconciled without hanging or double-executing."""
+    job = repo.create_job(Job(job_type="agent_task", payload_summary={"task": "abandon_test"}))
+
+    conn = sqlite3.connect(file_db_path)
+    try:
+        # Create Attempt 1
+        conn.execute(
+            "INSERT INTO job_attempts (attempt_id, job_id, attempt_number, status, worker_id, lease_generation, started_at) "
+            "VALUES ('att_crashed_1', ?, 1, 'running', 'worker_dead', 1, '2026-10-10T12:00:00Z')",
+            (job.job_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    args_native = {"recipient": "user_1", "native_key": "stripe_idem_99"}
+    args_non_idem = {"recipient": "user_2", "channel": "raw_sms"}
+
+    # Attempt 1 reserves two operations and marks them IN_PROGRESS
+    _, rec_native = idem_store.reserve_operation(
+        job_id=job.job_id,
+        operation_kind="charge_stripe",
+        args=args_native,
+        capability=OperationIdempotencyCapability.NATIVE_KEY,
+        attempt_id="att_crashed_1",
+    )
+    idem_store.record_in_progress(rec_native.idempotency_key, attempt_id="att_crashed_1")
+
+    _, rec_non_idem = idem_store.reserve_operation(
+        job_id=job.job_id,
+        operation_kind="send_sms",
+        args=args_non_idem,
+        capability=OperationIdempotencyCapability.NON_IDEMPOTENT,
+        attempt_id="att_crashed_1",
+    )
+    idem_store.record_in_progress(rec_non_idem.idempotency_key, attempt_id="att_crashed_1")
+
+    # Now Attempt 1 crashes and is marked 'failed' by worker attempt ownership reconciliation
+    conn = sqlite3.connect(file_db_path)
+    try:
+        conn.execute("UPDATE job_attempts SET status = 'failed' WHERE attempt_id = 'att_crashed_1'")
+        # Attempt 2 is created
+        conn.execute(
+            "INSERT INTO job_attempts (attempt_id, job_id, attempt_number, status, worker_id, lease_generation, started_at) "
+            "VALUES ('att_recovering_2', ?, 2, 'running', 'worker_new', 2, '2026-10-10T12:01:00Z')",
+            (job.job_id,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # 1. On-demand reconciliation for NATIVE_KEY:
+    # Attempt 2 attempts to reserve charge_stripe. Prior reservation was abandoned by att_crashed_1.
+    # It must NOT hang with OperationAlreadyInProgressError. It reconciles to OUTCOME_UNKNOWN,
+    # emits IDEMPOTENCY_ABANDONED_RECONCILED, and re-reserves for Attempt 2!
+    should_exec, rec2_native = idem_store.reserve_operation(
+        job_id=job.job_id,
+        operation_kind="charge_stripe",
+        args=args_native,
+        capability=OperationIdempotencyCapability.NATIVE_KEY,
+        attempt_id="att_recovering_2",
+    )
+    assert should_exec is True
+    assert rec2_native.claimed_by_attempt == "att_recovering_2"
+    assert rec2_native.status == IdempotencyRecordStatus.RESERVED
+
+    # 2. On-demand reconciliation for NON_IDEMPOTENT:
+    # Attempt 2 attempts to reserve send_sms. Prior reservation was abandoned by att_crashed_1.
+    # It reconciles to OUTCOME_UNKNOWN, emits IDEMPOTENCY_ABANDONED_RECONCILED, detects NON_IDEMPOTENT,
+    # emits IDEMPOTENCY_OUTCOME_UNKNOWN, and RAISES NonRetryableOperationError!
+    with pytest.raises(NonRetryableOperationError) as exc_info:
+        idem_store.reserve_operation(
+            job_id=job.job_id,
+            operation_kind="send_sms",
+            args=args_non_idem,
+            capability=OperationIdempotencyCapability.NON_IDEMPOTENT,
+            attempt_id="att_recovering_2",
+        )
+    assert "Automatic retry prohibited" in str(exc_info.value)
+    assert "abandoned the operation with outcome UNKNOWN" in str(exc_info.value)
+
+    # Verify audit events recorded in database
+    conn = sqlite3.connect(file_db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT event_type, metadata_json FROM job_events WHERE job_id = ? AND event_type = ?",
+            (job.job_id, JobEventType.IDEMPOTENCY_ABANDONED_RECONCILED.value),
+        )
+        reconciled_events = cur.fetchall()
+        assert (
+            len(reconciled_events) == 2
+        )  # Both operations emitted IDEMPOTENCY_ABANDONED_RECONCILED
+
+        cur.execute(
+            "SELECT event_type, metadata_json FROM job_events WHERE job_id = ? AND event_type = ?",
+            (job.job_id, JobEventType.IDEMPOTENCY_OUTCOME_UNKNOWN.value),
+        )
+        unknown_events = cur.fetchall()
+        assert len(unknown_events) == 1
+        assert "send_sms" in unknown_events[0][1]
+    finally:
+        conn.close()
+
+
+# ==============================================================================
+# 15. Subprocess Real-Process-Death Unknown-Outcome E2E Tests
+# ==============================================================================
+
+
+def test_subprocess_crash_recovery_e2e_native_key(tmp_path: Path) -> None:
+    """E2E Real Process Death (Scenario A - NATIVE_KEY):
+    Worker 1 subprocess executes side effect, terminates via os._exit before SUCCEEDED.
+    Worker 2 reclaims and reconciles. NATIVE_KEY safely replays/deduplicates -> total effects = 1.
+    """
+    db_file = tmp_path / "proc_crash_native.db"
+    tracker_file = tmp_path / "native_effect_tracker.txt"
+
+    # 1. Setup job in queue
+    repo = SQLiteJobRepository(db_path=str(db_file))
+    queue = SQLiteJobQueue(db_path=str(db_file))
+    job = repo.create_job(
+        Job(
+            job_type="agent_task",
+            status=JobStatus.READY,
+            payload_summary={"task": "e2e_native_crash"},
+            idempotency_key="job_idem_native_test",
+        )
+    )
+    queue.enqueue(job.job_id)
+    repo.close()
+    queue.close()
+
+    # 2. Worker 1 runs in an isolated subprocess, performs side effect, and kills itself with os._exit(42)
+    subproc_code = f"""
+import os
+import sys
+from core.jobs.queue import SQLiteJobQueue
+from core.jobs.worker import JobWorker
+from core.jobs.idempotency import SQLiteIdempotencyStore
+from core.jobs.models import OperationIdempotencyCapability
+
+db_path = {repr(str(db_file))}
+tracker_path = {repr(str(tracker_file))}
+job_id = {repr(job.job_id)}
+
+queue = SQLiteJobQueue(db_path=db_path)
+worker = JobWorker(db_path=db_path, worker_id="wrk_crash_1", lease_ttl_seconds=1.0, heartbeat_interval_seconds=0.2)
+store = SQLiteIdempotencyStore(db_path=db_path)
+
+lease = queue.claim_next(worker_id="wrk_crash_1", lease_duration_seconds=1.0)
+if not lease:
+    sys.exit(10)
+
+att = worker.begin_claimed_attempt(lease)
+
+should_exec, rec = store.reserve_operation(
+    job_id=job_id,
+    operation_kind="payment_charge",
+    args={{"amount": 500, "idem_key": "native_tok_1"}},
+    capability=OperationIdempotencyCapability.NATIVE_KEY,
+    attempt_id=att.attempt_id,
+)
+store.record_in_progress(rec.idempotency_key, attempt_id=att.attempt_id)
+
+# Execute external side effect once
+with open(tracker_path, "a") as f:
+    f.write("charged\\n")
+
+# DIE IMMEDIATELY VIA os._exit (no cleanup, no record_success, no lease release)
+os._exit(42)
+"""
+    proc = subprocess.run([sys.executable, "-c", subproc_code], capture_output=True)
+    assert proc.returncode == 42  # Confirms process died abruptly via os._exit(42)
+
+    # Verify side effect was executed once
+    assert tracker_file.read_text().strip().splitlines() == ["charged"]
+
+    # 3. Time advances past lease expiration; Worker 2 starts
+    now_reclaim = datetime.now(timezone.utc) + timedelta(seconds=2)
+    queue2 = SQLiteJobQueue(db_path=str(db_file), clock=lambda: now_reclaim)
+    worker2 = JobWorker(
+        db_path=str(db_file),
+        worker_id="wrk_recovering_2",
+        clock=lambda: now_reclaim,
+    )
+    store2 = SQLiteIdempotencyStore(db_path=str(db_file), clock=lambda: now_reclaim)
+
+    lease2 = queue2.claim_next(worker_id="wrk_recovering_2", lease_duration_seconds=60.0)
+    assert lease2 is not None
+    assert lease2.job_id == job.job_id
+    assert lease2.lease_generation == 2
+
+    # Worker 2 begins claimed attempt, which reconciles crashed attempt 1 and its idempotency records
+    att2 = worker2.begin_claimed_attempt(lease2)
+    assert att2.attempt_number == 2
+
+    # Side-effect function for native key: external provider recognizes native token and deduplicates
+    def native_side_effect() -> Dict[str, Any]:
+        lines = tracker_file.read_text().strip().splitlines() if tracker_file.exists() else []
+        # Native key provider sees duplicate request with same token, deduplicates (effect count stays 1)
+        if "charged" not in lines:
+            with open(tracker_file, "a") as f:
+                f.write("charged\\n")
+        return {"status": "success", "charge_id": "ch_123"}
+
+    # Attempt 2 reserves operation with NATIVE_KEY -> safe to retry / reconcile
+    res = store2.execute_with_idempotency(
+        job_id=job.job_id,
+        operation_kind="payment_charge",
+        args={"amount": 500, "idem_key": "native_tok_1"},
+        fn=native_side_effect,
+        capability=OperationIdempotencyCapability.NATIVE_KEY,
+        attempt_id=att2.attempt_id,
+    )
+    assert res["status"] == "success"
+
+    # Worker 2 completes the job
+    worker2.finalize_claimed_attempt(
+        job_id=job.job_id,
+        attempt_id=att2.attempt_id,
+        lease=lease2,
+        target_status=JobStatus.COMPLETED,
+    )
+
+    # Verify external effect count remains exactly 1!
+    assert tracker_file.read_text().strip().splitlines() == ["charged"]
+
+    # Verify database state: job completed, attempt 1 failed, attempt 2 succeeded
+    repo2 = SQLiteJobRepository(db_path=str(db_file))
+    final_job = repo2.get_job(job.job_id)
+    assert final_job is not None
+    assert final_job.status == JobStatus.COMPLETED
+
+    attempts = repo2.list_attempts(job.job_id)
+    assert len(attempts) == 2
+    assert attempts[0].status == JobAttemptStatus.FAILED
+    assert attempts[1].status == JobAttemptStatus.COMPLETED
+
+    store2.close()
+    queue2.close()
+    repo2.close()
+
+
+def test_subprocess_crash_recovery_e2e_non_idempotent(tmp_path: Path) -> None:
+    """E2E Real Process Death (Scenario B - NON_IDEMPOTENT):
+    Worker 1 subprocess executes non-idempotent effect, terminates via os._exit before SUCCEEDED.
+    Worker 2 reclaims and reconciles. Outcome is UNKNOWN. Automatic retry is strictly blocked!
+    Total side effect count remains exactly 1; Job transitions to FAILED.
+    """
+    db_file = tmp_path / "proc_crash_non_idem.db"
+    tracker_file = tmp_path / "non_idem_effect_tracker.txt"
+
+    repo = SQLiteJobRepository(db_path=str(db_file))
+    queue = SQLiteJobQueue(db_path=str(db_file))
+    job = repo.create_job(
+        Job(
+            job_type="agent_task",
+            status=JobStatus.READY,
+            payload_summary={"task": "e2e_non_idem_crash"},
+            idempotency_key="job_idem_non_idem_test",
+        )
+    )
+    queue.enqueue(job.job_id)
+    repo.close()
+    queue.close()
+
+    # Worker 1 runs in an isolated subprocess, performs non-idempotent action, dies abruptly
+    subproc_code = f"""
+import os
+import sys
+from core.jobs.queue import SQLiteJobQueue
+from core.jobs.worker import JobWorker
+from core.jobs.idempotency import SQLiteIdempotencyStore
+from core.jobs.models import OperationIdempotencyCapability
+
+db_path = {repr(str(db_file))}
+tracker_path = {repr(str(tracker_file))}
+job_id = {repr(job.job_id)}
+
+queue = SQLiteJobQueue(db_path=db_path)
+worker = JobWorker(db_path=db_path, worker_id="wrk_crash_non_idem_1", lease_ttl_seconds=1.0, heartbeat_interval_seconds=0.2)
+store = SQLiteIdempotencyStore(db_path=db_path)
+
+lease = queue.claim_next(worker_id="wrk_crash_non_idem_1", lease_duration_seconds=1.0)
+if not lease:
+    sys.exit(10)
+
+att = worker.begin_claimed_attempt(lease)
+
+should_exec, rec = store.reserve_operation(
+    job_id=job_id,
+    operation_kind="send_non_idempotent_email",
+    args={{"to": "ceo@example.com", "subject": "Quarterly Results"}},
+    capability=OperationIdempotencyCapability.NON_IDEMPOTENT,
+    attempt_id=att.attempt_id,
+)
+store.record_in_progress(rec.idempotency_key, attempt_id=att.attempt_id)
+
+# Execute external non-idempotent side effect once
+with open(tracker_path, "a") as f:
+    f.write("email_sent\\n")
+
+# DIE IMMEDIATELY VIA os._exit (outcome remains unknown to runtime)
+os._exit(42)
+"""
+    proc = subprocess.run([sys.executable, "-c", subproc_code], capture_output=True)
+    assert proc.returncode == 42
+
+    # Verify email was sent once
+    assert tracker_file.read_text().strip().splitlines() == ["email_sent"]
+
+    # Time advances; Worker 2 reclaims
+    now_reclaim = datetime.now(timezone.utc) + timedelta(seconds=2)
+    queue2 = SQLiteJobQueue(db_path=str(db_file), clock=lambda: now_reclaim)
+    worker2 = JobWorker(
+        db_path=str(db_file),
+        worker_id="wrk_recovering_2",
+        clock=lambda: now_reclaim,
+    )
+    store2 = SQLiteIdempotencyStore(db_path=str(db_file), clock=lambda: now_reclaim)
+
+    lease2 = queue2.claim_next(worker_id="wrk_recovering_2", lease_duration_seconds=60.0)
+    assert lease2 is not None
+    att2 = worker2.begin_claimed_attempt(lease2)
+
+    # Attempt 2 tries to execute the non-idempotent operation with execute_with_idempotency
+    def duplicate_email_action() -> Dict[str, Any]:
+        with open(tracker_file, "a") as f:
+            f.write("email_sent\\n")
+        return {"sent": True}
+
+    # MUST RAISE NonRetryableOperationError and block blind retry!
+    with pytest.raises(NonRetryableOperationError) as exc_info:
+        store2.execute_with_idempotency(
+            job_id=job.job_id,
+            operation_kind="send_non_idempotent_email",
+            args={"to": "ceo@example.com", "subject": "Quarterly Results"},
+            fn=duplicate_email_action,
+            capability=OperationIdempotencyCapability.NON_IDEMPOTENT,
+            attempt_id=att2.attempt_id,
+        )
+    assert "Automatic retry prohibited" in str(exc_info.value)
+
+    # Worker 2 finalizes attempt as FAILED (non-retryable)
+    worker2.finalize_claimed_attempt(
+        job_id=job.job_id,
+        attempt_id=att2.attempt_id,
+        lease=lease2,
+        target_status=JobStatus.FAILED,
+        failure_classification="non_retryable_outcome_unknown",
+        failure_message=str(exc_info.value),
+    )
+
+    # CRITICAL INVARIANT: The email was NOT sent a second time!
+    assert tracker_file.read_text().strip().splitlines() == ["email_sent"]
+
+    # Verify final Job status is FAILED
+    repo2 = SQLiteJobRepository(db_path=str(db_file))
+    final_job = repo2.get_job(job.job_id)
+    assert final_job is not None
+    assert final_job.status == JobStatus.FAILED
+
+    store2.close()
+    queue2.close()
+    repo2.close()

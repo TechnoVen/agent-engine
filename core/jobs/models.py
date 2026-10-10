@@ -246,6 +246,7 @@ class JobEventType(str, Enum):
     IDEMPOTENCY_RESERVED = "idempotency_reserved"
     IDEMPOTENCY_REUSED = "idempotency_reused"
     IDEMPOTENCY_OUTCOME_UNKNOWN = "idempotency_outcome_unknown"
+    IDEMPOTENCY_ABANDONED_RECONCILED = "idempotency_abandoned_reconciled"
 
 
 class OperationIdempotencyCapability(str, Enum):
@@ -336,7 +337,14 @@ def compute_idempotency_key(
     args: Dict[str, Any],
     scope: Optional[str] = None,
 ) -> IdempotencyKey:
-    """Derive deterministic idempotency key for a logical consequential operation."""
+    """Derive deterministic idempotency key for a logical consequential operation.
+
+    Scope Guarantee:
+    - Retries and redelivery of the same logical operation within the same Job share
+      an idempotency identity (the key binds to `job_id`).
+    - Cross-Job deduplication is not claimed unless `scope` explicitly provides a stable
+      cross-Job logical-operation identity.
+    """
     arg_digest = compute_argument_digest(args)
     scope_str = f":{scope}" if scope else ""
     key_material = f"{job_id}:{operation_kind}{scope_str}:{arg_digest}"

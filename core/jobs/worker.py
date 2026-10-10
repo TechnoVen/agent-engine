@@ -58,6 +58,7 @@ from core.jobs.idempotency import (
 from core.jobs.models import (
     EXECUTION_OUTCOME_UNKNOWN,
     FAILURE_CLASSIFICATION_WORKER_CRASH_OR_LEASE_LOST,
+    IdempotencyRecordStatus,
     Job,
     JobAttempt,
     JobAttemptStatus,
@@ -425,6 +426,67 @@ class JobWorker:
                             ),
                         ),
                     )
+
+                    # Reconcile any abandoned idempotency records left by prior attempt
+                    cursor.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='job_idempotency_records'"
+                    )
+                    if cursor.fetchone():
+                        cursor.execute(
+                            """
+                            SELECT idempotency_key, operation_kind, capability, status
+                            FROM job_idempotency_records
+                            WHERE job_id = ? AND claimed_by_attempt = ? AND status IN ('reserved', 'in_progress')
+                            """,
+                            (lease.job_id, prior_id),
+                        )
+                        for ab_row in cursor.fetchall():
+                            ab_key = ab_row["idempotency_key"]
+                            ab_op = ab_row["operation_kind"]
+                            ab_cap = ab_row["capability"]
+                            ab_status = ab_row["status"]
+
+                            cursor.execute(
+                                """
+                                UPDATE job_idempotency_records
+                                SET status = ?, updated_at = ?
+                                WHERE idempotency_key = ?
+                                """,
+                                (IdempotencyRecordStatus.OUTCOME_UNKNOWN.value, now_iso, ab_key),
+                            )
+
+                            cursor.execute(
+                                "SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM job_events WHERE job_id = ?",
+                                (lease.job_id,),
+                            )
+                            ab_seq = cursor.fetchone()[0]
+                            cursor.execute(
+                                """
+                                INSERT INTO job_events (
+                                    event_id, job_id, attempt_id, event_type, sequence_number, timestamp, metadata_json
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                                """,
+                                (
+                                    f"jev_{uuid.uuid4().hex[:12]}",
+                                    lease.job_id,
+                                    prior_id,
+                                    JobEventType.IDEMPOTENCY_ABANDONED_RECONCILED.value,
+                                    ab_seq,
+                                    now_iso,
+                                    json.dumps(
+                                        {
+                                            "idempotency_key": ab_key,
+                                            "operation_kind": ab_op,
+                                            "prior_attempt_id": prior_id,
+                                            "prior_status": ab_status,
+                                            "reconciling_worker_id": self.worker_id,
+                                            "reclaiming_lease_generation": lease.lease_generation,
+                                            "capability": ab_cap,
+                                            "resolved_status": IdempotencyRecordStatus.OUTCOME_UNKNOWN.value,
+                                        }
+                                    ),
+                                ),
+                            )
 
                 # 4. Calculate next monotonic attempt number
                 cursor.execute(

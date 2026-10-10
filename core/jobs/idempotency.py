@@ -54,8 +54,80 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_JOBS_DB_PATH = str(PROJECT_ROOT / "data" / "agent_engine.db")
 
 
+DISALLOWED_PAYLOAD_KEYS = {
+    "body",
+    "content",
+    "document_text",
+    "raw_response",
+    "model_output",
+    "html",
+    "data",
+    "text",
+    "output",
+    "prompt",
+    "response_text",
+    "file_content",
+    "user_data",
+}
+
+
+def minimize_result_payload(payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Minimize inline result payload by stripping oversized or private content.
+
+    Data-Minimization Principles:
+    - Canonical result_reference is the authoritative location for large outputs.
+    - Inline cached payloads must only contain explicitly bounded, non-sensitive
+      structured metadata necessary to reconstruct the replay result.
+    - Strings exceeding 256 characters or keys matching bulky/user content are excluded.
+    - Bounded to at most 10 key-value pairs and 1024 bytes serialized.
+    """
+    if payload is None:
+        return None
+    sanitized = sanitize_bounded_dict(payload)
+    minimized: Dict[str, Any] = {}
+    for k, v in sanitized.items():
+        if k.lower() in DISALLOWED_PAYLOAD_KEYS:
+            continue
+        if isinstance(v, str):
+            if len(v) > 256:
+                continue
+            minimized[k] = v
+        elif isinstance(v, (int, float, bool)) or v is None:
+            minimized[k] = v
+        elif isinstance(v, dict):
+            sub = {
+                sk: sv
+                for sk, sv in v.items()
+                if sk.lower() not in DISALLOWED_PAYLOAD_KEYS
+                and (not isinstance(sv, str) or len(sv) <= 256)
+            }
+            if len(sub) <= 5:
+                minimized[k] = sub
+        if len(minimized) >= 10:
+            break
+
+    try:
+        dumped = json.dumps(minimized)
+        if len(dumped) > 1024:
+            return None
+    except Exception:
+        return None
+    return minimized if minimized else None
+
+
 class IdempotencyStore(ABC):
     """Abstract interface for durable idempotency tracking and result caching."""
+
+    @abstractmethod
+    def reconcile_abandoned_records(
+        self,
+        job_id: str,
+        prior_attempt_id: str,
+        reconciling_attempt_id: Optional[str] = None,
+        now: Optional[Union[datetime, str]] = None,
+    ) -> int:
+        """Transactionally reconcile any abandoned reservations left by a prior crashed attempt."""
+        ...
 
     @abstractmethod
     def reserve_operation(
@@ -245,6 +317,75 @@ class SQLiteIdempotencyStore(IdempotencyStore):
     # Reservation & Lifecycle Methods
     # --------------------------------------------------------------------------
 
+    def reconcile_abandoned_records(
+        self,
+        job_id: str,
+        prior_attempt_id: str,
+        reconciling_attempt_id: Optional[str] = None,
+        now: Optional[Union[datetime, str]] = None,
+    ) -> int:
+        """Transactionally reconcile any abandoned reservations left by a prior crashed attempt."""
+        now_dt = self._now_dt(override=now)
+        now_iso = format_utc_iso(now_dt)
+
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                cursor = conn.cursor()
+
+                cursor.execute(
+                    """
+                    SELECT idempotency_key, operation_kind, capability, status
+                    FROM job_idempotency_records
+                    WHERE job_id = ? AND claimed_by_attempt = ? AND status IN ('reserved', 'in_progress')
+                    """,
+                    (job_id, prior_attempt_id),
+                )
+                abandoned_rows = cursor.fetchall()
+                count = 0
+                for row in abandoned_rows:
+                    idem_key = row["idempotency_key"]
+                    op_kind = row["operation_kind"]
+                    cap = row["capability"]
+                    prior_status = row["status"]
+
+                    cursor.execute(
+                        """
+                        UPDATE job_idempotency_records
+                        SET status = ?, updated_at = ?
+                        WHERE idempotency_key = ?
+                        """,
+                        (IdempotencyRecordStatus.OUTCOME_UNKNOWN.value, now_iso, idem_key),
+                    )
+
+                    self._insert_event(
+                        cursor=cursor,
+                        job_id=job_id,
+                        attempt_id=reconciling_attempt_id or prior_attempt_id,
+                        event_type=JobEventType.IDEMPOTENCY_ABANDONED_RECONCILED,
+                        metadata={
+                            "idempotency_key": idem_key,
+                            "operation_kind": op_kind,
+                            "prior_attempt_id": prior_attempt_id,
+                            "prior_status": prior_status,
+                            "reconciling_attempt_id": reconciling_attempt_id,
+                            "capability": cap,
+                            "resolved_status": IdempotencyRecordStatus.OUTCOME_UNKNOWN.value,
+                        },
+                        timestamp_iso=now_iso,
+                    )
+                    count += 1
+
+                conn.commit()
+                return count
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
     def reserve_operation(
         self,
         job_id: str,
@@ -369,11 +510,170 @@ class SQLiteIdempotencyStore(IdempotencyStore):
                         conn.commit()
                         return True, existing_record
 
-                    conn.rollback()
-                    raise OperationAlreadyInProgressError(
-                        f"Operation '{operation_kind}' with idempotency key '{idem_key.key}' is already "
-                        f"in progress (status={status.value}) by attempt '{existing_record.claimed_by_attempt}'."
+                    # Check if claimed_by_attempt is an abandoned attempt
+                    prior_attempt_id = existing_record.claimed_by_attempt
+                    is_abandoned = False
+                    if prior_attempt_id:
+                        cursor.execute(
+                            "SELECT attempt_id, attempt_number, status, worker_id, lease_generation "
+                            "FROM job_attempts WHERE attempt_id = ?",
+                            (prior_attempt_id,),
+                        )
+                        att_row = cursor.fetchone()
+                        if att_row:
+                            if att_row["status"] in ("failed", "completed"):
+                                is_abandoned = True
+                            elif attempt_id:
+                                cursor.execute(
+                                    "SELECT attempt_id, attempt_number, status, worker_id, lease_generation "
+                                    "FROM job_attempts WHERE attempt_id = ?",
+                                    (attempt_id,),
+                                )
+                                curr_att_row = cursor.fetchone()
+                                if (
+                                    curr_att_row
+                                    and curr_att_row["attempt_number"] > att_row["attempt_number"]
+                                ):
+                                    is_abandoned = True
+
+                    if not is_abandoned:
+                        conn.rollback()
+                        raise OperationAlreadyInProgressError(
+                            f"Operation '{operation_kind}' with idempotency key '{idem_key.key}' is already "
+                            f"in progress (status={status.value}) by attempt '{existing_record.claimed_by_attempt}'."
+                        )
+
+                    # --- Reconcile Abandoned Reservation ---
+                    logger.info(
+                        "Reconciling abandoned %s idempotency record %s held by dead attempt %s",
+                        status.value,
+                        idem_key.key,
+                        prior_attempt_id,
                     )
+
+                    effective_cap = (
+                        capability
+                        if capability != OperationIdempotencyCapability.UNKNOWN
+                        else existing_record.capability
+                    )
+
+                    # 1. Update record status to OUTCOME_UNKNOWN (preserving uncertainty)
+                    cursor.execute(
+                        """
+                        UPDATE job_idempotency_records
+                        SET status = ?, updated_at = ?
+                        WHERE idempotency_key = ?
+                        """,
+                        (
+                            IdempotencyRecordStatus.OUTCOME_UNKNOWN.value,
+                            now_iso,
+                            idem_key.key,
+                        ),
+                    )
+
+                    # 2. Append IDEMPOTENCY_ABANDONED_RECONCILED audit event
+                    self._insert_event(
+                        cursor=cursor,
+                        job_id=job_id,
+                        attempt_id=attempt_id,
+                        event_type=JobEventType.IDEMPOTENCY_ABANDONED_RECONCILED,
+                        metadata={
+                            "idempotency_key": idem_key.key,
+                            "operation_kind": operation_kind,
+                            "prior_attempt_id": prior_attempt_id,
+                            "prior_status": status.value,
+                            "reconciling_attempt_id": attempt_id,
+                            "capability": effective_cap.value,
+                            "resolved_status": IdempotencyRecordStatus.OUTCOME_UNKNOWN.value,
+                        },
+                        timestamp_iso=now_iso,
+                    )
+
+                    # 3. Classify retry decision according to capability
+                    if effective_cap in (
+                        OperationIdempotencyCapability.NATIVE_KEY,
+                        OperationIdempotencyCapability.NATURALLY_IDEMPOTENT,
+                    ):
+                        cursor.execute(
+                            """
+                            UPDATE job_idempotency_records
+                            SET status = ?, claimed_by_attempt = ?, updated_at = ?
+                            WHERE idempotency_key = ?
+                            """,
+                            (
+                                IdempotencyRecordStatus.RESERVED.value,
+                                attempt_id,
+                                now_iso,
+                                idem_key.key,
+                            ),
+                        )
+                        self._insert_event(
+                            cursor=cursor,
+                            job_id=job_id,
+                            attempt_id=attempt_id,
+                            event_type=JobEventType.IDEMPOTENCY_RESERVED,
+                            metadata={
+                                "idempotency_key": idem_key.key,
+                                "operation_kind": operation_kind,
+                                "capability": effective_cap.value,
+                                "attempt_id": attempt_id,
+                                "reconciled_retry": True,
+                            },
+                            timestamp_iso=now_iso,
+                        )
+                        conn.commit()
+
+                        existing_record.status = IdempotencyRecordStatus.RESERVED
+                        existing_record.claimed_by_attempt = attempt_id
+                        existing_record.updated_at = now_iso
+                        return True, existing_record
+
+                    elif effective_cap == OperationIdempotencyCapability.AE_GUARDED:
+                        if existing_record.result_reference:
+                            conn.commit()
+                            return False, existing_record
+                        cursor.execute(
+                            """
+                            UPDATE job_idempotency_records
+                            SET status = ?, claimed_by_attempt = ?, updated_at = ?
+                            WHERE idempotency_key = ?
+                            """,
+                            (
+                                IdempotencyRecordStatus.RESERVED.value,
+                                attempt_id,
+                                now_iso,
+                                idem_key.key,
+                            ),
+                        )
+                        conn.commit()
+                        existing_record.status = IdempotencyRecordStatus.RESERVED
+                        existing_record.claimed_by_attempt = attempt_id
+                        existing_record.updated_at = now_iso
+                        return True, existing_record
+
+                    else:
+                        self._insert_event(
+                            cursor=cursor,
+                            job_id=job_id,
+                            attempt_id=attempt_id,
+                            event_type=JobEventType.IDEMPOTENCY_OUTCOME_UNKNOWN,
+                            metadata={
+                                "idempotency_key": idem_key.key,
+                                "operation_kind": operation_kind,
+                                "capability": effective_cap.value,
+                                "attempt_id": attempt_id,
+                                "prohibited": True,
+                                "reason": "abandoned_by_prior_attempt",
+                            },
+                            timestamp_iso=now_iso,
+                        )
+                        conn.commit()
+
+                        raise NonRetryableOperationError(
+                            f"Automatic retry prohibited for operation '{operation_kind}' (key {idem_key.key}): "
+                            f"prior attempt '{prior_attempt_id}' abandoned the operation with outcome UNKNOWN, "
+                            f"and capability '{effective_cap.value}' does not permit blind retry."
+                        )
 
                 if status == IdempotencyRecordStatus.FAILED_SAFE_TO_RETRY:
                     # Clean failure: re-reserve for this attempt
@@ -557,10 +857,15 @@ class SQLiteIdempotencyStore(IdempotencyStore):
         now_dt = self._now_dt(override=now)
         now_iso = format_utc_iso(now_dt)
 
-        sanitized_payload = (
-            sanitize_bounded_dict(result_payload) if result_payload is not None else None
+        canonical_reference = (
+            result_reference
+            if (result_reference is not None and result_reference.strip())
+            else f"ref://idempotency/{idempotency_key}"
         )
-        payload_json = json.dumps(sanitized_payload) if sanitized_payload is not None else None
+        minimized_payload = (
+            minimize_result_payload(result_payload) if result_payload is not None else None
+        )
+        payload_json = json.dumps(minimized_payload) if minimized_payload is not None else None
 
         with self._lock:
             conn = self._get_connection()
@@ -578,7 +883,7 @@ class SQLiteIdempotencyStore(IdempotencyStore):
                     (
                         IdempotencyRecordStatus.SUCCEEDED.value,
                         payload_json,
-                        result_reference,
+                        canonical_reference,
                         now_iso,
                         now_iso,
                         idempotency_key,
