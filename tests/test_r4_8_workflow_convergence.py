@@ -358,7 +358,7 @@ def test_definition_deletion_policy_and_archive(workflow_service: WorkflowServic
 
 
 def test_gate_node_rejection_for_r4_9(workflow_service: WorkflowService) -> None:
-    """Verify that GATE nodes fail validation as deferred to R4.9."""
+    """Verify that GATE nodes are accepted now that Milestone R4.9 is implemented."""
     gate_node = WorkflowNode(
         id="gate_step",
         type=WorkflowNodeType.GATE,
@@ -372,9 +372,9 @@ def test_gate_node_rejection_for_r4_9(workflow_service: WorkflowService) -> None
         edges=[],
     )
 
-    with pytest.raises(WorkflowValidationError) as exc_info:
-        workflow_service.create_definition(wf_def)
-    assert "deferred to Milestone R4.9" in str(exc_info.value)
+    created = workflow_service.create_definition(wf_def)
+    assert created.id == "wf_with_gate"
+    assert created.nodes[0].type == WorkflowNodeType.GATE
 
 
 # ==============================================================================

@@ -297,6 +297,11 @@ class JobEventType(str, Enum):
     WORKFLOW_RUN_COMPLETED = "workflow_run_completed"
     WORKFLOW_RUN_FAILED = "workflow_run_failed"
     WORKFLOW_RUN_CANCELLED = "workflow_run_cancelled"
+    # R4.9 Workflow Human-in-the-Loop Gate lifecycle events
+    WORKFLOW_GATE_WAITING = "workflow_gate_waiting"
+    WORKFLOW_GATE_APPROVED = "workflow_gate_approved"
+    WORKFLOW_GATE_REJECTED = "workflow_gate_rejected"
+    WORKFLOW_GATE_EXPIRED = "workflow_gate_expired"
 
 
 class MissedRunPolicy(str, Enum):

@@ -370,6 +370,26 @@ def _migration_009_workflow_hitl_gates(conn: sqlite3.Connection) -> None:
         "ALTER TABLE workflow_node_runs ADD COLUMN suspended_at TEXT;",
         "ALTER TABLE workflow_node_runs ADD COLUMN resolved_at TEXT;",
         "CREATE INDEX IF NOT EXISTS idx_node_runs_approval_id ON workflow_node_runs(approval_id);",
+        """
+        CREATE TABLE IF NOT EXISTS approvals (
+            approval_id TEXT PRIMARY KEY,
+            execution_id TEXT,
+            actor TEXT NOT NULL DEFAULT 'local_operator',
+            capability TEXT NOT NULL,
+            operation_digest TEXT NOT NULL,
+            digest_version INTEGER NOT NULL DEFAULT 1,
+            token_verifier TEXT NOT NULL,
+            issued_at REAL NOT NULL,
+            expires_at REAL NOT NULL,
+            decision TEXT NOT NULL DEFAULT 'approved',
+            status TEXT NOT NULL DEFAULT 'pending',
+            consumed_at REAL,
+            metadata_json TEXT NOT NULL DEFAULT '{}'
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_approvals_token_verifier ON approvals(token_verifier);",
+        "CREATE INDEX IF NOT EXISTS idx_approvals_execution_id ON approvals(execution_id);",
+        "CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);",
     ]
     cursor = conn.cursor()
     for stmt in ddl_statements:
@@ -391,6 +411,7 @@ MIGRATION_REGISTRY: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] 
     (6, "006_timezone_aware_scheduler", _migration_006_timezone_aware_scheduler),
     (7, "007_canonical_workflows", _migration_007_canonical_workflows),
     (8, "008_workflow_provenance_retention", _migration_008_workflow_provenance_retention),
+    (9, "009_workflow_hitl_gates", _migration_009_workflow_hitl_gates),
 ]
 
 

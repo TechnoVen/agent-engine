@@ -21,7 +21,8 @@ import logging
 from pathlib import Path
 import sqlite3
 import threading
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.jobs.control import JobControlService
 from core.jobs.exceptions import DuplicateQueueEntryError
@@ -40,6 +41,11 @@ from core.jobs.models import (
 
 from core.jobs.queue import SQLiteJobQueue
 from core.jobs.sqlite import SQLiteJobRepository
+from core.safety.pending import (
+    PendingOperationRegistry,
+    compute_canonical_operation_digest,
+)
+from core.storage.sqlite import SQLiteBackend
 from core.workflows.exceptions import (
     WorkflowNotFoundError,
     WorkflowRunNotFoundError,
@@ -68,7 +74,13 @@ DEFAULT_JOBS_DB_PATH = str(PROJECT_ROOT / "data" / "agent_engine.db")
 class WorkflowService:
     """Authoritative service for canonical workflow definitions and DAG runs."""
 
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(
+        self,
+        db_path: Optional[str] = None,
+        storage: Optional[Any] = None,
+        approval_registry: Optional[PendingOperationRegistry] = None,
+        policy_engine: Optional[Any] = None,
+    ):
         self.db_path = db_path or DEFAULT_JOBS_DB_PATH
         self._is_memory = self.db_path == ":memory:"
         self._memory_conn: Optional[sqlite3.Connection] = None
@@ -77,14 +89,60 @@ class WorkflowService:
         self.repo = SQLiteJobRepository(db_path=self.db_path)
         self.queue = SQLiteJobQueue(db_path=self.db_path)
         self.control_service = JobControlService(db_path=self.db_path)
+        self.storage = storage or SQLiteBackend(db_path=self.db_path)
+        self.approval_registry = approval_registry or PendingOperationRegistry(storage=self.storage)
+        self.policy_engine = policy_engine
 
-        # Apply migrations including Migration 007
+        # Apply migrations including Migration 009
         conn = self._get_connection()
         try:
             apply_job_migrations(conn)
         finally:
             if not self._is_memory:
                 conn.close()
+
+    def _is_policy_denied(
+        self,
+        node: Optional[WorkflowNode],
+        inputs: Dict[str, Any],
+        workflow_run_id: str,
+    ) -> Tuple[bool, Optional[str]]:
+        """Check if a gate node is authoritatively blocked or denied by safety policy."""
+        if not node:
+            return False, None
+
+        # 1. Declarative node configuration denial
+        if node.config.get("policy_denied") is True:
+            return True, node.config.get("policy_reason", "Denied by workflow policy configuration")
+        if str(node.config.get("policy_decision", "")).lower() in ("deny", "block"):
+            return True, node.config.get("policy_reason", "Denied by workflow policy decision")
+        if node.config.get("policy_block") is True:
+            return True, node.config.get(
+                "policy_reason", "Blocked by workflow policy configuration"
+            )
+
+        # 2. Central Guardrail PolicyEngine evaluation if configured
+        if self.policy_engine:
+            tool_name = f"workflow_gate:{node.id}"
+            capability = node.config.get("capability", f"workflow_gate:{node.id}")
+            try:
+                decision = self.policy_engine.evaluate(
+                    tool_name=tool_name,
+                    tool_args=inputs,
+                    context={
+                        "session_id": workflow_run_id,
+                        "execution_id": workflow_run_id,
+                        "capability": capability,
+                    },
+                )
+                if getattr(decision, "is_denied", False):
+                    return True, getattr(decision, "reason", None) or "Denied by guardrail policy"
+                if str(getattr(decision, "decision", "")).lower() in ("deny", "block"):
+                    return True, getattr(decision, "reason", None) or "Denied by guardrail policy"
+            except Exception as e:
+                logger.warning("Policy evaluation error for gate '%s': %s", node.id, e)
+
+        return False, None
 
     def _get_connection(self) -> sqlite3.Connection:
         if self._is_memory:
@@ -110,13 +168,6 @@ class WorkflowService:
         is_valid, errors = WorkflowParser.validate(definition)
         if not is_valid:
             raise WorkflowValidationError(f"Invalid workflow definition: {'; '.join(errors)}")
-
-        # Validate node types against R4.8 capabilities
-        for node in definition.nodes:
-            if node.type == WorkflowNodeType.GATE:
-                raise WorkflowValidationError(
-                    f"Node '{node.id}' of type 'gate' is deferred to Milestone R4.9 (HITL Gates)."
-                )
 
         definition_hash = definition.compute_definition_hash()
         now_iso = current_timestamp_iso()
@@ -285,9 +336,18 @@ class WorkflowService:
 
         trimmed = val.strip()
 
-        # Handle direct references: $workflow.input.key
+        # Handle direct references: $workflow.input.key, $inputs.key, ${inputs.key}, etc.
         if trimmed.startswith("$workflow.input."):
             key = trimmed[len("$workflow.input.") :]
+            return workflow_inputs.get(key, val)
+        if trimmed.startswith("$inputs."):
+            key = trimmed[len("$inputs.") :]
+            return workflow_inputs.get(key, val)
+        if trimmed.startswith("${inputs.") and trimmed.endswith("}"):
+            key = trimmed[len("${inputs.") : -1].strip()
+            return workflow_inputs.get(key, val)
+        if trimmed.startswith("${workflow.input.") and trimmed.endswith("}"):
+            key = trimmed[len("${workflow.input.") : -1].strip()
             return workflow_inputs.get(key, val)
 
         import re
@@ -302,6 +362,10 @@ class WorkflowService:
             expr = matches[0].strip()
             if expr.startswith("$workflow.input."):
                 return workflow_inputs.get(expr[len("$workflow.input.") :], "")
+            if expr.startswith("$inputs."):
+                return workflow_inputs.get(expr[len("$inputs.") :], "")
+            if expr.startswith("inputs."):
+                return workflow_inputs.get(expr[len("inputs.") :], "")
             parts = expr.split(".", 1)
             if len(parts) == 2 and parts[0] in step_outputs:
                 return step_outputs[parts[0]].get(parts[1], "")
@@ -313,6 +377,10 @@ class WorkflowService:
             replacement = ""
             if clean_expr.startswith("$workflow.input."):
                 replacement = str(workflow_inputs.get(clean_expr[len("$workflow.input.") :], ""))
+            elif clean_expr.startswith("$inputs."):
+                replacement = str(workflow_inputs.get(clean_expr[len("$inputs.") :], ""))
+            elif clean_expr.startswith("inputs."):
+                replacement = str(workflow_inputs.get(clean_expr[len("inputs.") :], ""))
             else:
                 parts = clean_expr.split(".", 1)
                 if len(parts) == 2 and parts[0] in step_outputs:
@@ -356,12 +424,6 @@ class WorkflowService:
         if not is_valid:
             raise WorkflowValidationError(f"Invalid workflow graph: {'; '.join(errors)}")
 
-        for node in definition.nodes:
-            if node.type == WorkflowNodeType.GATE:
-                raise WorkflowValidationError(
-                    f"Node '{node.id}' of type 'gate' is deferred to Milestone R4.9 (HITL Gates)."
-                )
-
         definition_hash = definition.compute_definition_hash()
         run_id = run_id or generate_workflow_run_id()
         workflow_inputs = sanitize_bounded_dict(inputs or {})
@@ -381,58 +443,128 @@ class WorkflowService:
 
         # Prepare Jobs and NodeRuns for all nodes
         for node in definition.nodes:
-            job_id = generate_job_id()
-            node_job_map[node.id] = job_id
+            has_incoming = in_degrees[node.id] > 0
             node_run_id = generate_node_run_id()
 
-            has_incoming = in_degrees[node.id] > 0
-            initial_job_status = JobStatus.BLOCKED if has_incoming else JobStatus.READY
-            initial_node_status = NodeRunStatus.BLOCKED if has_incoming else NodeRunStatus.READY
+            if node.type == WorkflowNodeType.GATE:
+                # GATE is control-plane state, NOT an execution Job!
+                job_id = None
+                if has_incoming:
+                    initial_node_status = NodeRunStatus.BLOCKED
+                    resolved_inputs = {}
+                    approval_id = None
+                    operation_digest = None
+                    suspended_at = None
+                    node_error = None
+                else:
+                    resolved_inputs = sanitize_bounded_dict(
+                        self.resolve_node_inputs(node, workflow_inputs, {})
+                    )
+                    is_denied, reason = self._is_policy_denied(node, resolved_inputs, run_id)
+                    if is_denied:
+                        initial_node_status = NodeRunStatus.FAILED
+                        approval_id = None
+                        operation_digest = None
+                        suspended_at = None
+                        node_error = reason or "Policy denied gate execution"
+                    else:
+                        initial_node_status = NodeRunStatus.WAITING_APPROVAL
+                        tool_name = f"workflow_gate:{workflow_id}:{node.id}"
+                        capability = node.config.get("capability", f"workflow_gate:{node.id}")
+                        actor = node.config.get("actor", "local_operator")
+                        operation_digest = compute_canonical_operation_digest(
+                            tool_name=tool_name,
+                            tool_args=resolved_inputs,
+                            capability=capability,
+                            execution_id=run_id,
+                            actor=actor,
+                        )
+                        ttl = float(node.config.get("ttl_seconds", 3600.0))
+                        pending_op = self.approval_registry.register_operation(
+                            tool_name=tool_name,
+                            tool_args=resolved_inputs,
+                            risk_level=node.config.get("risk_level", "high"),
+                            risk_score=float(node.config.get("risk_score", 0.9)),
+                            session_id=run_id,
+                            execution_id=run_id,
+                            reason=node.config.get(
+                                "reason", f"Approval required for gate '{node.name}'"
+                            ),
+                            suggestion=node.config.get("suggestion"),
+                            diff=node.config.get("diff"),
+                            ttl_seconds=ttl,
+                            actor=actor,
+                            capability=capability,
+                        )
+                        approval_id = pending_op.operation_id
+                        suspended_at = now_iso
+                        node_error = None
 
-            # Resolve initial inputs for root nodes
-            resolved_inputs = (
-                sanitize_bounded_dict(self.resolve_node_inputs(node, workflow_inputs, {}))
-                if not has_incoming
-                else {}
-            )
+                node_run = WorkflowNodeRun(
+                    node_run_id=node_run_id,
+                    workflow_run_id=run_id,
+                    node_id=node.id,
+                    node_type=node.type,
+                    job_id=None,
+                    status=initial_node_status,
+                    approval_id=approval_id,
+                    operation_digest=operation_digest,
+                    suspended_at=suspended_at,
+                    inputs=resolved_inputs,
+                    outputs={},
+                    error=node_error,
+                    started_at=now_iso,
+                )
+                node_runs_map[node.id] = node_run
+            else:
+                job_id = generate_job_id()
+                node_job_map[node.id] = job_id
+                initial_job_status = JobStatus.BLOCKED if has_incoming else JobStatus.READY
+                initial_node_status = NodeRunStatus.BLOCKED if has_incoming else NodeRunStatus.READY
 
-            job = Job(
-                job_id=job_id,
-                job_type="workflow_step",
-                status=initial_job_status,
-                payload_summary={
-                    "workflow_id": workflow_id,
-                    "workflow_run_id": run_id,
-                    "node_id": node.id,
-                    "node_run_id": node_run_id,
-                    "node_name": node.name,
-                    "node_type": node.type.value,
-                    "config": node.config,
-                    "inputs": resolved_inputs,
-                    "outputs": node.outputs,
-                },
-                project_id=definition.metadata.get("project_id"),
-                created_by="authority:workflow_service",
-                created_at=now_iso,
-                updated_at=now_iso,
-            )
-            jobs_to_insert.append(job)
+                resolved_inputs = (
+                    sanitize_bounded_dict(self.resolve_node_inputs(node, workflow_inputs, {}))
+                    if not has_incoming
+                    else {}
+                )
 
-            node_run = WorkflowNodeRun(
-                node_run_id=node_run_id,
-                workflow_run_id=run_id,
-                node_id=node.id,
-                node_type=node.type,
-                job_id=job_id,
-                status=initial_node_status,
-                inputs=resolved_inputs,
-                outputs={},
-                started_at=now_iso,
-            )
-            node_runs_map[node.id] = node_run
+                job = Job(
+                    job_id=job_id,
+                    job_type="workflow_step",
+                    status=initial_job_status,
+                    payload_summary={
+                        "workflow_id": workflow_id,
+                        "workflow_run_id": run_id,
+                        "node_id": node.id,
+                        "node_run_id": node_run_id,
+                        "node_name": node.name,
+                        "node_type": node.type.value,
+                        "config": node.config,
+                        "inputs": resolved_inputs,
+                        "outputs": node.outputs,
+                    },
+                    project_id=definition.metadata.get("project_id"),
+                    created_by="authority:workflow_service",
+                    created_at=now_iso,
+                    updated_at=now_iso,
+                )
+                jobs_to_insert.append(job)
 
-            if not has_incoming:
-                root_job_ids_to_enqueue.append(job_id)
+                node_run = WorkflowNodeRun(
+                    node_run_id=node_run_id,
+                    workflow_run_id=run_id,
+                    node_id=node.id,
+                    node_type=node.type,
+                    job_id=job_id,
+                    status=initial_node_status,
+                    inputs=resolved_inputs,
+                    outputs={},
+                    started_at=now_iso,
+                )
+                node_runs_map[node.id] = node_run
+
+                if not has_incoming:
+                    root_job_ids_to_enqueue.append(job_id)
 
         # Prepare dependencies for all edges
         for edge in definition.edges:
@@ -462,6 +594,16 @@ class WorkflowService:
                 conn.execute("BEGIN IMMEDIATE")
                 cursor = conn.cursor()
 
+                # Determine initial workflow run status
+                if any(nr.status == NodeRunStatus.FAILED for nr in node_runs_map.values()):
+                    initial_run_status = WorkflowRunStatus.FAILED.value
+                elif any(
+                    nr.status == NodeRunStatus.WAITING_APPROVAL for nr in node_runs_map.values()
+                ):
+                    initial_run_status = WorkflowRunStatus.WAITING_APPROVAL.value
+                else:
+                    initial_run_status = WorkflowRunStatus.RUNNING.value
+
                 # Insert workflow run
                 cursor.execute(
                     """
@@ -475,7 +617,7 @@ class WorkflowService:
                         workflow_id,
                         definition_hash,
                         json.dumps(definition.to_dict()),
-                        WorkflowRunStatus.RUNNING.value,
+                        initial_run_status,
                         json.dumps(workflow_inputs),
                         now_iso,
                         now_iso,
@@ -488,8 +630,9 @@ class WorkflowService:
                         """
                         INSERT INTO workflow_node_runs (
                             node_run_id, workflow_run_id, node_id, node_type, job_id,
-                            status, inputs_json, outputs_json, error, started_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, '{}', NULL, ?, ?)
+                            status, inputs_json, outputs_json, error, started_at, updated_at,
+                            approval_id, operation_digest, suspended_at, resolved_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             nr.node_run_id,
@@ -499,8 +642,13 @@ class WorkflowService:
                             nr.job_id,
                             nr.status.value,
                             json.dumps(nr.inputs),
+                            nr.error,
                             nr.started_at,
                             nr.started_at,
+                            nr.approval_id,
+                            nr.operation_digest,
+                            nr.suspended_at,
+                            nr.resolved_at,
                         ),
                     )
 
@@ -519,20 +667,20 @@ class WorkflowService:
             except DuplicateQueueEntryError:
                 pass
 
-        # Record audit event
-        first_job_id = jobs_to_insert[0].job_id if jobs_to_insert else "unknown"
-        self.repo.append_event(
-            JobEvent(
-                job_id=first_job_id,
-                event_type=JobEventType.WORKFLOW_RUN_CREATED,
-                metadata={
-                    "workflow_run_id": run_id,
-                    "workflow_id": workflow_id,
-                    "nodes_count": len(definition.nodes),
-                    "edges_count": len(definition.edges),
-                },
+        # Record audit event if jobs exist
+        if jobs_to_insert:
+            self.repo.append_event(
+                JobEvent(
+                    job_id=jobs_to_insert[0].job_id,
+                    event_type=JobEventType.WORKFLOW_RUN_CREATED,
+                    metadata={
+                        "workflow_run_id": run_id,
+                        "workflow_id": workflow_id,
+                        "nodes_count": len(definition.nodes),
+                        "edges_count": len(definition.edges),
+                    },
+                )
             )
-        )
 
         logger.info("Launched workflow run '%s' for workflow '%s'", run_id, workflow_id)
         return self.get_run(run_id)
@@ -559,201 +707,407 @@ class WorkflowService:
                 nid: nr.outputs for nid, nr in run.node_runs.items() if nr.outputs
             }
 
+            now_iso = current_timestamp_iso()
             any_failed = False
             newly_ready_jobs: List[str] = []
 
+            # Stage 1: Check active job outcomes
+            completed_job_nodes: Dict[str, Dict[str, Any]] = {}
+            failed_job_nodes: List[str] = []
+            cancelled_job_nodes: List[str] = []
+            running_job_nodes: List[str] = []
+
+            for node_id, nr in run.node_runs.items():
+                if not nr.job_id:
+                    continue
+                job = self.repo.get_job(nr.job_id)
+                if not job:
+                    continue
+                if job.status == JobStatus.COMPLETED and nr.status != NodeRunStatus.COMPLETED:
+                    node_def = node_map.get(node_id)
+                    outs = self._derive_node_outputs(node_def, nr.job_id, step_outputs)
+                    step_outputs[node_id] = outs
+                    completed_job_nodes[node_id] = outs
+                elif job.status == JobStatus.FAILED and nr.status != NodeRunStatus.FAILED:
+                    failed_job_nodes.append(node_id)
+                    any_failed = True
+                elif job.status == JobStatus.CANCELLED and nr.status != NodeRunStatus.CANCELLED:
+                    cancelled_job_nodes.append(node_id)
+                elif job.status == JobStatus.RUNNING and nr.status != NodeRunStatus.RUNNING:
+                    running_job_nodes.append(node_id)
+
+            # Stage 2: Evaluate WAITING_APPROVAL GATE nodes (without holding DB lock)
+            gate_failed: Dict[str, str] = {}
+            gate_invalidated_regs: Dict[str, Tuple[str, str, Dict[str, Any]]] = {}
+            gate_cas_consume: List[str] = []
+
+            for node_id, nr in run.node_runs.items():
+                if (
+                    nr.node_type != WorkflowNodeType.GATE
+                    or nr.status != NodeRunStatus.WAITING_APPROVAL
+                ):
+                    continue
+                node_def = node_map.get(node_id)
+                if not node_def:
+                    continue
+
+                # Policy denial check
+                is_denied, reason = self._is_policy_denied(node_def, nr.inputs, workflow_run_id)
+                if is_denied:
+                    gate_failed[node_id] = reason or "Policy denied gate execution"
+                    any_failed = True
+                    continue
+
+                # Input invalidation check
+                curr_inputs = sanitize_bounded_dict(
+                    self.resolve_node_inputs(node_def, run.inputs, step_outputs)
+                )
+                tool_name = f"workflow_gate:{run.workflow_id}:{node_def.id}"
+                capability = node_def.config.get("capability", f"workflow_gate:{node_def.id}")
+                actor = node_def.config.get("actor", "local_operator")
+                expected_digest = compute_canonical_operation_digest(
+                    tool_name=tool_name,
+                    tool_args=curr_inputs,
+                    capability=capability,
+                    execution_id=workflow_run_id,
+                    actor=actor,
+                )
+
+                if nr.operation_digest and nr.operation_digest != expected_digest:
+                    if nr.approval_id:
+                        try:
+                            self.approval_registry.reject_operation(
+                                nr.approval_id, actor="system", reason="Invalidated: inputs changed"
+                            )
+                        except Exception:
+                            pass
+                    ttl = float(node_def.config.get("ttl_seconds", 3600.0))
+                    new_op = self.approval_registry.register_operation(
+                        tool_name=tool_name,
+                        tool_args=curr_inputs,
+                        risk_level=node_def.config.get("risk_level", "high"),
+                        risk_score=float(node_def.config.get("risk_score", 0.9)),
+                        session_id=workflow_run_id,
+                        execution_id=workflow_run_id,
+                        reason=node_def.config.get(
+                            "reason", f"Approval required for gate '{node_def.name}'"
+                        ),
+                        suggestion=node_def.config.get("suggestion"),
+                        diff=node_def.config.get("diff"),
+                        ttl_seconds=ttl,
+                        actor=actor,
+                        capability=capability,
+                    )
+                    gate_invalidated_regs[node_id] = (
+                        new_op.operation_id,
+                        expected_digest,
+                        curr_inputs,
+                    )
+                    continue
+
+                # Check approval status
+                if not nr.approval_id:
+                    continue
+                op = self.approval_registry.get_operation(nr.approval_id)
+                if not op:
+                    continue
+                if op.status == "rejected":
+                    gate_failed[node_id] = op.decision_reason or "Gate rejected by operator"
+                    any_failed = True
+                elif op.status == "approved":
+                    gate_cas_consume.append(node_id)
+
+            # Stage 3: Check BLOCKED nodes (without holding DB lock)
+            projected_status: Dict[str, NodeRunStatus] = {
+                nid: nr.status for nid, nr in run.node_runs.items()
+            }
+            for nid in completed_job_nodes:
+                projected_status[nid] = NodeRunStatus.COMPLETED
+            for nid in failed_job_nodes:
+                projected_status[nid] = NodeRunStatus.FAILED
+            for nid in cancelled_job_nodes:
+                projected_status[nid] = NodeRunStatus.CANCELLED
+            for nid in gate_failed:
+                projected_status[nid] = NodeRunStatus.FAILED
+            for nid in gate_cas_consume:
+                projected_status[nid] = NodeRunStatus.COMPLETED
+
+            blocked_skipped: Dict[str, str] = {}
+            blocked_gate_waiting: Dict[str, Tuple[str, str, Dict[str, Any]]] = {}
+            blocked_job_ready: Dict[str, Dict[str, Any]] = {}
+
+            for node_id, nr in run.node_runs.items():
+                if nr.status != NodeRunStatus.BLOCKED:
+                    continue
+                node_def = node_map.get(node_id)
+                if not node_def:
+                    continue
+
+                incoming_edges = [e for e in definition.edges if e.target == node_id]
+                all_prereqs_completed = True
+                any_prereq_failed_or_cancelled = False
+                condition_satisfied = True
+
+                for edge in incoming_edges:
+                    p_status = projected_status.get(edge.source)
+                    if p_status != NodeRunStatus.COMPLETED:
+                        all_prereqs_completed = False
+                    if p_status in (
+                        NodeRunStatus.FAILED,
+                        NodeRunStatus.CANCELLED,
+                        NodeRunStatus.SKIPPED,
+                    ):
+                        any_prereq_failed_or_cancelled = True
+                    if edge.condition:
+                        source_outs = step_outputs.get(edge.source, {})
+                        source_branch = str(
+                            source_outs.get("branch", source_outs.get("result", ""))
+                        ).lower()
+                        if source_branch != str(edge.condition).lower():
+                            condition_satisfied = False
+
+                if any_prereq_failed_or_cancelled:
+                    blocked_skipped[node_id] = "Prerequisite branch failed or cancelled"
+                    projected_status[node_id] = NodeRunStatus.SKIPPED
+                    continue
+                if not condition_satisfied:
+                    blocked_skipped[node_id] = "Branch condition not taken"
+                    projected_status[node_id] = NodeRunStatus.SKIPPED
+                    continue
+                if all_prereqs_completed and condition_satisfied:
+                    resolved_inputs = sanitize_bounded_dict(
+                        self.resolve_node_inputs(node_def, run.inputs, step_outputs)
+                    )
+                    if node_def.type == WorkflowNodeType.GATE:
+                        is_denied, reason = self._is_policy_denied(
+                            node_def, resolved_inputs, workflow_run_id
+                        )
+                        if is_denied:
+                            blocked_skipped[node_id] = reason or "Policy denied gate execution"
+                            gate_failed[node_id] = reason or "Policy denied gate execution"
+                            projected_status[node_id] = NodeRunStatus.FAILED
+                            any_failed = True
+                        else:
+                            tool_name = f"workflow_gate:{run.workflow_id}:{node_def.id}"
+                            capability = node_def.config.get(
+                                "capability", f"workflow_gate:{node_def.id}"
+                            )
+                            actor = node_def.config.get("actor", "local_operator")
+                            op_digest = compute_canonical_operation_digest(
+                                tool_name=tool_name,
+                                tool_args=resolved_inputs,
+                                capability=capability,
+                                execution_id=workflow_run_id,
+                                actor=actor,
+                            )
+                            ttl = float(node_def.config.get("ttl_seconds", 3600.0))
+                            pending_op = self.approval_registry.register_operation(
+                                tool_name=tool_name,
+                                tool_args=resolved_inputs,
+                                risk_level=node_def.config.get("risk_level", "high"),
+                                risk_score=float(node_def.config.get("risk_score", 0.9)),
+                                session_id=workflow_run_id,
+                                execution_id=workflow_run_id,
+                                reason=node_def.config.get(
+                                    "reason", f"Approval required for gate '{node_def.name}'"
+                                ),
+                                suggestion=node_def.config.get("suggestion"),
+                                diff=node_def.config.get("diff"),
+                                ttl_seconds=ttl,
+                                actor=actor,
+                                capability=capability,
+                            )
+                            blocked_gate_waiting[node_id] = (
+                                pending_op.operation_id,
+                                op_digest,
+                                resolved_inputs,
+                            )
+                            projected_status[node_id] = NodeRunStatus.WAITING_APPROVAL
+                    else:
+                        blocked_job_ready[node_id] = resolved_inputs
+                        projected_status[node_id] = NodeRunStatus.READY
+
+            # Stage 4: Apply mutations atomically in SQLite
             conn = self._get_connection()
             try:
                 conn.execute("BEGIN IMMEDIATE")
                 cursor = conn.cursor()
-                now_iso = current_timestamp_iso()
 
-                # Phase 1: Reconcile active and pending node runs against canonical Job status
-                for node_id, nr in run.node_runs.items():
-                    if not nr.job_id:
-                        continue
-
+                for nid, outs in completed_job_nodes.items():
                     cursor.execute(
-                        "SELECT job_id, status FROM jobs WHERE job_id = ?",
-                        (nr.job_id,),
+                        """
+                        UPDATE workflow_node_runs
+                        SET status = ?, outputs_json = ?, completed_at = ?, updated_at = ?
+                        WHERE workflow_run_id = ? AND node_id = ?
+                        """,
+                        (
+                            NodeRunStatus.COMPLETED.value,
+                            json.dumps(outs),
+                            now_iso,
+                            now_iso,
+                            workflow_run_id,
+                            nid,
+                        ),
                     )
-                    job_row = cursor.fetchone()
-                    if not job_row:
-                        continue
 
-                    job_status = job_row["status"]
+                for nid in failed_job_nodes:
+                    cursor.execute(
+                        """
+                        UPDATE workflow_node_runs
+                        SET status = ?, error = ?, completed_at = ?, updated_at = ?
+                        WHERE workflow_run_id = ? AND node_id = ?
+                        """,
+                        (
+                            NodeRunStatus.FAILED.value,
+                            "Underlying job failed",
+                            now_iso,
+                            now_iso,
+                            workflow_run_id,
+                            nid,
+                        ),
+                    )
 
-                    if (
-                        job_status == JobStatus.COMPLETED.value
-                        and nr.status != NodeRunStatus.COMPLETED
-                    ):
-                        # Job finished! Resolve node outputs.
-                        node_def = node_map.get(node_id)
-                        outputs = self._derive_node_outputs(node_def, nr.job_id, step_outputs)
-                        step_outputs[node_id] = outputs
+                for nid in cancelled_job_nodes:
+                    cursor.execute(
+                        """
+                        UPDATE workflow_node_runs
+                        SET status = ?, error = ?, completed_at = ?, updated_at = ?
+                        WHERE workflow_run_id = ? AND node_id = ?
+                        """,
+                        (
+                            NodeRunStatus.CANCELLED.value,
+                            "Underlying job cancelled",
+                            now_iso,
+                            now_iso,
+                            workflow_run_id,
+                            nid,
+                        ),
+                    )
 
+                for nid in running_job_nodes:
+                    cursor.execute(
+                        """
+                        UPDATE workflow_node_runs
+                        SET status = ?, updated_at = ?
+                        WHERE workflow_run_id = ? AND node_id = ?
+                        """,
+                        (NodeRunStatus.RUNNING.value, now_iso, workflow_run_id, nid),
+                    )
+
+                for nid, reason in gate_failed.items():
+                    cursor.execute(
+                        """
+                        UPDATE workflow_node_runs
+                        SET status = ?, error = ?, resolved_at = ?, completed_at = ?, updated_at = ?
+                        WHERE workflow_run_id = ? AND node_id = ?
+                        """,
+                        (
+                            NodeRunStatus.FAILED.value,
+                            reason,
+                            now_iso,
+                            now_iso,
+                            now_iso,
+                            workflow_run_id,
+                            nid,
+                        ),
+                    )
+
+                for nid, (app_id, digest, inputs) in gate_invalidated_regs.items():
+                    cursor.execute(
+                        """
+                        UPDATE workflow_node_runs
+                        SET approval_id = ?, operation_digest = ?, inputs_json = ?, suspended_at = ?, updated_at = ?
+                        WHERE workflow_run_id = ? AND node_id = ?
+                        """,
+                        (
+                            app_id,
+                            digest,
+                            json.dumps(inputs),
+                            now_iso,
+                            now_iso,
+                            workflow_run_id,
+                            nid,
+                        ),
+                    )
+
+                for nid in gate_cas_consume:
+                    nr = run.node_runs[nid]
+                    node_def = node_map.get(nid)
+                    now_time = time.time()
+                    cursor.execute(
+                        """
+                        UPDATE approvals
+                        SET status = 'consumed', consumed_at = ?
+                        WHERE approval_id = ? AND status = 'approved' AND expires_at > ?
+                        """,
+                        (now_time, nr.approval_id, now_time),
+                    )
+                    if cursor.rowcount == 1:
+                        if nr.approval_id in self.approval_registry._operations:
+                            self.approval_registry._operations[nr.approval_id].status = "consumed"
+                            self.approval_registry._operations[
+                                nr.approval_id
+                            ].consumed_at = now_time
+                        outs = self._derive_node_outputs(node_def, None, step_outputs)
+                        step_outputs[nid] = outs
                         cursor.execute(
                             """
                             UPDATE workflow_node_runs
-                            SET status = ?, outputs_json = ?, completed_at = ?, updated_at = ?
-                            WHERE node_run_id = ?
+                            SET status = ?, outputs_json = ?, resolved_at = ?, completed_at = ?, updated_at = ?
+                            WHERE workflow_run_id = ? AND node_id = ?
                             """,
                             (
                                 NodeRunStatus.COMPLETED.value,
-                                json.dumps(outputs),
+                                json.dumps(outs),
                                 now_iso,
                                 now_iso,
-                                nr.node_run_id,
+                                now_iso,
+                                workflow_run_id,
+                                nid,
                             ),
                         )
-                        nr.status = NodeRunStatus.COMPLETED
-                        nr.outputs = outputs
-                        nr.completed_at = now_iso
+                    else:
+                        projected_status[nid] = NodeRunStatus.WAITING_APPROVAL
 
-                    elif job_status == JobStatus.FAILED.value and nr.status != NodeRunStatus.FAILED:
-                        any_failed = True
-                        cursor.execute(
-                            """
-                            UPDATE workflow_node_runs
-                            SET status = ?, error = ?, completed_at = ?, updated_at = ?
-                            WHERE node_run_id = ?
-                            """,
-                            (
-                                NodeRunStatus.FAILED.value,
-                                "Underlying job failed",
-                                now_iso,
-                                now_iso,
-                                nr.node_run_id,
-                            ),
-                        )
-                        nr.status = NodeRunStatus.FAILED
-                        nr.completed_at = now_iso
-
-                    elif (
-                        job_status == JobStatus.CANCELLED.value
-                        and nr.status != NodeRunStatus.CANCELLED
-                    ):
-                        cursor.execute(
-                            """
-                            UPDATE workflow_node_runs
-                            SET status = ?, error = ?, completed_at = ?, updated_at = ?
-                            WHERE node_run_id = ?
-                            """,
-                            (
-                                NodeRunStatus.CANCELLED.value,
-                                "Underlying job cancelled",
-                                now_iso,
-                                now_iso,
-                                nr.node_run_id,
-                            ),
-                        )
-                        nr.status = NodeRunStatus.CANCELLED
-                        nr.completed_at = now_iso
-
-                    elif (
-                        job_status == JobStatus.RUNNING.value and nr.status != NodeRunStatus.RUNNING
-                    ):
-                        cursor.execute(
-                            """
-                            UPDATE workflow_node_runs
-                            SET status = ?, updated_at = ?
-                            WHERE node_run_id = ?
-                            """,
-                            (NodeRunStatus.RUNNING.value, now_iso, nr.node_run_id),
-                        )
-                        nr.status = NodeRunStatus.RUNNING
-
-                # Phase 2: Check for newly eligible blocked nodes
-                for node_id, nr in run.node_runs.items():
-                    if nr.status != NodeRunStatus.BLOCKED:
-                        continue
-
-                    # Fetch job dependencies directly on the active transaction
+                for nid, reason in blocked_skipped.items():
                     cursor.execute(
-                        "SELECT depends_on_job_id FROM job_dependencies WHERE job_id = ?",
-                        (nr.job_id,),
+                        """
+                        UPDATE workflow_node_runs
+                        SET status = ?, error = ?, completed_at = ?, updated_at = ?
+                        WHERE workflow_run_id = ? AND node_id = ?
+                        """,
+                        (
+                            NodeRunStatus.SKIPPED.value,
+                            reason,
+                            now_iso,
+                            now_iso,
+                            workflow_run_id,
+                            nid,
+                        ),
                     )
-                    dep_rows = cursor.fetchall()
-                    all_prereqs_completed = True
-                    any_prereq_failed_or_cancelled = False
 
-                    for dep_row in dep_rows:
-                        parent_id = dep_row["depends_on_job_id"]
-                        cursor.execute(
-                            "SELECT status FROM jobs WHERE job_id = ?",
-                            (parent_id,),
-                        )
-                        parent_row = cursor.fetchone()
-                        if not parent_row or parent_row["status"] != JobStatus.COMPLETED.value:
-                            all_prereqs_completed = False
-                        if parent_row and parent_row["status"] in (
-                            JobStatus.FAILED.value,
-                            JobStatus.CANCELLED.value,
-                        ):
-                            any_prereq_failed_or_cancelled = True
+                for nid, (app_id, digest, inputs) in blocked_gate_waiting.items():
+                    cursor.execute(
+                        """
+                        UPDATE workflow_node_runs
+                        SET status = ?, approval_id = ?, operation_digest = ?, inputs_json = ?, suspended_at = ?, updated_at = ?
+                        WHERE workflow_run_id = ? AND node_id = ?
+                        """,
+                        (
+                            NodeRunStatus.WAITING_APPROVAL.value,
+                            app_id,
+                            digest,
+                            json.dumps(inputs),
+                            now_iso,
+                            now_iso,
+                            workflow_run_id,
+                            nid,
+                        ),
+                    )
 
-                    if any_prereq_failed_or_cancelled:
-                        # Downstream branch cannot run
-                        cursor.execute(
-                            """
-                            UPDATE workflow_node_runs
-                            SET status = ?, error = ?, completed_at = ?, updated_at = ?
-                            WHERE node_run_id = ?
-                            """,
-                            (
-                                NodeRunStatus.SKIPPED.value,
-                                "Prerequisite branch failed or cancelled",
-                                now_iso,
-                                now_iso,
-                                nr.node_run_id,
-                            ),
-                        )
-                        nr.status = NodeRunStatus.SKIPPED
-                        nr.completed_at = now_iso
-                        continue
-
-                    # Check conditional edges
-                    incoming_edges = [e for e in definition.edges if e.target == node_id]
-                    condition_satisfied = True
-
-                    for edge in incoming_edges:
-                        if edge.condition:
-                            source_outs = step_outputs.get(edge.source, {})
-                            source_branch = str(
-                                source_outs.get("branch", source_outs.get("result", ""))
-                            ).lower()
-                            expected_cond = str(edge.condition).lower()
-                            if source_branch != expected_cond:
-                                condition_satisfied = False
-
-                    if not condition_satisfied:
-                        # Branch was not selected
-                        cursor.execute(
-                            """
-                            UPDATE workflow_node_runs
-                            SET status = ?, error = ?, completed_at = ?, updated_at = ?
-                            WHERE node_run_id = ?
-                            """,
-                            (
-                                NodeRunStatus.SKIPPED.value,
-                                "Branch condition not taken",
-                                now_iso,
-                                now_iso,
-                                nr.node_run_id,
-                            ),
-                        )
-                        nr.status = NodeRunStatus.SKIPPED
-                        nr.completed_at = now_iso
-                        continue
-
-                    if all_prereqs_completed and condition_satisfied:
-                        # Release node! Resolve its inputs now that prerequisites completed
-                        node_def = node_map[node_id]
-                        resolved_inputs = sanitize_bounded_dict(
-                            self.resolve_node_inputs(node_def, run.inputs, step_outputs)
-                        )
-
-                        # Update Job payload summary
+                for nid, inputs in blocked_job_ready.items():
+                    nr = run.node_runs[nid]
+                    if nr.job_id:
                         cursor.execute(
                             "SELECT payload_summary_json FROM jobs WHERE job_id = ?",
                             (nr.job_id,),
@@ -761,49 +1115,46 @@ class WorkflowService:
                         j_row = cursor.fetchone()
                         if j_row:
                             payload_sum = json.loads(j_row["payload_summary_json"])
-                            payload_sum["inputs"] = resolved_inputs
+                            payload_sum["inputs"] = inputs
                             cursor.execute(
-                                """
-                                UPDATE jobs
-                                SET payload_summary_json = ?, updated_at = ?
-                                WHERE job_id = ?
-                                """,
+                                "UPDATE jobs SET payload_summary_json = ?, updated_at = ? WHERE job_id = ?",
                                 (json.dumps(payload_sum), now_iso, nr.job_id),
                             )
+                    cursor.execute(
+                        """
+                        UPDATE workflow_node_runs
+                        SET status = ?, inputs_json = ?, updated_at = ?
+                        WHERE workflow_run_id = ? AND node_id = ? AND status = 'blocked'
+                        """,
+                        (
+                            NodeRunStatus.READY.value,
+                            json.dumps(inputs),
+                            now_iso,
+                            workflow_run_id,
+                            nid,
+                        ),
+                    )
+                    if cursor.rowcount > 0 and nr.job_id:
+                        newly_ready_jobs.append(nr.job_id)
 
-                        cursor.execute(
-                            """
-                            UPDATE workflow_node_runs
-                            SET status = ?, inputs_json = ?, updated_at = ?
-                            WHERE node_run_id = ? AND status = 'blocked'
-                            """,
-                            (
-                                NodeRunStatus.READY.value,
-                                json.dumps(resolved_inputs),
-                                now_iso,
-                                nr.node_run_id,
-                            ),
-                        )
-                        if cursor.rowcount > 0:
-                            nr.status = NodeRunStatus.READY
-                            nr.inputs = resolved_inputs
-                            newly_ready_jobs.append(nr.job_id)
-
-                # Phase 3: Evaluate run-level termination
-                terminal_nodes = {
-                    nid
-                    for nid, nr in run.node_runs.items()
-                    if nr.status
+                has_failed = any_failed or any(
+                    status == NodeRunStatus.FAILED for status in projected_status.values()
+                )
+                has_waiting = any(
+                    status == NodeRunStatus.WAITING_APPROVAL for status in projected_status.values()
+                )
+                all_terminal = all(
+                    status
                     in (
                         NodeRunStatus.COMPLETED,
                         NodeRunStatus.FAILED,
                         NodeRunStatus.CANCELLED,
                         NodeRunStatus.SKIPPED,
                     )
-                }
-                all_nodes_terminal = len(terminal_nodes) == len(run.node_runs)
+                    for status in projected_status.values()
+                )
 
-                if any_failed:
+                if has_failed:
                     cursor.execute(
                         """
                         UPDATE workflow_runs
@@ -818,15 +1169,13 @@ class WorkflowService:
                             workflow_run_id,
                         ),
                     )
-                elif all_nodes_terminal:
-                    # Final output aggregation
+                elif all_terminal:
                     final_outputs: Dict[str, Any] = {}
                     for nid, outs in step_outputs.items():
                         final_outputs[nid] = outs
                         for k, v in outs.items():
                             if k not in final_outputs:
                                 final_outputs[k] = v
-
                     cursor.execute(
                         """
                         UPDATE workflow_runs
@@ -841,16 +1190,23 @@ class WorkflowService:
                             workflow_run_id,
                         ),
                     )
+                elif has_waiting:
+                    cursor.execute(
+                        "UPDATE workflow_runs SET status = ?, updated_at = ? WHERE workflow_run_id = ?",
+                        (WorkflowRunStatus.WAITING_APPROVAL.value, now_iso, workflow_run_id),
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE workflow_runs SET status = ?, updated_at = ? WHERE workflow_run_id = ?",
+                        (WorkflowRunStatus.RUNNING.value, now_iso, workflow_run_id),
+                    )
 
                 conn.commit()
-            except Exception:
-                conn.rollback()
-                raise
             finally:
                 if not self._is_memory:
                     conn.close()
 
-            # Update Job state and enqueue newly ready jobs into persistent queue
+            # Enqueue newly ready jobs
             for r_job_id in newly_ready_jobs:
                 self.repo.update_state(r_job_id, JobStatus.READY)
                 try:
@@ -870,7 +1226,7 @@ class WorkflowService:
     def _derive_node_outputs(
         self,
         node_def: Optional[WorkflowNode],
-        job_id: str,
+        job_id: Optional[str],
         step_outputs: Dict[str, Dict[str, Any]],
     ) -> Dict[str, Any]:
         """Derive standard node outputs based on node type and execution context."""
@@ -878,10 +1234,18 @@ class WorkflowService:
             return {"job_id": job_id, "status": "completed"}
 
         outputs: Dict[str, Any] = {}
-        # If condition node: evaluate expression
+        if node_def.type == WorkflowNodeType.GATE:
+            outputs = {
+                "status": "approved",
+                "node_id": node_def.id,
+                "approved": True,
+            }
+            for out_name in node_def.outputs:
+                outputs[out_name] = f"approved_{node_def.id}_{out_name}"
+            return sanitize_bounded_dict(outputs)
+
         if node_def.type == WorkflowNodeType.CONDITION:
             expr = node_def.config.get("expression", "true")
-            # Resolve condition binding
             resolved_expr = self.resolve_binding(expr, {}, step_outputs)
             condition_met = True
             if "==" in resolved_expr:
@@ -893,18 +1257,17 @@ class WorkflowService:
             branch = "true" if condition_met else "false"
             return {"condition_result": condition_met, "branch": branch}
 
-        # For executable nodes, populate declared outputs
         for out_name in node_def.outputs:
             outputs[out_name] = f"result_{node_def.id}_{out_name}"
 
-        # Standard result fields
         outputs["status"] = "success"
         outputs["node_id"] = node_def.id
-        outputs["job_id"] = job_id
+        if job_id:
+            outputs["job_id"] = job_id
         return sanitize_bounded_dict(outputs)
 
     def cancel_run(self, workflow_run_id: str, reason: str = "Operator cancelled") -> WorkflowRun:
-        """Cancel an in-progress workflow run and all outstanding active jobs."""
+        """Cancel an in-progress workflow run and all outstanding active jobs/approvals."""
         run = self.get_run(workflow_run_id)
         if not run:
             raise WorkflowRunNotFoundError(f"Workflow run '{workflow_run_id}' not found.")
@@ -918,12 +1281,24 @@ class WorkflowService:
 
         now_iso = current_timestamp_iso()
 
-        # Cancel all outstanding jobs via JobControlService
+        # Cancel all outstanding jobs and reject waiting approvals
         for nr in run.node_runs.values():
-            if nr.status in (NodeRunStatus.READY, NodeRunStatus.RUNNING, NodeRunStatus.BLOCKED):
+            if nr.status in (
+                NodeRunStatus.READY,
+                NodeRunStatus.RUNNING,
+                NodeRunStatus.BLOCKED,
+                NodeRunStatus.WAITING_APPROVAL,
+            ):
                 if nr.job_id:
                     try:
                         self.control_service.cancel_job(nr.job_id, reason=reason)
+                    except Exception:
+                        pass
+                if nr.approval_id:
+                    try:
+                        self.approval_registry.reject_operation(
+                            nr.approval_id, actor="system:workflow_service", reason=reason
+                        )
                     except Exception:
                         pass
 
@@ -949,7 +1324,7 @@ class WorkflowService:
                         """
                         UPDATE workflow_node_runs
                         SET status = ?, error = ?, completed_at = ?, updated_at = ?
-                        WHERE workflow_run_id = ? AND status IN ('ready', 'running', 'blocked', 'pending')
+                        WHERE workflow_run_id = ? AND status IN ('ready', 'running', 'blocked', 'pending', 'waiting_approval')
                         """,
                         (
                             NodeRunStatus.CANCELLED.value,
@@ -965,6 +1340,100 @@ class WorkflowService:
 
         logger.info("Cancelled workflow run '%s' (reason: %s)", workflow_run_id, reason)
         return self.get_run(workflow_run_id)
+
+    def approve_gate(
+        self,
+        workflow_run_id: str,
+        node_id: str,
+        actor: str = "local_operator",
+    ) -> WorkflowRun:
+        """Authoritatively approve a waiting HITL gate node and advance DAG progression."""
+        with self._lock:
+            run = self.get_run(workflow_run_id)
+            if not run:
+                raise WorkflowRunNotFoundError(f"Workflow run '{workflow_run_id}' not found.")
+
+            nr = run.node_runs.get(node_id)
+            if not nr:
+                raise WorkflowValidationError(
+                    f"Node '{node_id}' not found in run '{workflow_run_id}'."
+                )
+
+            if nr.node_type != WorkflowNodeType.GATE:
+                raise WorkflowValidationError(
+                    f"Node '{node_id}' is of type '{nr.node_type}', not a GATE."
+                )
+
+            definition = WorkflowDefinition.model_validate(run.definition_snapshot)
+            node_map = {n.id: n for n in definition.nodes}
+            node_def = node_map.get(node_id)
+            if not node_def:
+                raise WorkflowValidationError(f"Definition for node '{node_id}' not found.")
+
+            # Policy denial cannot be overridden by human approval!
+            is_denied, reason = self._is_policy_denied(node_def, nr.inputs, workflow_run_id)
+            if is_denied:
+                raise WorkflowValidationError(
+                    f"Policy denial cannot be overridden by human approval: {reason}"
+                )
+
+            if nr.status != NodeRunStatus.WAITING_APPROVAL:
+                raise WorkflowValidationError(
+                    f"Gate '{node_id}' is in status '{nr.status}', not waiting for approval."
+                )
+
+            if not nr.approval_id:
+                raise WorkflowValidationError(f"Gate '{node_id}' has no associated approval_id.")
+
+            # Approve via central approval registry
+            self.approval_registry.approve_operation(
+                operation_id=nr.approval_id,
+                actor=actor,
+                execution_id=workflow_run_id,
+            )
+
+        # Reconcile workflow run to advance gate and release dependents
+        return self.reconcile_run(workflow_run_id)
+
+    def reject_gate(
+        self,
+        workflow_run_id: str,
+        node_id: str,
+        actor: str = "local_operator",
+        reason: str = "Rejected by operator",
+    ) -> WorkflowRun:
+        """Authoritatively reject a waiting HITL gate node and terminate branch."""
+        with self._lock:
+            run = self.get_run(workflow_run_id)
+            if not run:
+                raise WorkflowRunNotFoundError(f"Workflow run '{workflow_run_id}' not found.")
+
+            nr = run.node_runs.get(node_id)
+            if not nr:
+                raise WorkflowValidationError(
+                    f"Node '{node_id}' not found in run '{workflow_run_id}'."
+                )
+
+            if nr.node_type != WorkflowNodeType.GATE:
+                raise WorkflowValidationError(
+                    f"Node '{node_id}' is of type '{nr.node_type}', not a GATE."
+                )
+
+            if nr.status != NodeRunStatus.WAITING_APPROVAL:
+                raise WorkflowValidationError(
+                    f"Gate '{node_id}' is in status '{nr.status}', not waiting for approval."
+                )
+
+            if not nr.approval_id:
+                raise WorkflowValidationError(f"Gate '{node_id}' has no associated approval_id.")
+
+            self.approval_registry.reject_operation(
+                operation_id=nr.approval_id,
+                actor=actor,
+                reason=reason,
+            )
+
+        return self.reconcile_run(workflow_run_id)
 
     def get_run(self, workflow_run_id: str) -> Optional[WorkflowRun]:
         """Retrieve complete state of a workflow run including all node run details."""
@@ -987,7 +1456,8 @@ class WorkflowService:
                 cursor.execute(
                     """
                     SELECT node_run_id, workflow_run_id, node_id, node_type, job_id,
-                           status, inputs_json, outputs_json, error, started_at, completed_at
+                           status, inputs_json, outputs_json, error, started_at, completed_at,
+                           approval_id, operation_digest, suspended_at, resolved_at
                     FROM workflow_node_runs WHERE workflow_run_id = ?
                     ORDER BY started_at ASC
                     """,
@@ -997,6 +1467,7 @@ class WorkflowService:
 
                 node_runs: Dict[str, WorkflowNodeRun] = {}
                 for nr_row in node_rows:
+                    row_keys = nr_row.keys() if hasattr(nr_row, "keys") else []
                     node_runs[nr_row["node_id"]] = WorkflowNodeRun(
                         node_run_id=nr_row["node_run_id"],
                         workflow_run_id=nr_row["workflow_run_id"],
@@ -1004,6 +1475,12 @@ class WorkflowService:
                         node_type=WorkflowNodeType(nr_row["node_type"]),
                         job_id=nr_row["job_id"],
                         status=NodeRunStatus(nr_row["status"]),
+                        approval_id=nr_row["approval_id"] if "approval_id" in row_keys else None,
+                        operation_digest=(
+                            nr_row["operation_digest"] if "operation_digest" in row_keys else None
+                        ),
+                        suspended_at=nr_row["suspended_at"] if "suspended_at" in row_keys else None,
+                        resolved_at=nr_row["resolved_at"] if "resolved_at" in row_keys else None,
                         inputs=json.loads(nr_row["inputs_json"]),
                         outputs=json.loads(nr_row["outputs_json"]),
                         error=nr_row["error"],

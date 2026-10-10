@@ -150,6 +150,7 @@ class NodeRunStatus(str, Enum):
     BLOCKED = "blocked"
     READY = "ready"
     RUNNING = "running"
+    WAITING_APPROVAL = "waiting_approval"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -199,6 +200,16 @@ class WorkflowNodeRun(BaseModel):
     node_type: WorkflowNodeType = Field(..., description="Node classification")
     job_id: Optional[str] = Field(None, description="Associated canonical Job ID")
     status: NodeRunStatus = Field(default=NodeRunStatus.PENDING)
+    approval_id: Optional[str] = Field(None, description="Pending approval ID for HITL gates")
+    operation_digest: Optional[str] = Field(
+        None, description="Canonical operation digest for exact gate approval"
+    )
+    suspended_at: Optional[str] = Field(
+        None, description="Timestamp when gate entered WAITING_APPROVAL"
+    )
+    resolved_at: Optional[str] = Field(
+        None, description="Timestamp when gate was resolved (approved/rejected)"
+    )
     inputs: Dict[str, Any] = Field(default_factory=dict)
     outputs: Dict[str, Any] = Field(default_factory=dict)
     error: Optional[str] = None
