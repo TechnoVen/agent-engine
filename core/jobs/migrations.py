@@ -333,6 +333,55 @@ def _migration_007_canonical_workflows(conn: sqlite3.Connection) -> None:
         cursor.execute(stmt)
 
 
+def _migration_008_workflow_provenance_retention(conn: sqlite3.Connection) -> None:
+    """Migration 008: Workflow provenance retention — enforce ON DELETE RESTRICT on workflow_runs (Task R4.8)."""
+    ddl_statements = [
+        """
+        CREATE TABLE IF NOT EXISTS workflow_runs_v8 (
+            workflow_run_id TEXT PRIMARY KEY,
+            workflow_id TEXT NOT NULL REFERENCES workflow_definitions(workflow_id) ON DELETE RESTRICT,
+            definition_hash TEXT NOT NULL,
+            definition_snapshot_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            inputs_json TEXT NOT NULL DEFAULT '{}',
+            outputs_json TEXT NOT NULL DEFAULT '{}',
+            error TEXT,
+            created_at TEXT NOT NULL,
+            completed_at TEXT,
+            updated_at TEXT NOT NULL
+        );
+        """,
+        "INSERT INTO workflow_runs_v8 SELECT * FROM workflow_runs;",
+        "DROP TABLE workflow_runs;",
+        "ALTER TABLE workflow_runs_v8 RENAME TO workflow_runs;",
+        "CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow_id ON workflow_runs(workflow_id);",
+        "CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);",
+    ]
+    cursor = conn.cursor()
+    for stmt in ddl_statements:
+        cursor.execute(stmt)
+
+
+def _migration_009_workflow_hitl_gates(conn: sqlite3.Connection) -> None:
+    """Migration 009: Human-in-the-loop workflow gate execution state (Task R4.9)."""
+    ddl_statements = [
+        "ALTER TABLE workflow_node_runs ADD COLUMN approval_id TEXT;",
+        "ALTER TABLE workflow_node_runs ADD COLUMN operation_digest TEXT;",
+        "ALTER TABLE workflow_node_runs ADD COLUMN suspended_at TEXT;",
+        "ALTER TABLE workflow_node_runs ADD COLUMN resolved_at TEXT;",
+        "CREATE INDEX IF NOT EXISTS idx_node_runs_approval_id ON workflow_node_runs(approval_id);",
+    ]
+    cursor = conn.cursor()
+    for stmt in ddl_statements:
+        try:
+            cursor.execute(stmt)
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" in str(e).lower() or "already exists" in str(e).lower():
+                pass
+            else:
+                raise
+
+
 MIGRATION_REGISTRY: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "001_initial_job_domain", _migration_001_initial_job_domain),
     (2, "002_persistent_job_queue", _migration_002_persistent_job_queue),
@@ -341,6 +390,7 @@ MIGRATION_REGISTRY: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] 
     (5, "005_job_control_and_timeouts", _migration_005_job_control_and_timeouts),
     (6, "006_timezone_aware_scheduler", _migration_006_timezone_aware_scheduler),
     (7, "007_canonical_workflows", _migration_007_canonical_workflows),
+    (8, "008_workflow_provenance_retention", _migration_008_workflow_provenance_retention),
 ]
 
 
@@ -359,18 +409,29 @@ def apply_job_migrations(conn: sqlite3.Connection, target_version: Optional[int]
     cursor.execute("SELECT version FROM job_schema_migrations ORDER BY version ASC")
     applied_versions = {row[0] for row in cursor.fetchall()}
 
+    # Check whether foreign keys are currently enabled
+    cursor.execute("PRAGMA foreign_keys;")
+    fk_row = cursor.fetchone()
+    fk_enabled = bool(fk_row[0]) if fk_row else False
+
     applied_count = 0
     for version, name, migration_func in MIGRATION_REGISTRY:
         if target_version is not None and version > target_version:
             continue
         if version not in applied_versions:
             logger.info("Applying job domain migration %d: %s", version, name)
-            with conn:
-                migration_func(conn)
-                conn.execute(
-                    "INSERT INTO job_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
-                    (version, name, current_timestamp_iso()),
-                )
+            if fk_enabled:
+                conn.execute("PRAGMA foreign_keys = OFF;")
+            try:
+                with conn:
+                    migration_func(conn)
+                    conn.execute(
+                        "INSERT INTO job_schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+                        (version, name, current_timestamp_iso()),
+                    )
+            finally:
+                if fk_enabled:
+                    conn.execute("PRAGMA foreign_keys = ON;")
             applied_count += 1
 
     return applied_count

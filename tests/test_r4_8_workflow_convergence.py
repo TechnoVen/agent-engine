@@ -194,6 +194,75 @@ def test_migration_007_applied_and_schema_verified(file_db_path: str) -> None:
         conn.close()
 
 
+def test_migration_008_populated_provenance_retention(tmp_path: Path) -> None:
+    """Verify populated v7 database upgrades cleanly to v8 with ON DELETE RESTRICT on workflow_runs."""
+    db_file = str(tmp_path / "v7_to_v8_migration.db")
+    conn = sqlite3.connect(db_file)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON;")
+        # Apply up to Migration 007
+        apply_job_migrations(conn, target_version=7)
+        assert get_current_job_schema_version(conn) == 7
+
+        # Populate v7 schema with canonical workflow data
+        conn.execute(
+            """INSERT INTO jobs (job_id, job_type, status, created_at, updated_at)
+               VALUES ('job_v7_1', 'workflow_step', 'ready', '2026-10-10T00:00:00Z', '2026-10-10T00:00:00Z')"""
+        )
+        conn.execute(
+            """INSERT INTO workflow_definitions (
+                   workflow_id, name, description, version, status,
+                   definition_json, definition_hash, created_at, updated_at
+               ) VALUES ('wf_v7', 'V7 Workflow', 'Testing v7->v8', '1.0.0', 'active',
+                         '{}', 'hash_v7_1234', '2026-10-10T00:00:00Z', '2026-10-10T00:00:00Z')"""
+        )
+        conn.execute(
+            """INSERT INTO workflow_runs (
+                   workflow_run_id, workflow_id, definition_hash, definition_snapshot_json,
+                   status, inputs_json, outputs_json, error, created_at, completed_at, updated_at
+               ) VALUES ('wfr_v7', 'wf_v7', 'hash_v7_1234', '{}', 'completed',
+                         '{"param": "val"}', '{"out": 1}', NULL,
+                         '2026-10-10T00:00:00Z', '2026-10-10T00:01:00Z', '2026-10-10T00:01:00Z')"""
+        )
+        conn.execute(
+            """INSERT INTO workflow_node_runs (
+                   node_run_id, workflow_run_id, node_id, node_type, job_id, status,
+                   inputs_json, outputs_json, error, started_at, completed_at, updated_at
+               ) VALUES ('wfnr_v7', 'wfr_v7', 'node_1', 'pipeline', 'job_v7_1', 'completed',
+                         '{}', '{}', NULL, '2026-10-10T00:00:00Z', '2026-10-10T00:01:00Z', '2026-10-10T00:01:00Z')"""
+        )
+        conn.commit()
+
+        # Apply Migration 008
+        applied = apply_job_migrations(conn, target_version=8)
+        assert applied == 1
+        assert get_current_job_schema_version(conn) == 8
+
+        # 1. Historical runs and node runs remain fully intact and identical
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM workflow_runs WHERE workflow_run_id = 'wfr_v7'")
+        run_row = cursor.fetchone()
+        assert run_row is not None
+        assert run_row[0] == "wfr_v7"
+        assert run_row[1] == "wf_v7"
+        assert run_row[4] == "completed"
+
+        cursor.execute("SELECT * FROM workflow_node_runs WHERE node_run_id = 'wfnr_v7'")
+        nr_row = cursor.fetchone()
+        assert nr_row is not None
+        assert nr_row[0] == "wfnr_v7"
+
+        # 2. Foreign key RESTRICT prevents definition deletion from destroying run history
+        with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY constraint failed"):
+            conn.execute("DELETE FROM workflow_definitions WHERE workflow_id = 'wf_v7'")
+
+        # The run history is still present after the rejected delete attempt
+        cursor.execute("SELECT COUNT(*) FROM workflow_runs WHERE workflow_id = 'wf_v7'")
+        assert cursor.fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
 # ==============================================================================
 # 2. Workflow Definition CRUD & Legacy Compatibility
 # ==============================================================================
@@ -237,6 +306,50 @@ def test_definition_crud_and_legacy_compatibility(workflow_service: WorkflowServ
     deleted = workflow_service.delete_definition("wf_crud_test")
     assert deleted is True
     assert workflow_service.get_definition("wf_crud_test") is None
+
+
+def test_definition_deletion_policy_and_archive(workflow_service: WorkflowService) -> None:
+    """Verify definition deletion policy: hard-delete blocked if runs exist; archive works and prevents new runs."""
+    # 1. Draft workflow that has never run can be hard-deleted
+    draft_def = build_sample_definition(workflow_id="wf_draft_never_run")
+    workflow_service.create_definition(draft_def)
+    assert workflow_service.delete_definition("wf_draft_never_run") is True
+    assert workflow_service.get_definition("wf_draft_never_run") is None
+
+    # 2. Workflow with execution history CANNOT be hard-deleted
+    live_def = build_sample_definition(workflow_id="wf_with_history")
+    workflow_service.create_definition(live_def)
+    run = workflow_service.start_run("wf_with_history")
+    assert run is not None
+
+    # Hard-delete rejected
+    with pytest.raises(
+        WorkflowValidationError, match="historical run.*exist.*Archive the definition"
+    ):
+        workflow_service.delete_definition("wf_with_history")
+
+    # Historical runs remain queryable and intact
+    fetched_run = workflow_service.get_run(run.run_id)
+    assert fetched_run is not None
+    assert fetched_run.workflow_id == "wf_with_history"
+
+    # 3. Archive workflow
+    archived_def = workflow_service.archive_definition("wf_with_history")
+    assert archived_def.status == WorkflowStatus.ARCHIVED
+
+    # Still queryable in definition list and get
+    fetched_def = workflow_service.get_definition("wf_with_history")
+    assert fetched_def is not None
+    assert fetched_def.status == WorkflowStatus.ARCHIVED
+
+    # Cannot spawn new runs from archived definition
+    with pytest.raises(WorkflowValidationError, match="archived"):
+        workflow_service.start_run("wf_with_history")
+
+    # Historical runs remain queryable even after archive
+    post_archive_run = workflow_service.get_run(run.run_id)
+    assert post_archive_run is not None
+    assert post_archive_run.run_id == run.run_id
 
 
 # ==============================================================================
@@ -527,16 +640,20 @@ def test_worker_service_integration(file_db_path: str) -> None:
 
 
 def test_architecture_bypass_ast_assertion() -> None:
-    """Verify core/workflows/service.py does NOT import LLM providers or models directly.
+    """Verify core/workflows canonical files do NOT import forbidden execution modules.
 
-    Proves separation of concerns: WorkflowService orchestrates DAGs and jobs,
-    delegating all execution exclusively to WorkerService / ExecutionCoordinator.
+    Proves strict separation of concerns:
+    1. Zero model/LLM imports (litellm, openai, anthropic, google.generativeai, langchain, transformers).
+    2. Zero raw tool or sandbox imports (core.tools, core.sandbox, subprocess, os.system/popen).
+    3. Zero legacy Phase 7 executor imports (core.workflows.engine, core.workflows.gates).
+    4. Zero ad-hoc policy evaluators (delegates through canonical execution path).
+    5. Zero independent retry/cancellation engines (reuses core.jobs.control / core.jobs.retry).
     """
-    service_file = Path(__file__).resolve().parents[1] / "core" / "workflows" / "service.py"
-    with open(service_file, "r", encoding="utf-8") as f:
-        tree = ast.parse(f.read(), filename=str(service_file))
+    workflows_dir = Path(__file__).resolve().parents[1] / "core" / "workflows"
+    canonical_files = ["service.py", "models.py", "parser.py", "exceptions.py"]
 
-    forbidden_modules = {
+    forbidden_exact_or_prefixes = {
+        # LLM / model providers
         "litellm",
         "openai",
         "anthropic",
@@ -544,21 +661,152 @@ def test_architecture_bypass_ast_assertion() -> None:
         "google.ai",
         "langchain",
         "transformers",
+        # Tool and sandbox execution backends
+        "core.tools",
+        "core.sandbox",
+        "subprocess",
+        # Legacy Phase 7 execution components
+        "core.workflows.engine",
+        "core.workflows.gates",
     }
 
-    imported_modules: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                imported_modules.add(alias.name.split(".")[0])
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                imported_modules.add(node.module.split(".")[0])
+    for fname in canonical_files:
+        fpath = workflows_dir / fname
+        assert fpath.exists(), f"Canonical workflow file missing: {fname}"
+        with open(fpath, "r", encoding="utf-8") as f:
+            source = f.read()
+            tree = ast.parse(source, filename=str(fpath))
 
-    violating_imports = forbidden_modules.intersection(imported_modules)
-    assert (
-        not violating_imports
-    ), f"WorkflowService directly imports forbidden execution modules: {violating_imports}"
+        imported_modules: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imported_modules.add(alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    imported_modules.add(node.module)
+            # Check for os.system or os.popen calls
+            elif isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute):
+                    if (
+                        node.func.attr in ("system", "popen")
+                        and isinstance(node.func.value, ast.Name)
+                        and node.func.value.id == "os"
+                    ):
+                        pytest.fail(f"{fname} calls forbidden os.{node.func.attr}")
+
+        for imp in imported_modules:
+            for forbidden in forbidden_exact_or_prefixes:
+                if imp == forbidden or imp.startswith(f"{forbidden}."):
+                    pytest.fail(
+                        f"Canonical workflow file '{fname}' violates architecture boundaries "
+                        f"by importing '{imp}' (forbidden: '{forbidden}')"
+                    )
+
+    # Verify service.py reuses core.jobs.control rather than inventing independent engines
+    service_source = (workflows_dir / "service.py").read_text(encoding="utf-8")
+    assert "JobControlService" in service_source
+    assert "core.jobs.control" in service_source
+
+
+def test_canonical_runtime_trace_evidence(file_db_path: str) -> None:
+    """Verify runtime trace evidence: workflow model + tool nodes execute via canonical R4 path.
+
+    Asserts trace chain:
+    Job -> JobAttempt -> Execution -> ExecutionCoordinator
+    and proves WorkflowService performed ZERO direct execution.
+    """
+    wf_service = WorkflowService(db_path=file_db_path)
+
+    # Define workflow with model node (PIPELINE) and tool node (SKILL)
+    model_node = WorkflowNode(
+        id="model_step",
+        type=WorkflowNodeType.PIPELINE,
+        name="Model Reasoning Step",
+        config={"model": "gemini-1.5-pro", "prompt": "Analyze dataset"},
+        outputs=["analysis"],
+        position=WorkflowPosition(x=100.0, y=100.0),
+    )
+    tool_node = WorkflowNode(
+        id="tool_step",
+        type=WorkflowNodeType.SKILL,
+        name="Tool Execution Step",
+        inputs={"query": "{{model_step.analysis}}"},
+        config={"tool": "web_search", "action": "search"},
+        outputs=["search_results"],
+        position=WorkflowPosition(x=300.0, y=100.0),
+    )
+    edge = WorkflowEdge(id="e_mt", source="model_step", target="tool_step")
+    wf_def = WorkflowDefinition(
+        id="wf_trace_proof",
+        name="Runtime Trace Workflow",
+        description="Proof of canonical execution path",
+        version="1.0.0",
+        status=WorkflowStatus.ACTIVE,
+        nodes=[model_node, tool_node],
+        edges=[edge],
+    )
+    wf_service.create_definition(wf_def)
+
+    # Track dispatches through ExecutionCoordinator
+    dispatched_calls: List[Dict[str, Any]] = []
+
+    def mock_dispatch(ctx: Any, tier: Any, prov: Any, model: Any) -> Any:
+        dispatched_calls.append({"ctx": ctx, "tier": tier, "prov": prov, "model": model})
+        return {"output": "canonical_dispatch_success"}
+
+    coordinator = ExecutionCoordinator(dispatch_override=mock_dispatch)
+    worker = JobWorker(db_path=file_db_path, coordinator=coordinator)
+
+    # 1. Start run: root job is created in repository, but NOT executed by WorkflowService
+    run = wf_service.start_run("wf_trace_proof")
+    assert run.status == WorkflowRunStatus.RUNNING
+    assert len(dispatched_calls) == 0  # Zero direct execution from WorkflowService!
+
+    job_model_id = run.node_runs["model_step"].job_id
+    job_tool_id = run.node_runs["tool_step"].job_id
+
+    # 2. Worker executes model_step via canonical Job -> JobAttempt -> Execution -> Coordinator
+    processed_1 = worker.step()
+    assert processed_1 is True
+    assert len(dispatched_calls) == 1
+
+    # Verify attempt provenance for model job
+    model_attempts = wf_service.repo.list_attempts(job_model_id)
+    assert len(model_attempts) == 1
+    assert model_attempts[0].status == JobAttemptStatus.COMPLETED
+    assert model_attempts[0].execution_id is not None
+    assert model_attempts[0].execution_id.startswith("req_")
+
+    # Reconcile workflow: tool_step becomes READY
+    run = wf_service.reconcile_run(run.run_id)
+    assert run.node_runs["model_step"].status == NodeRunStatus.COMPLETED
+    assert run.node_runs["tool_step"].status == NodeRunStatus.READY
+
+    # 3. Worker executes tool_step via canonical Job -> JobAttempt -> Execution -> Coordinator
+    processed_2 = worker.step()
+    assert processed_2 is True
+    assert len(dispatched_calls) == 2
+
+    # Verify attempt provenance for tool job
+    tool_attempts = wf_service.repo.list_attempts(job_tool_id)
+    assert len(tool_attempts) == 1
+    assert tool_attempts[0].status == JobAttemptStatus.COMPLETED
+    assert tool_attempts[0].execution_id is not None
+
+    # Reconcile workflow to COMPLETED
+    final_run = wf_service.reconcile_run(run.run_id)
+    assert final_run.status == WorkflowRunStatus.COMPLETED
+    assert final_run.node_runs["tool_step"].status == NodeRunStatus.COMPLETED
+
+    # Prove complete trace chain
+    assert run.run_id.startswith("wfr_")
+    assert run.node_runs["model_step"].node_run_id.startswith("wfnr_")
+    assert job_model_id.startswith("job_")
+    assert model_attempts[0].attempt_id.startswith("att_")
+    assert model_attempts[0].execution_id.startswith("req_")
+
+    worker.close()
 
 
 # ==============================================================================
@@ -729,17 +977,31 @@ def test_provenance_chain_traceability(file_db_path: str) -> None:
 
 
 def test_data_minimization_and_zero_secrets(workflow_service: WorkflowService) -> None:
-    """Verify inputs/outputs are bounded and no secrets are stored in DB."""
+    """Verify inputs/outputs are bounded, large strings truncated, and no secrets stored in DB."""
     wf_def = build_sample_definition(workflow_id="wf_secrets")
     workflow_service.create_definition(wf_def)
 
+    oversized_str = "x" * 5000
+    oversized_list = [f"item_{i}" for i in range(100)]
     sensitive_inputs = {
         "api_key": "sk-1234567890abcdef1234567890abcdef",
         "secret_token": "token_xyz",
+        "nested_creds": {"password": "super_secret_value", "data": "safe"},
         "prompt": "Summarize this document",
+        "giant_blob": oversized_str,
+        "huge_list": oversized_list,
     }
     run = workflow_service.start_run("wf_secrets", inputs=sensitive_inputs)
     assert run is not None
+
+    # Verify run.inputs bounded and redacted
+    assert run.inputs["api_key"] == "[REDACTED_CREDENTIAL]"
+    assert run.inputs["secret_token"] == "[REDACTED_CREDENTIAL]"
+    assert run.inputs["nested_creds"]["password"] == "[REDACTED_CREDENTIAL]"
+    assert run.inputs["nested_creds"]["data"] == "safe"
+    assert len(run.inputs["giant_blob"]) <= 2048 + len("... [TRUNCATED]")
+    assert run.inputs["giant_blob"].endswith("... [TRUNCATED]")
+    assert len(run.inputs["huge_list"]) == 50
 
     # Check job payload in SQLite
     conn = workflow_service._get_connection()

@@ -117,6 +117,17 @@ def sanitize_bounded_dict(data: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             cleaned[k] = "[REDACTED_CREDENTIAL]"
         elif isinstance(v, dict):
             cleaned[k] = sanitize_bounded_dict(v)
+        elif isinstance(v, list):
+            cleaned[k] = [
+                sanitize_bounded_dict(item)
+                if isinstance(item, dict)
+                else (
+                    item[:2048] + "... [TRUNCATED]"
+                    if isinstance(item, str) and len(item) > 2048
+                    else item
+                )
+                for item in v[:50]
+            ]
         elif isinstance(v, str) and len(v) > 2048:
             cleaned[k] = v[:2048] + "... [TRUNCATED]"
         else:

@@ -202,17 +202,69 @@ class WorkflowService:
                     conn.close()
 
     def delete_definition(self, workflow_id: str) -> bool:
-        """Delete a workflow definition by identifier."""
+        """Delete a workflow definition by identifier.
+
+        Hard-delete is ONLY permitted if no historical workflow runs exist.
+        If runs exist, raises WorkflowValidationError to preserve audit and provenance history.
+        """
         with self._lock:
             conn = self._get_connection()
             try:
                 with conn:
                     cursor = conn.cursor()
                     cursor.execute(
+                        "SELECT COUNT(*) FROM workflow_runs WHERE workflow_id = ?",
+                        (workflow_id,),
+                    )
+                    run_count = cursor.fetchone()[0]
+                    if run_count > 0:
+                        raise WorkflowValidationError(
+                            f"Cannot delete workflow definition '{workflow_id}': "
+                            f"{run_count} historical run(s) exist. Archive the definition instead."
+                        )
+                    cursor.execute(
                         "DELETE FROM workflow_definitions WHERE workflow_id = ?",
                         (workflow_id,),
                     )
                     return cursor.rowcount > 0
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def archive_definition(self, workflow_id: str) -> WorkflowDefinition:
+        """Archive a workflow definition.
+
+        Archived workflows remain queryable for audit provenance,
+        but cannot be used to spawn new workflow runs.
+        """
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT definition_json FROM workflow_definitions WHERE workflow_id = ?",
+                        (workflow_id,),
+                    )
+                    row = cursor.fetchone()
+                    if not row:
+                        raise WorkflowNotFoundError(
+                            f"Workflow definition '{workflow_id}' not found."
+                        )
+
+                    data = json.loads(row["definition_json"])
+                    data["status"] = WorkflowStatus.ARCHIVED.value
+                    now_iso = current_timestamp_iso()
+
+                    cursor.execute(
+                        """
+                        UPDATE workflow_definitions
+                        SET status = ?, definition_json = ?, updated_at = ?
+                        WHERE workflow_id = ?
+                        """,
+                        (WorkflowStatus.ARCHIVED.value, json.dumps(data), now_iso, workflow_id),
+                    )
+                    return WorkflowDefinition.model_validate(data)
             finally:
                 if not self._is_memory:
                     conn.close()
@@ -295,6 +347,10 @@ class WorkflowService:
         definition = self.get_definition(workflow_id)
         if not definition:
             raise WorkflowNotFoundError(f"Workflow '{workflow_id}' not found.")
+        if definition.status == WorkflowStatus.ARCHIVED:
+            raise WorkflowValidationError(
+                f"Cannot start run: Workflow '{workflow_id}' is archived."
+            )
 
         is_valid, errors = WorkflowParser.validate(definition)
         if not is_valid:
@@ -335,7 +391,9 @@ class WorkflowService:
 
             # Resolve initial inputs for root nodes
             resolved_inputs = (
-                self.resolve_node_inputs(node, workflow_inputs, {}) if not has_incoming else {}
+                sanitize_bounded_dict(self.resolve_node_inputs(node, workflow_inputs, {}))
+                if not has_incoming
+                else {}
             )
 
             job = Job(
@@ -691,8 +749,8 @@ class WorkflowService:
                     if all_prereqs_completed and condition_satisfied:
                         # Release node! Resolve its inputs now that prerequisites completed
                         node_def = node_map[node_id]
-                        resolved_inputs = self.resolve_node_inputs(
-                            node_def, run.inputs, step_outputs
+                        resolved_inputs = sanitize_bounded_dict(
+                            self.resolve_node_inputs(node_def, run.inputs, step_outputs)
                         )
 
                         # Update Job payload summary
@@ -843,7 +901,7 @@ class WorkflowService:
         outputs["status"] = "success"
         outputs["node_id"] = node_def.id
         outputs["job_id"] = job_id
-        return outputs
+        return sanitize_bounded_dict(outputs)
 
     def cancel_run(self, workflow_run_id: str, reason: str = "Operator cancelled") -> WorkflowRun:
         """Cancel an in-progress workflow run and all outstanding active jobs."""
