@@ -32,6 +32,12 @@ from core.jobs.exceptions import (
     QueueEntryNotFoundError,
     RetryExhaustedError,
     ScheduleNotFoundError,
+    DuplicateOccurrenceError,
+    InvalidScheduleExpressionError,
+    InvalidTimezoneError,
+    ScheduleDisabledError,
+    SchedulerError,
+    StaleScheduleGenerationError,
     SecurityRedactionError,
     SelfDependencyError,
     StaleLeaseError,
@@ -67,6 +73,10 @@ from core.jobs.models import (
     JobLease,
     JobQueueEntry,
     JobSchedule,
+    MissedRunPolicy,
+    OccurrenceStatus,
+    ScheduledOccurrence,
+    generate_occurrence_id,
     JobStatus,
     OperationIdempotencyCapability,
     RetryClassification,
@@ -92,6 +102,13 @@ from core.jobs.queue import (
 )
 from core.jobs.repository import JobRepository
 from core.jobs.sqlite import SQLiteJobRepository
+from core.jobs.cron import (
+    get_missed_occurrences,
+    get_next_occurrence,
+    validate_cron_expression,
+    validate_iana_timezone,
+)
+from core.jobs.scheduler import SchedulerService
 from core.jobs.worker import (
     JobExecutionRequestFactory,
     JobWorker,
@@ -107,6 +124,9 @@ __all__ = [
     "JobDependency",
     "JobArtifact",
     "JobSchedule",
+    "ScheduledOccurrence",
+    "MissedRunPolicy",
+    "OccurrenceStatus",
     "JobLease",
     "JobQueueEntry",
     "IdempotencyKey",
@@ -134,6 +154,12 @@ __all__ = [
     "SelfDependencyError",
     "DependencyCycleError",
     "ScheduleNotFoundError",
+    "SchedulerError",
+    "InvalidScheduleExpressionError",
+    "InvalidTimezoneError",
+    "ScheduleDisabledError",
+    "StaleScheduleGenerationError",
+    "DuplicateOccurrenceError",
     "SecurityRedactionError",
     "JobQueueError",
     "QueueEntryNotFoundError",
@@ -160,6 +186,13 @@ __all__ = [
     "SQLiteJobRepository",
     "PersistentJobQueue",
     "SQLiteJobQueue",
+    # Scheduler Service
+    "SchedulerService",
+    "get_missed_occurrences",
+    "get_next_occurrence",
+    "validate_cron_expression",
+    "validate_iana_timezone",
+    "generate_occurrence_id",
     # Worker Service
     "JobWorker",
     "JobExecutionRequestFactory",

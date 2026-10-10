@@ -231,12 +231,55 @@ def _migration_005_job_control_and_timeouts(conn: sqlite3.Connection) -> None:
                 raise
 
 
+def _migration_006_timezone_aware_scheduler(conn: sqlite3.Connection) -> None:
+    """Migration 006: Timezone-aware scheduler, occurrence tracking, and schedule generation fencing."""
+    ddl_statements = [
+        # 1. Upgrade job_schedules with template spec, generation fencing, and policies
+        "ALTER TABLE job_schedules ADD COLUMN schedule_generation INTEGER NOT NULL DEFAULT 1;",
+        "ALTER TABLE job_schedules ADD COLUMN missed_run_policy TEXT NOT NULL DEFAULT 'skip';",
+        "ALTER TABLE job_schedules ADD COLUMN next_run_at TEXT;",
+        "ALTER TABLE job_schedules ADD COLUMN last_run_at TEXT;",
+        "ALTER TABLE job_schedules ADD COLUMN payload_summary_json TEXT NOT NULL DEFAULT '{}';",
+        "ALTER TABLE job_schedules ADD COLUMN created_by TEXT NOT NULL DEFAULT 'authority:local_user';",
+        "ALTER TABLE job_schedules ADD COLUMN project_id TEXT;",
+        "ALTER TABLE job_schedules ADD COLUMN timeout_seconds INTEGER;",
+        "CREATE INDEX IF NOT EXISTS idx_schedules_next_run ON job_schedules(enabled, next_run_at);",
+        # 2. Scheduled occurrences table with strict generation-fenced uniqueness
+        """
+        CREATE TABLE IF NOT EXISTS scheduled_occurrences (
+            occurrence_id TEXT PRIMARY KEY,
+            schedule_id TEXT NOT NULL REFERENCES job_schedules(schedule_id) ON DELETE CASCADE,
+            scheduled_for_utc TEXT NOT NULL,
+            scheduled_for_local TEXT NOT NULL,
+            schedule_generation INTEGER NOT NULL,
+            job_id TEXT UNIQUE REFERENCES jobs(job_id) ON DELETE SET NULL,
+            materialized_at TEXT NOT NULL,
+            status TEXT NOT NULL,
+            UNIQUE(schedule_id, schedule_generation, scheduled_for_utc)
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_occurrences_schedule ON scheduled_occurrences(schedule_id);",
+        "CREATE INDEX IF NOT EXISTS idx_occurrences_scheduled_utc ON scheduled_occurrences(scheduled_for_utc);",
+        "CREATE INDEX IF NOT EXISTS idx_occurrences_job_id ON scheduled_occurrences(job_id);",
+    ]
+
+    for stmt in ddl_statements:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" in str(e).lower() or "already exists" in str(e).lower():
+                pass
+            else:
+                raise
+
+
 MIGRATION_REGISTRY: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "001_initial_job_domain", _migration_001_initial_job_domain),
     (2, "002_persistent_job_queue", _migration_002_persistent_job_queue),
     (3, "003_worker_attempt_ownership", _migration_003_worker_attempt_ownership),
     (4, "004_job_idempotency_and_retry", _migration_004_job_idempotency_and_retry),
     (5, "005_job_control_and_timeouts", _migration_005_job_control_and_timeouts),
+    (6, "006_timezone_aware_scheduler", _migration_006_timezone_aware_scheduler),
 ]
 
 

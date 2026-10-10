@@ -55,6 +55,11 @@ def generate_schedule_id() -> str:
     return f"sch_{uuid.uuid4().hex[:12]}"
 
 
+def generate_occurrence_id() -> str:
+    """Generate canonical scheduled occurrence ID with 'occ_' prefix."""
+    return f"occ_{uuid.uuid4().hex[:12]}"
+
+
 def generate_queue_entry_id() -> str:
     """Generate canonical queue entry ID with 'qent_' prefix."""
     return f"qent_{uuid.uuid4().hex[:12]}"
@@ -266,6 +271,29 @@ class JobEventType(str, Enum):
     JOB_CANCEL_REQUESTED = "job_cancel_requested"
     JOB_CANCELLED = "job_cancelled"
     JOB_TIMED_OUT = "job_timed_out"
+    # R4.7 Timezone-Aware Scheduler lifecycle events
+    SCHEDULE_CREATED = "schedule_created"
+    SCHEDULE_UPDATED = "schedule_updated"
+    SCHEDULE_ENABLED = "schedule_enabled"
+    SCHEDULE_DISABLED = "schedule_disabled"
+    OCCURRENCE_MATERIALIZED = "occurrence_materialized"
+    MISSED_RUN_SKIPPED = "missed_run_skipped"
+    MISSED_RUN_MATERIALIZED = "missed_run_materialized"
+
+
+class MissedRunPolicy(str, Enum):
+    """Policy governing how the scheduler handles missed occurrences after downtime or restart."""
+
+    SKIP = "skip"
+    RUN_ONCE = "run_once"
+
+
+class OccurrenceStatus(str, Enum):
+    """Durable status of a scheduled occurrence."""
+
+    MATERIALIZED = "materialized"
+    MISSED_SKIPPED = "missed_skipped"
+    MISSED_RUN_ONCE = "missed_run_once"
 
 
 class OperationIdempotencyCapability(str, Enum):
@@ -536,23 +564,56 @@ class JobArtifact(BaseModel):
 class JobSchedule(BaseModel):
     """Durable schedule specification for recurring or scheduled job creation.
 
-    Forward-Compatibility Note (Milestones R4.2 -> R4.7):
     A JobSchedule represents an enduring recurring schedule or template definition.
-    Recurring schedule executions in R4.7 spawn brand new, distinct Job instances
+    Recurring schedule executions spawn brand new, distinct Job instances
     referencing schedule_id. A JobSchedule is NEVER mutated or reused as a single historical Job.
     """
 
     schedule_id: str = Field(default_factory=generate_schedule_id)
     job_template_id: Optional[str] = Field(None, description="Optional template reference")
-    job_type: str = Field(..., description="Target job type to spawn")
-    cron_expression: str = Field(..., description="Cron syntax expression, e.g. 0 2 * * *")
+    job_type: str = Field(default="chat", description="Target job type to spawn")
+    cron_expression: str = Field(..., description="5-field cron syntax expression, e.g. 0 8 * * *")
     timezone: str = Field(
-        default="UTC", description="Timezone name for evaluation (e.g. UTC, America/New_York)"
+        default="UTC",
+        description="IANA timezone name for evaluation (e.g. Europe/Berlin, America/New_York)",
     )
     enabled: bool = Field(default=True)
+    schedule_generation: int = Field(
+        default=1, ge=1, description="Monotonic schedule edit generation"
+    )
+    missed_run_policy: MissedRunPolicy = Field(
+        default=MissedRunPolicy.SKIP, description="Policy for handling missed occurrences"
+    )
     payload_reference: Optional[str] = None
+    payload_summary: Dict[str, Any] = Field(
+        default_factory=dict, description="Minimized template parameters"
+    )
+    created_by: str = Field(default="authority:local_user")
+    project_id: Optional[str] = None
+    timeout_seconds: Optional[int] = None
+    next_run_at: Optional[str] = None
+    last_run_at: Optional[str] = None
     created_at: str = Field(default_factory=current_timestamp_iso)
     updated_at: str = Field(default_factory=current_timestamp_iso)
+
+    model_config = ConfigDict(extra="ignore")
+
+
+class ScheduledOccurrence(BaseModel):
+    """Durable occurrence record materialized by the timezone-aware scheduler."""
+
+    occurrence_id: str = Field(default_factory=generate_occurrence_id)
+    schedule_id: str = Field(..., description="Parent schedule identifier")
+    scheduled_for_utc: str = Field(..., description="Scheduled occurrence instant in UTC ISO 8601")
+    scheduled_for_local: str = Field(
+        ..., description="Scheduled occurrence wall-clock time in local ISO 8601"
+    )
+    schedule_generation: int = Field(
+        ..., description="Schedule generation at time of materialization"
+    )
+    job_id: Optional[str] = Field(None, description="Materialized canonical Job ID, if created")
+    materialized_at: str = Field(default_factory=current_timestamp_iso)
+    status: OccurrenceStatus = Field(default=OccurrenceStatus.MATERIALIZED)
 
     model_config = ConfigDict(extra="ignore")
 

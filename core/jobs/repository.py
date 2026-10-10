@@ -23,6 +23,7 @@ from core.jobs.models import (
     JobEvent,
     JobSchedule,
     JobStatus,
+    ScheduledOccurrence,
 )
 
 
@@ -176,4 +177,31 @@ class JobRepository(ABC):
     @abstractmethod
     def list_schedules(self, enabled_only: bool = False) -> List[JobSchedule]:
         """List schedule definitions, optionally filtered by enabled status."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_schedule(self, schedule: JobSchedule) -> JobSchedule:
+        """Update an existing schedule definition."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def delete_schedule(self, schedule_id: str) -> bool:
+        """Delete a schedule definition if permitted."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def create_occurrence(self, occurrence: ScheduledOccurrence) -> ScheduledOccurrence:
+        """Persist a newly materialized scheduled occurrence."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_occurrence(self, occurrence_id: str) -> Optional[ScheduledOccurrence]:
+        """Retrieve a scheduled occurrence by ID."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_occurrences(
+        self, schedule_id: Optional[str] = None, limit: int = 100
+    ) -> List[ScheduledOccurrence]:
+        """List scheduled occurrences, optionally filtered by schedule_id."""
         raise NotImplementedError

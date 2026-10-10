@@ -35,8 +35,12 @@ class DependencyCycleError(JobDomainError):
     """Raised when adding a dependency would introduce a cycle in the job dependency graph."""
 
 
-class ScheduleNotFoundError(JobDomainError):
-    """Raised when a referenced schedule does not exist."""
+class SchedulerError(JobDomainError):
+    """Base exception for timezone-aware scheduler operations."""
+
+
+class ScheduleNotFoundError(SchedulerError):
+    """Raised when an operation targets a job schedule that does not exist."""
 
 
 class SecurityRedactionError(JobDomainError):
@@ -117,3 +121,23 @@ class StaleControlGenerationError(JobControlError):
 
 class JobTimeoutError(JobDomainError):
     """Raised when a job's authoritative execution deadline has elapsed."""
+
+
+class InvalidScheduleExpressionError(SchedulerError):
+    """Raised when a cron expression or recurrence format is syntactically invalid."""
+
+
+class InvalidTimezoneError(SchedulerError):
+    """Raised when a timezone identifier is not a valid IANA timezone."""
+
+
+class ScheduleDisabledError(SchedulerError):
+    """Raised when an operation cannot proceed because the target schedule is disabled."""
+
+
+class StaleScheduleGenerationError(SchedulerError):
+    """Raised when an occurrence materialization or update references a superseded schedule generation."""
+
+
+class DuplicateOccurrenceError(SchedulerError):
+    """Raised when attempting to materialize an occurrence that already exists."""

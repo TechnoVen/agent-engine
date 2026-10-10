@@ -20,7 +20,9 @@ from typing import Any, Dict, List, Optional, Set
 from core.jobs.exceptions import (
     DependencyCycleError,
     DuplicateDependencyError,
+    DuplicateOccurrenceError,
     JobNotFoundError,
+    ScheduleNotFoundError,
     SelfDependencyError,
 )
 from core.jobs.migrations import apply_job_migrations
@@ -35,6 +37,9 @@ from core.jobs.models import (
     JobEventType,
     JobSchedule,
     JobStatus,
+    MissedRunPolicy,
+    OccurrenceStatus,
+    ScheduledOccurrence,
     ControlIntent,
     TERMINAL_JOB_STATES,
     current_timestamp_iso,
@@ -700,6 +705,7 @@ class SQLiteJobRepository(JobRepository):
     # --------------------------------------------------------------------------
 
     def create_schedule(self, schedule: JobSchedule) -> JobSchedule:
+        summary_json = json.dumps(schedule.payload_summary)
         with self._lock:
             conn = self._get_connection()
             try:
@@ -708,8 +714,10 @@ class SQLiteJobRepository(JobRepository):
                         """
                         INSERT INTO job_schedules (
                             schedule_id, job_template_id, job_type, cron_expression,
-                            timezone, enabled, payload_reference, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            timezone, enabled, schedule_generation, missed_run_policy,
+                            payload_reference, payload_summary_json, created_by, project_id,
+                            timeout_seconds, next_run_at, last_run_at, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             schedule.schedule_id,
@@ -718,7 +726,17 @@ class SQLiteJobRepository(JobRepository):
                             schedule.cron_expression,
                             schedule.timezone,
                             1 if schedule.enabled else 0,
+                            schedule.schedule_generation,
+                            schedule.missed_run_policy.value
+                            if hasattr(schedule.missed_run_policy, "value")
+                            else str(schedule.missed_run_policy),
                             schedule.payload_reference,
+                            summary_json,
+                            schedule.created_by,
+                            schedule.project_id,
+                            schedule.timeout_seconds,
+                            schedule.next_run_at,
+                            schedule.last_run_at,
                             schedule.created_at,
                             schedule.updated_at,
                         ),
@@ -736,7 +754,9 @@ class SQLiteJobRepository(JobRepository):
                 cursor.execute(
                     """
                     SELECT schedule_id, job_template_id, job_type, cron_expression,
-                           timezone, enabled, payload_reference, created_at, updated_at
+                           timezone, enabled, schedule_generation, missed_run_policy,
+                           payload_reference, payload_summary_json, created_by, project_id,
+                           timeout_seconds, next_run_at, last_run_at, created_at, updated_at
                     FROM job_schedules WHERE schedule_id = ?
                     """,
                     (schedule_id,),
@@ -756,7 +776,9 @@ class SQLiteJobRepository(JobRepository):
                 cursor = conn.cursor()
                 query = """
                     SELECT schedule_id, job_template_id, job_type, cron_expression,
-                           timezone, enabled, payload_reference, created_at, updated_at
+                           timezone, enabled, schedule_generation, missed_run_policy,
+                           payload_reference, payload_summary_json, created_by, project_id,
+                           timeout_seconds, next_run_at, last_run_at, created_at, updated_at
                     FROM job_schedules
                 """
                 params: List[Any] = []
@@ -765,6 +787,164 @@ class SQLiteJobRepository(JobRepository):
                 query += " ORDER BY created_at DESC"
                 cursor.execute(query, params)
                 return [self._row_to_schedule(r) for r in cursor.fetchall()]
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def update_schedule(self, schedule: JobSchedule) -> JobSchedule:
+        summary_json = json.dumps(schedule.payload_summary)
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        UPDATE job_schedules
+                        SET job_template_id = ?,
+                            job_type = ?,
+                            cron_expression = ?,
+                            timezone = ?,
+                            enabled = ?,
+                            schedule_generation = ?,
+                            missed_run_policy = ?,
+                            payload_reference = ?,
+                            payload_summary_json = ?,
+                            created_by = ?,
+                            project_id = ?,
+                            timeout_seconds = ?,
+                            next_run_at = ?,
+                            last_run_at = ?,
+                            updated_at = ?
+                        WHERE schedule_id = ?
+                        """,
+                        (
+                            schedule.job_template_id,
+                            schedule.job_type,
+                            schedule.cron_expression,
+                            schedule.timezone,
+                            1 if schedule.enabled else 0,
+                            schedule.schedule_generation,
+                            schedule.missed_run_policy.value
+                            if hasattr(schedule.missed_run_policy, "value")
+                            else str(schedule.missed_run_policy),
+                            schedule.payload_reference,
+                            summary_json,
+                            schedule.created_by,
+                            schedule.project_id,
+                            schedule.timeout_seconds,
+                            schedule.next_run_at,
+                            schedule.last_run_at,
+                            schedule.updated_at,
+                            schedule.schedule_id,
+                        ),
+                    )
+                    if cursor.rowcount == 0:
+                        raise ScheduleNotFoundError(
+                            f"Schedule {schedule.schedule_id} does not exist."
+                        )
+                return schedule
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def delete_schedule(self, schedule_id: str) -> bool:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "DELETE FROM job_schedules WHERE schedule_id = ?", (schedule_id,)
+                    )
+                    if cursor.rowcount == 0:
+                        raise ScheduleNotFoundError(f"Schedule {schedule_id} does not exist.")
+                return True
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def create_occurrence(self, occurrence: ScheduledOccurrence) -> ScheduledOccurrence:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    try:
+                        conn.execute(
+                            """
+                            INSERT INTO scheduled_occurrences (
+                                occurrence_id, schedule_id, scheduled_for_utc,
+                                scheduled_for_local, schedule_generation, job_id,
+                                materialized_at, status
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                occurrence.occurrence_id,
+                                occurrence.schedule_id,
+                                occurrence.scheduled_for_utc,
+                                occurrence.scheduled_for_local,
+                                occurrence.schedule_generation,
+                                occurrence.job_id,
+                                occurrence.materialized_at,
+                                occurrence.status.value
+                                if hasattr(occurrence.status, "value")
+                                else str(occurrence.status),
+                            ),
+                        )
+                    except sqlite3.IntegrityError as e:
+                        if "UNIQUE constraint failed" in str(e):
+                            raise DuplicateOccurrenceError(
+                                f"Occurrence already materialized for schedule {occurrence.schedule_id} at {occurrence.scheduled_for_utc} (gen {occurrence.schedule_generation})."
+                            ) from e
+                        raise
+                return occurrence
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_occurrence(self, occurrence_id: str) -> Optional[ScheduledOccurrence]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT occurrence_id, schedule_id, scheduled_for_utc,
+                           scheduled_for_local, schedule_generation, job_id,
+                           materialized_at, status
+                    FROM scheduled_occurrences WHERE occurrence_id = ?
+                    """,
+                    (occurrence_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                return self._row_to_occurrence(row)
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_occurrences(
+        self, schedule_id: Optional[str] = None, limit: int = 100
+    ) -> List[ScheduledOccurrence]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                query = """
+                    SELECT occurrence_id, schedule_id, scheduled_for_utc,
+                           scheduled_for_local, schedule_generation, job_id,
+                           materialized_at, status
+                    FROM scheduled_occurrences
+                """
+                params: List[Any] = []
+                if schedule_id is not None:
+                    query += " WHERE schedule_id = ?"
+                    params.append(schedule_id)
+                query += " ORDER BY scheduled_for_utc DESC, occurrence_id DESC LIMIT ?"
+                params.append(limit)
+                cursor.execute(query, params)
+                return [self._row_to_occurrence(r) for r in cursor.fetchall()]
             finally:
                 if not self._is_memory:
                     conn.close()
@@ -861,6 +1041,17 @@ class SQLiteJobRepository(JobRepository):
 
     @staticmethod
     def _row_to_schedule(row: sqlite3.Row) -> JobSchedule:
+        row_keys = row.keys()
+        summary_raw = row["payload_summary_json"] if "payload_summary_json" in row_keys else "{}"
+        summary = json.loads(summary_raw) if summary_raw else {}
+        generation = row["schedule_generation"] if "schedule_generation" in row_keys else 1
+        missed_policy_val = row["missed_run_policy"] if "missed_run_policy" in row_keys else "skip"
+        created_by_val = row["created_by"] if "created_by" in row_keys else "authority:local_user"
+        project_id_val = row["project_id"] if "project_id" in row_keys else None
+        timeout_secs = row["timeout_seconds"] if "timeout_seconds" in row_keys else None
+        next_run = row["next_run_at"] if "next_run_at" in row_keys else None
+        last_run = row["last_run_at"] if "last_run_at" in row_keys else None
+
         return JobSchedule(
             schedule_id=row["schedule_id"],
             job_template_id=row["job_template_id"],
@@ -868,7 +1059,28 @@ class SQLiteJobRepository(JobRepository):
             cron_expression=row["cron_expression"],
             timezone=row["timezone"],
             enabled=bool(row["enabled"]),
+            schedule_generation=generation,
+            missed_run_policy=MissedRunPolicy(missed_policy_val),
             payload_reference=row["payload_reference"],
+            payload_summary=summary,
+            created_by=created_by_val,
+            project_id=project_id_val,
+            timeout_seconds=timeout_secs,
+            next_run_at=next_run,
+            last_run_at=last_run,
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _row_to_occurrence(row: sqlite3.Row) -> ScheduledOccurrence:
+        return ScheduledOccurrence(
+            occurrence_id=row["occurrence_id"],
+            schedule_id=row["schedule_id"],
+            scheduled_for_utc=row["scheduled_for_utc"],
+            scheduled_for_local=row["scheduled_for_local"],
+            schedule_generation=row["schedule_generation"],
+            job_id=row["job_id"],
+            materialized_at=row["materialized_at"],
+            status=OccurrenceStatus(row["status"]),
         )

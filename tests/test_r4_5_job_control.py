@@ -142,7 +142,7 @@ def test_migration_v4_to_v5_populated_database_upgrade(tmp_path: Path) -> None:
         conn.commit()
 
         # 3. Apply migration 005
-        applied = apply_job_migrations(conn)
+        applied = apply_job_migrations(conn, target_version=5)
         assert applied == 1
         assert get_current_job_schema_version(conn) == 5
 
