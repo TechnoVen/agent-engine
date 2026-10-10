@@ -424,10 +424,11 @@ class SQLiteJobQueue(PersistentJobQueue):
                     WHERE (j.status IN ('ready', 'waiting') OR (j.status = 'running' AND q.lease_expires_at IS NOT NULL AND q.lease_expires_at <= ?))
                       AND q.available_at <= ?
                       AND (q.lease_expires_at IS NULL OR q.lease_expires_at <= ?)
+                      AND (j.timeout_at IS NULL OR j.timeout_at > ?)
                     ORDER BY q.available_at ASC, q.enqueued_at ASC, q.queue_entry_id ASC
                     LIMIT 1
                     """,
-                    (now_iso, now_iso, now_iso),
+                    (now_iso, now_iso, now_iso, now_iso),
                 )
                 row = cursor.fetchone()
                 if not row:

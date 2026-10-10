@@ -35,6 +35,7 @@ from core.jobs.models import (
     JobEventType,
     JobSchedule,
     JobStatus,
+    ControlIntent,
     TERMINAL_JOB_STATES,
     current_timestamp_iso,
     sanitize_bounded_dict,
@@ -140,8 +141,10 @@ class SQLiteJobRepository(JobRepository):
                             job_id, job_type, status, payload_reference,
                             payload_summary_json, created_by, project_id,
                             schedule_id, policy_context_id, created_at,
-                            updated_at, completed_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            updated_at, completed_at,
+                            control_intent, control_generation, timeout_seconds,
+                            timeout_at, prior_status_before_pause
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             job.job_id,
@@ -156,6 +159,15 @@ class SQLiteJobRepository(JobRepository):
                             job.created_at,
                             job.updated_at,
                             job.completed_at,
+                            job.control_intent.value,
+                            job.control_generation,
+                            job.timeout_seconds,
+                            job.timeout_at,
+                            (
+                                job.prior_status_before_pause.value
+                                if job.prior_status_before_pause
+                                else None
+                            ),
                         ),
                     )
 
@@ -184,10 +196,7 @@ class SQLiteJobRepository(JobRepository):
                 cursor = conn.cursor()
                 cursor.execute(
                     """
-                    SELECT job_id, job_type, status, payload_reference,
-                           payload_summary_json, created_by, project_id,
-                           schedule_id, policy_context_id, created_at,
-                           updated_at, completed_at
+                    SELECT *
                     FROM jobs WHERE job_id = ?
                     """,
                     (job_id,),
@@ -264,10 +273,7 @@ class SQLiteJobRepository(JobRepository):
             try:
                 cursor = conn.cursor()
                 query = """
-                    SELECT job_id, job_type, status, payload_reference,
-                           payload_summary_json, created_by, project_id,
-                           schedule_id, policy_context_id, created_at,
-                           updated_at, completed_at
+                    SELECT *
                     FROM jobs
                     WHERE 1=1
                 """
@@ -771,6 +777,15 @@ class SQLiteJobRepository(JobRepository):
     def _row_to_job(row: sqlite3.Row) -> Job:
         summary_raw = row["payload_summary_json"]
         summary = json.loads(summary_raw) if summary_raw else {}
+        control_intent_str = row["control_intent"] if "control_intent" in row.keys() else "none"
+        control_gen = row["control_generation"] if "control_generation" in row.keys() else 0
+        timeout_secs = row["timeout_seconds"] if "timeout_seconds" in row.keys() else None
+        timeout_at = row["timeout_at"] if "timeout_at" in row.keys() else None
+        prior_status = (
+            JobStatus(row["prior_status_before_pause"])
+            if "prior_status_before_pause" in row.keys() and row["prior_status_before_pause"]
+            else None
+        )
         return Job(
             job_id=row["job_id"],
             job_type=row["job_type"],
@@ -784,6 +799,11 @@ class SQLiteJobRepository(JobRepository):
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             completed_at=row["completed_at"],
+            control_intent=ControlIntent(control_intent_str),
+            control_generation=control_gen,
+            timeout_seconds=timeout_secs,
+            timeout_at=timeout_at,
+            prior_status_before_pause=prior_status,
         )
 
     @staticmethod

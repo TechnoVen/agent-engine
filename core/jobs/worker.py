@@ -34,7 +34,7 @@ import time
 from typing import Any, Callable, Dict, Optional, Set, Union
 import uuid
 
-from core.execution.cancellation import CancellationToken
+from core.execution.cancellation import CancellationReason, CancellationToken
 from core.execution.coordinator import ExecutionCoordinator
 from core.execution.models import (
     ExecutionRequest,
@@ -42,11 +42,13 @@ from core.execution.models import (
     ExecutionStatus,
     generate_request_id,
 )
+from core.jobs.control import JobControlService
 from core.jobs.exceptions import (
     InvalidLeaseError,
     JobNotClaimableError,
     JobNotFoundError,
     LeaseExpiredError,
+    StaleControlGenerationError,
     StaleLeaseError,
     UnsupportedJobTypeError,
 )
@@ -58,6 +60,7 @@ from core.jobs.idempotency import (
 from core.jobs.models import (
     EXECUTION_OUTCOME_UNKNOWN,
     FAILURE_CLASSIFICATION_WORKER_CRASH_OR_LEASE_LOST,
+    ControlIntent,
     IdempotencyRecordStatus,
     Job,
     JobAttempt,
@@ -171,11 +174,14 @@ class JobExecutionRequestFactory:
 class WorkerContext:
     """Thread-safe context tracking active job execution in a worker."""
 
-    def __init__(self, lease: JobLease, attempt: JobAttempt):
+    def __init__(self, lease: JobLease, attempt: JobAttempt, control_generation: int = 0):
         self.lease = lease
         self.attempt = attempt
         self.cancellation_token = CancellationToken(attempt.attempt_id)
         self.lease_lost = False
+        self.control_generation = control_generation
+        self.control_intent_observed: Optional[ControlIntent] = None
+        self.timeout_observed = False
         self.execution_completed = threading.Event()
         self.execution_result: Optional[ExecutionResult] = None
         self.execution_error: Optional[Exception] = None
@@ -194,6 +200,7 @@ class JobWorker:
         request_factory: Optional[JobExecutionRequestFactory] = None,
         retry_policy: Optional[RetryPolicy] = None,
         idempotency_store: Optional[IdempotencyStore] = None,
+        control_service: Optional[JobControlService] = None,
         lease_ttl_seconds: float = 60.0,
         heartbeat_interval_seconds: Optional[float] = None,
         poll_interval_seconds: float = 1.0,
@@ -210,6 +217,9 @@ class JobWorker:
         self.retry_policy = retry_policy
         self.idempotency_store = idempotency_store or SQLiteIdempotencyStore(
             db_path=self.db_path, clock=clock
+        )
+        self.control_service = control_service or JobControlService(
+            db_path=self.db_path, repo=self.repo, queue=self.queue, clock=clock
         )
         if coordinator is not None:
             self.coordinator = coordinator
@@ -523,11 +533,46 @@ class JobWorker:
                     ),
                 )
 
-                # 5. Transition Job status to RUNNING
+                # 5. Transition Job status to RUNNING and persist timeout deadline once at attempt 1
                 cursor.execute(
-                    "UPDATE jobs SET status = 'running', updated_at = ? WHERE job_id = ?",
-                    (now_iso, lease.job_id),
+                    "SELECT timeout_seconds, timeout_at, payload_summary_json FROM jobs WHERE job_id = ?",
+                    (lease.job_id,),
                 )
+                j_ctrl_row = cursor.fetchone()
+                if j_ctrl_row:
+                    t_secs = j_ctrl_row["timeout_seconds"]
+                    if t_secs is None and j_ctrl_row["payload_summary_json"]:
+                        try:
+                            summary_dict = json.loads(j_ctrl_row["payload_summary_json"])
+                            if "timeout_seconds" in summary_dict:
+                                t_secs = int(summary_dict["timeout_seconds"])
+                        except Exception:
+                            pass
+                    t_at = j_ctrl_row["timeout_at"]
+                    if t_secs is not None and t_at is None:
+                        timeout_dt = now_dt + timedelta(seconds=t_secs)
+                        timeout_iso = format_utc_iso(timeout_dt)
+                        cursor.execute(
+                            """
+                            UPDATE jobs
+                            SET status = 'running',
+                                updated_at = ?,
+                                timeout_seconds = COALESCE(timeout_seconds, ?),
+                                timeout_at = ?
+                            WHERE job_id = ?
+                            """,
+                            (now_iso, t_secs, timeout_iso, lease.job_id),
+                        )
+                    else:
+                        cursor.execute(
+                            "UPDATE jobs SET status = 'running', updated_at = ? WHERE job_id = ?",
+                            (now_iso, lease.job_id),
+                        )
+                else:
+                    cursor.execute(
+                        "UPDATE jobs SET status = 'running', updated_at = ? WHERE job_id = ?",
+                        (now_iso, lease.job_id),
+                    )
 
                 # 6. Append WORKER_ATTEMPT_STARTED event
                 cursor.execute(
@@ -691,6 +736,7 @@ class JobWorker:
         target_status: JobStatus,
         failure_classification: Optional[str] = None,
         failure_message: Optional[str] = None,
+        expected_control_generation: Optional[int] = None,
         now: Optional[Union[datetime, str]] = None,
     ) -> None:
         """Atomically verify lease authority and finalize both JobAttempt and Job,
@@ -748,6 +794,51 @@ class JobWorker:
                         f"Cannot finalize job {job_id}: lease expired at {q_row['lease_expires_at']}."
                     )
 
+                # 1b. Control and timeout fence check
+                cursor.execute(
+                    "SELECT control_intent, control_generation, timeout_at FROM jobs WHERE job_id = ?",
+                    (job_id,),
+                )
+                j_ctrl_row = cursor.fetchone()
+                if j_ctrl_row:
+                    if (
+                        expected_control_generation is not None
+                        and j_ctrl_row["control_generation"] != expected_control_generation
+                    ):
+                        conn.rollback()
+                        raise StaleControlGenerationError(
+                            f"Cannot finalize job {job_id}: worker control generation "
+                            f"{expected_control_generation} is stale (current generation is {j_ctrl_row['control_generation']})."
+                        )
+                    if j_ctrl_row["timeout_at"] and now_dt >= parse_utc_iso(
+                        j_ctrl_row["timeout_at"]
+                    ):
+                        conn.rollback()
+                        self.control_service.acknowledge_timeout(
+                            job_id, attempt_id, self.worker_id, now=now
+                        )
+                        return
+                    if j_ctrl_row["control_intent"] == ControlIntent.CANCEL_REQUESTED.value:
+                        conn.rollback()
+                        self.control_service.acknowledge_cancellation(
+                            job_id,
+                            attempt_id,
+                            j_ctrl_row["control_generation"],
+                            self.worker_id,
+                            now=now,
+                        )
+                        return
+                    if j_ctrl_row["control_intent"] == ControlIntent.PAUSE_REQUESTED.value:
+                        conn.rollback()
+                        self.control_service.acknowledge_pause(
+                            job_id,
+                            attempt_id,
+                            j_ctrl_row["control_generation"],
+                            self.worker_id,
+                            now=now,
+                        )
+                        return
+
                 # 2. Map target status to attempt status
                 if target_status == JobStatus.COMPLETED:
                     att_status = JobAttemptStatus.COMPLETED
@@ -800,7 +891,7 @@ class JobWorker:
                 cursor.execute(
                     """
                     UPDATE jobs
-                    SET status = ?, updated_at = ?, completed_at = ?
+                    SET status = ?, control_intent = 'none', updated_at = ?, completed_at = ?
                     WHERE job_id = ?
                     """,
                     (target_status.value, now_iso, completed_at, job_id),
@@ -894,6 +985,66 @@ class JobWorker:
                     context.lease_lost = True
                     context.cancellation_token.cancel()
                     break
+
+                # Check control intent and timeout deadline
+                try:
+                    conn = self.queue._get_connection()
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT control_intent, control_generation, timeout_at FROM jobs WHERE job_id = ?",
+                        (context.lease.job_id,),
+                    )
+                    ctrl_row = cursor.fetchone()
+                    if not self.queue._is_memory:
+                        conn.close()
+
+                    if ctrl_row:
+                        intent_val = ctrl_row["control_intent"]
+                        ctrl_gen = ctrl_row["control_generation"]
+                        t_at_str = ctrl_row["timeout_at"]
+
+                        if intent_val == ControlIntent.PAUSE_REQUESTED.value:
+                            logger.info(
+                                "Worker %s detected PAUSE_REQUESTED for job %s (gen %d)",
+                                self.worker_id,
+                                context.lease.job_id,
+                                ctrl_gen,
+                            )
+                            context.control_intent_observed = ControlIntent.PAUSE_REQUESTED
+                            context.control_generation = ctrl_gen
+                            context.cancellation_token.cancel(
+                                reason="pause_requested", actor="operator"
+                            )
+
+                        elif intent_val == ControlIntent.CANCEL_REQUESTED.value:
+                            logger.info(
+                                "Worker %s detected CANCEL_REQUESTED for job %s (gen %d)",
+                                self.worker_id,
+                                context.lease.job_id,
+                                ctrl_gen,
+                            )
+                            context.control_intent_observed = ControlIntent.CANCEL_REQUESTED
+                            context.control_generation = ctrl_gen
+                            context.cancellation_token.cancel(
+                                reason=CancellationReason.USER_REQUEST, actor="operator"
+                            )
+
+                        if t_at_str:
+                            deadline_dt = parse_utc_iso(t_at_str)
+                            curr_dt = self._now_dt()
+                            if curr_dt >= deadline_dt:
+                                logger.info(
+                                    "Worker %s detected deadline timeout for job %s (deadline %s)",
+                                    self.worker_id,
+                                    context.lease.job_id,
+                                    t_at_str,
+                                )
+                                context.timeout_observed = True
+                                context.cancellation_token.cancel(
+                                    reason=CancellationReason.TIMEOUT, actor="system"
+                                )
+                except Exception as ctrl_ex:
+                    logger.debug("Worker heartbeat control check error: %s", ctrl_ex)
 
         self._heartbeat_thread = threading.Thread(
             target=heartbeat_worker,
@@ -1031,6 +1182,9 @@ class JobWorker:
         if self._stop_event.is_set():
             return False
 
+        # 0. Check and enforce pre-claim deadlines
+        self.control_service.check_and_apply_timeouts(now=now)
+
         # 1. Claim next READY job
         lease = self.queue.claim_next(
             self.worker_id,
@@ -1079,7 +1233,9 @@ class JobWorker:
             return True
 
         # 5. Set up active worker context and heartbeat
-        context = WorkerContext(lease=lease, attempt=attempt)
+        job_current = self.repo.get_job(lease.job_id)
+        current_ctrl_gen = job_current.control_generation if job_current else 0
+        context = WorkerContext(lease=lease, attempt=attempt, control_generation=current_ctrl_gen)
         with self._lock:
             self._active_context = context
 
@@ -1095,12 +1251,69 @@ class JobWorker:
             exec_result = self._execute_coordinator_sync(exec_request, context.cancellation_token)
             context.execution_result = exec_result
 
-            # 8. Check authority before finalizing
+            # 8. Stop heartbeat and inspect authority / control outcomes
+            self._stop_heartbeat()
+
             if context.lease_lost:
                 logger.warning(
                     "Worker %s lost lease authority during execution of job %s; aborting finalization",
                     self.worker_id,
                     job.job_id,
+                )
+                return True
+
+            # Check fresh job state for control signals and deadlines
+            job_fresh = self.repo.get_job(job.job_id)
+            if job_fresh:
+                if job_fresh.timeout_at and self._now_dt(override=now) >= parse_utc_iso(
+                    job_fresh.timeout_at
+                ):
+                    context.timeout_observed = True
+                if job_fresh.control_intent == ControlIntent.PAUSE_REQUESTED:
+                    context.control_intent_observed = ControlIntent.PAUSE_REQUESTED
+                    context.control_generation = job_fresh.control_generation
+                elif job_fresh.control_intent == ControlIntent.CANCEL_REQUESTED:
+                    context.control_intent_observed = ControlIntent.CANCEL_REQUESTED
+                    context.control_generation = job_fresh.control_generation
+
+            if context.timeout_observed:
+                logger.info(
+                    "Worker %s acknowledging timeout for job %s", self.worker_id, job.job_id
+                )
+                self.control_service.acknowledge_timeout(
+                    job.job_id, attempt.attempt_id, self.worker_id, now=now
+                )
+                return True
+
+            if context.control_intent_observed == ControlIntent.PAUSE_REQUESTED:
+                logger.info(
+                    "Worker %s acknowledging pause for job %s (gen %d)",
+                    self.worker_id,
+                    job.job_id,
+                    context.control_generation,
+                )
+                self.control_service.acknowledge_pause(
+                    job.job_id,
+                    attempt.attempt_id,
+                    context.control_generation,
+                    self.worker_id,
+                    now=now,
+                )
+                return True
+
+            if context.control_intent_observed == ControlIntent.CANCEL_REQUESTED:
+                logger.info(
+                    "Worker %s acknowledging cancellation for job %s (gen %d)",
+                    self.worker_id,
+                    job.job_id,
+                    context.control_generation,
+                )
+                self.control_service.acknowledge_cancellation(
+                    job.job_id,
+                    attempt.attempt_id,
+                    context.control_generation,
+                    self.worker_id,
+                    now=now,
                 )
                 return True
 
@@ -1130,6 +1343,27 @@ class JobWorker:
                         classification in policy.retryable_classifications
                         and attempt.attempt_number < policy.max_attempts
                     ):
+                        # Check if control signal arrived before scheduling retry
+                        job_check = self.repo.get_job(job.job_id)
+                        if job_check and job_check.control_intent == ControlIntent.CANCEL_REQUESTED:
+                            self.control_service.acknowledge_cancellation(
+                                job.job_id,
+                                attempt.attempt_id,
+                                job_check.control_generation,
+                                self.worker_id,
+                                now=now,
+                            )
+                            return True
+                        if job_check and job_check.control_intent == ControlIntent.PAUSE_REQUESTED:
+                            self.control_service.acknowledge_pause(
+                                job.job_id,
+                                attempt.attempt_id,
+                                job_check.control_generation,
+                                self.worker_id,
+                                now=now,
+                            )
+                            return True
+
                         # Retryable! Calculate backoff delay
                         delay = policy.calculate_backoff_delay(attempt.attempt_number)
                         now_dt = self._now_dt(override=now)
@@ -1185,6 +1419,7 @@ class JobWorker:
                 target_status,
                 failure_classification=fail_class,
                 failure_message=fail_msg,
+                expected_control_generation=context.control_generation,
                 now=now,
             )
         except Exception as ex:
@@ -1213,6 +1448,27 @@ class JobWorker:
                     and attempt.attempt_number < policy.max_attempts
                 ):
                     try:
+                        # Check if control signal arrived before scheduling retry
+                        job_check = self.repo.get_job(job.job_id)
+                        if job_check and job_check.control_intent == ControlIntent.CANCEL_REQUESTED:
+                            self.control_service.acknowledge_cancellation(
+                                job.job_id,
+                                attempt.attempt_id,
+                                job_check.control_generation,
+                                self.worker_id,
+                                now=now,
+                            )
+                            return True
+                        if job_check and job_check.control_intent == ControlIntent.PAUSE_REQUESTED:
+                            self.control_service.acknowledge_pause(
+                                job.job_id,
+                                attempt.attempt_id,
+                                job_check.control_generation,
+                                self.worker_id,
+                                now=now,
+                            )
+                            return True
+
                         delay = policy.calculate_backoff_delay(attempt.attempt_number)
                         now_dt = self._now_dt(override=now)
                         next_avail_dt = now_dt + timedelta(seconds=delay)
@@ -1273,6 +1529,7 @@ class JobWorker:
                         JobStatus.FAILED,
                         failure_classification=classification.value if policy else "runtime_error",
                         failure_message=str(ex)[:1024],
+                        expected_control_generation=context.control_generation,
                         now=now,
                     )
                 except Exception as final_ex:

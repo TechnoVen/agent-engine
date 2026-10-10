@@ -97,3 +97,23 @@ class NonRetryableOperationError(JobDomainError):
 
 class RetryExhaustedError(JobDomainError):
     """Raised when a job has exceeded its maximum configured retry attempts."""
+
+
+class JobControlError(JobDomainError):
+    """Base exception for job execution control operations."""
+
+
+class JobControlConflictError(JobControlError):
+    """Raised when a control mutation conflicts with current job lifecycle state."""
+
+
+class JobAlreadyTerminalError(JobControlConflictError):
+    """Raised when attempting to pause or cancel a job that has already reached a terminal state."""
+
+
+class StaleControlGenerationError(JobControlError):
+    """Raised when an operation or worker acknowledgement references a superseded control generation."""
+
+
+class JobTimeoutError(JobDomainError):
+    """Raised when a job's authoritative execution deadline has elapsed."""

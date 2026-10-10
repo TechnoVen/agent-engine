@@ -134,6 +134,14 @@ class JobStatus(str, Enum):
     BLOCKED = "blocked"
 
 
+class ControlIntent(str, Enum):
+    """Desired execution control instruction for a durable job."""
+
+    NONE = "none"
+    PAUSE_REQUESTED = "pause_requested"
+    CANCEL_REQUESTED = "cancel_requested"
+
+
 # Explicit valid transitions matrix for the Job state machine
 VALID_JOB_TRANSITIONS: Dict[JobStatus, Set[JobStatus]] = {
     JobStatus.CREATED: {JobStatus.READY, JobStatus.BLOCKED, JobStatus.CANCELLED},
@@ -162,6 +170,7 @@ VALID_JOB_TRANSITIONS: Dict[JobStatus, Set[JobStatus]] = {
     },
     JobStatus.PAUSED: {
         JobStatus.READY,
+        JobStatus.WAITING,
         JobStatus.RUNNING,
         JobStatus.CANCELLED,
     },
@@ -212,8 +221,11 @@ class JobAttemptStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-# Canonical Failure Classifications and Outcome Uncertainty Semantics (R4.3 & R4.4)
+# Canonical Failure Classifications and Outcome Uncertainty Semantics (R4.3 & R4.4 & R4.5)
 FAILURE_CLASSIFICATION_WORKER_CRASH_OR_LEASE_LOST = "worker_crash_or_lease_lost"
+FAILURE_CLASSIFICATION_PAUSED_BY_OPERATOR = "paused_by_operator"
+FAILURE_CLASSIFICATION_CANCELLED_BY_OPERATOR = "cancelled_by_operator"
+FAILURE_CLASSIFICATION_TIMEOUT = "timeout"
 EXECUTION_OUTCOME_UNKNOWN = "UNKNOWN"
 SIDE_EFFECT_STATE_UNKNOWN = "UNKNOWN"
 
@@ -247,6 +259,13 @@ class JobEventType(str, Enum):
     IDEMPOTENCY_REUSED = "idempotency_reused"
     IDEMPOTENCY_OUTCOME_UNKNOWN = "idempotency_outcome_unknown"
     IDEMPOTENCY_ABANDONED_RECONCILED = "idempotency_abandoned_reconciled"
+    # R4.5 Execution control and timeout lifecycle events
+    JOB_PAUSE_REQUESTED = "job_pause_requested"
+    JOB_PAUSED = "job_paused"
+    JOB_RESUMED = "job_resumed"
+    JOB_CANCEL_REQUESTED = "job_cancel_requested"
+    JOB_CANCELLED = "job_cancelled"
+    JOB_TIMED_OUT = "job_timed_out"
 
 
 class OperationIdempotencyCapability(str, Enum):
@@ -425,6 +444,22 @@ class Job(BaseModel):
     updated_at: str = Field(default_factory=current_timestamp_iso)
     completed_at: Optional[str] = Field(
         None, description="Timestamp when job reached a terminal state"
+    )
+    control_intent: ControlIntent = Field(
+        default=ControlIntent.NONE, description="Desired execution control instruction"
+    )
+    control_generation: int = Field(
+        default=0, ge=0, description="Monotonic fencing generation for accepted control mutations"
+    )
+    timeout_seconds: Optional[int] = Field(
+        None, ge=1, description="Total execution budget beginning on first attempt start"
+    )
+    timeout_at: Optional[str] = Field(
+        None, description="Authoritative UTC ISO-8601 deadline timestamp"
+    )
+    prior_status_before_pause: Optional[JobStatus] = Field(
+        None,
+        description="Prior lifecycle status before pause to restore correct resume eligibility",
     )
 
     model_config = ConfigDict(extra="ignore")

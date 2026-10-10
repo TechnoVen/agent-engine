@@ -209,11 +209,34 @@ def _migration_004_job_idempotency_and_retry(conn: sqlite3.Connection) -> None:
                 raise
 
 
+def _migration_005_job_control_and_timeouts(conn: sqlite3.Connection) -> None:
+    """Migration 005: Durable job execution controls, generation fencing, and timeouts."""
+    ddl_statements = [
+        "ALTER TABLE jobs ADD COLUMN control_intent TEXT NOT NULL DEFAULT 'none';",
+        "ALTER TABLE jobs ADD COLUMN control_generation INTEGER NOT NULL DEFAULT 0;",
+        "ALTER TABLE jobs ADD COLUMN timeout_seconds INTEGER;",
+        "ALTER TABLE jobs ADD COLUMN timeout_at TEXT;",
+        "ALTER TABLE jobs ADD COLUMN prior_status_before_pause TEXT;",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_control ON jobs(control_intent, control_generation);",
+        "CREATE INDEX IF NOT EXISTS idx_jobs_timeout ON jobs(status, timeout_at);",
+    ]
+
+    for stmt in ddl_statements:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" in str(e).lower() or "already exists" in str(e).lower():
+                pass
+            else:
+                raise
+
+
 MIGRATION_REGISTRY: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "001_initial_job_domain", _migration_001_initial_job_domain),
     (2, "002_persistent_job_queue", _migration_002_persistent_job_queue),
     (3, "003_worker_attempt_ownership", _migration_003_worker_attempt_ownership),
     (4, "004_job_idempotency_and_retry", _migration_004_job_idempotency_and_retry),
+    (5, "005_job_control_and_timeouts", _migration_005_job_control_and_timeouts),
 ]
 
 

@@ -1083,9 +1083,8 @@ def test_crashed_attempt_semantics_preserves_uncertainty(
         Job(job_type="chat", payload_summary={"prompt": "Side-effect uncertainty job"})
     )
     repo.update_state(job.job_id, JobStatus.READY)
-    queue.enqueue(job.job_id)
-
     t0 = datetime(2026, 10, 10, 12, 0, 0, tzinfo=timezone.utc)
+    queue.enqueue(job.job_id, available_at=t0)
 
     # Worker 1 claims and starts Attempt 1
     worker_1 = JobWorker(db_path=file_db_path, lease_ttl_seconds=30.0)
