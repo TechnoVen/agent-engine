@@ -1,0 +1,54 @@
+schema_version: "1.0.0"
+id: "pack-core"
+name: "Core Pack"
+version: "0.5.0"
+description: "Foundational execution, project, model, approval, and durable task management layer."
+category: "system"
+author: "TechnoVen"
+
+permissions:
+  - scope: "fs:read"
+    paths:
+      - "${PROJECT_ROOT}/**"
+    description: "Read project workspace files, architecture documents, and instructions"
+  - scope: "storage:sqlite"
+    description: "Local SQLite persistence for sessions, jobs, executions, and approvals"
+
+capabilities:
+  - id: "chat_session"
+    name: "Project Chat Session"
+    description: "Multi-turn conversational interface with dynamic context assembly and execution coordination"
+    canonical_binding: "core.execution.coordinator.ExecutionCoordinator"
+    requires_approval: false
+
+  - id: "project_manager"
+    name: "Project Workspace Manager"
+    description: "Workspace indexing, project configuration, and directory containment boundary"
+    canonical_binding: "core.projects.models.Project"
+    requires_approval: false
+
+  - id: "model_router"
+    name: "Canonical Model Router"
+    description: "Real-time model tier resolution, privacy gating, and economic optimization"
+    canonical_binding: "core.router.model_router.ModelRouter"
+    requires_approval: false
+
+  - id: "execution_manager"
+    name: "Durable Execution & Task Manager"
+    description: "Durable job queue, worker lifecycle, cancellation token enforcement, and event ledger"
+    canonical_binding: "core.jobs.worker.JobWorker"
+    requires_approval: false
+
+  - id: "approval_service"
+    name: "Security Approval Boundary"
+    description: "Cryptographic exact-operation authorization verification, replay protection, and atomic consumption"
+    canonical_binding: "core.safety.pending.PendingOperationRegistry"
+    requires_approval: true
+
+skills: []
+
+workflows: []
+
+evaluations:
+  test_suite: "tests/test_r5_1_core_pack.py"
+  min_pass_rate: 1.0
