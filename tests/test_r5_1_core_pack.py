@@ -314,3 +314,43 @@ def test_core_pack_satisfies_founder_mvp_mappings(pack_service: CapabilityPackSe
 
     # MVP-J12: Truthful execution history -> model_execution, approval_service
     assert "model_execution" in caps
+
+
+def test_core_pack_permission_vocabulary_and_zero_trust_boundary(
+    pack_service: CapabilityPackService,
+):
+    """Verify pack permission vocabulary correctly maps to zero-trust permissions and enforces boundary."""
+    vocab = pack_service.get_permission_vocabulary()
+    assert "fs:read" in vocab
+    assert "storage:sqlite" in vocab
+    assert "workspace:read" in vocab
+    assert "execution:run" in vocab
+    assert "jobs:manage" in vocab
+    assert "approvals:manage" in vocab
+
+    # Verify zero-trust properties: approvals require HITL approval and are consequential
+    appr_map = pack_service.map_permission_to_canonical("approvals:manage")
+    assert appr_map is not None
+    assert appr_map["consequential"] is True
+    assert appr_map["requires_hitl_approval"] is True
+    assert appr_map["policy_governed"] is True
+
+    # Load Core Pack and verify zero-trust execution authority boundary
+    pack = pack_service.load_manifest("packs/core/manifest.yaml")
+    assert pack_service.is_pack_enabled(pack.id) is True
+
+    # Safe operation verification
+    assert (
+        pack_service.verify_zero_trust_authority_boundary(
+            pack.id, "read_workspace", is_consequential=False
+        )
+        is True
+    )
+
+    # Consequential operation CANNOT be executed merely because Core Pack is enabled
+    assert (
+        pack_service.verify_zero_trust_authority_boundary(
+            pack.id, "delete_database", is_consequential=True
+        )
+        is False
+    )

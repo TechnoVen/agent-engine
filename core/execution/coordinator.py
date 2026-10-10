@@ -2846,9 +2846,13 @@ class ExecutionCoordinator:
             # Phase 9: Telemetry Recording & Final Transition
             duration_ms = (time.perf_counter() - start_time) * 1000.0
             total_tokens = prompt_tokens + completion_tokens
+            is_local = provider in ("llamacpp", "ollama", "vllm", "local") or (
+                self.cost_tracker.get_pricing(model_name) is not None
+                and self.cost_tracker.get_pricing(model_name).input_cost_per_1m == 0.0
+            )
             if is_pipeline and pipeline_model_calls:
                 cost_usd = sum(c.get("cost_usd", 0.0) for c in pipeline_model_calls)
-                if cost_usd == 0.0 and total_tokens > 0:
+                if cost_usd == 0.0 and total_tokens > 0 and not is_local:
                     cost_usd = (
                         round((prompt_tokens * 0.00000015) + (completion_tokens * 0.0000006), 6)
                         or 0.000001
@@ -2857,15 +2861,24 @@ class ExecutionCoordinator:
                 cost_usd = self.cost_tracker.calculate_cost(
                     model_name, prompt_tokens, completion_tokens
                 )
-                if cost_usd == 0.0 and total_tokens > 0:
+                if cost_usd == 0.0 and total_tokens > 0 and not is_local:
                     cost_usd = (
                         round((prompt_tokens * 0.00000015) + (completion_tokens * 0.0000006), 6)
                         or 0.000001
                     )
 
+            cost_provenance = "calculated"
+            if (
+                not is_local
+                and cost_usd > 0.0
+                and self.cost_tracker.get_pricing(model_name) is None
+            ):
+                cost_provenance = "estimated"
+
             execution.input_tokens = prompt_tokens
             execution.output_tokens = completion_tokens
             execution.total_cost_usd = cost_usd
+            execution.cost_provenance = cost_provenance
 
             if token.is_cancelled:
                 return handle_cancellation("pre_completion", str(outputs.get("response", "")))
@@ -2916,6 +2929,7 @@ class ExecutionCoordinator:
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_cost_usd=cost_usd,
+                cost_provenance=cost_provenance,
                 duration_ms=duration_ms,
                 model_used=model_name,
                 provider_used=provider,

@@ -168,6 +168,7 @@ class ExecutionResult(BaseModel):
     routing_tier: Optional[RoutingTier] = None
     cache_hit: bool = False
     is_cost_estimated: bool = False
+    cost_provenance: Optional[str] = None
     artifacts_created: List[str] = Field(default_factory=list)
     verification: Optional[VerificationResult] = None
 
@@ -217,6 +218,7 @@ class Execution(BaseModel):
     output_tokens: int = 0
     total_cost_usd: float = 0.0
     is_cost_estimated: bool = False
+    cost_provenance: Optional[str] = None
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     error_message: Optional[str] = None
