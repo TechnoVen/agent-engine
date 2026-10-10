@@ -515,6 +515,11 @@ class Job(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    @property
+    def payload(self) -> Dict[str, Any]:
+        """Convenient alias for payload_summary."""
+        return self.payload_summary
+
 
 class JobAttempt(BaseModel):
     """A discrete execution attempt of a durable job."""

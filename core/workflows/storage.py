@@ -399,17 +399,34 @@ class WorkflowStorage:
 
     @staticmethod
     def _row_to_run(row: sqlite3.Row) -> WorkflowRun:
+        keys = row.keys()
+        run_id = row["run_id"] if "run_id" in keys else row["workflow_run_id"]
+        inputs_val = (
+            row["inputs"]
+            if "inputs" in keys
+            else (row["inputs_json"] if "inputs_json" in keys else "{}")
+        )
+        outputs_val = (
+            row["outputs"]
+            if "outputs" in keys
+            else (row["outputs_json"] if "outputs_json" in keys else "{}")
+        )
+        step_results_val = row["step_results"] if "step_results" in keys else "{}"
+        current_node_id_val = row["current_node_id"] if "current_node_id" in keys else None
+        pending_gate_val = row["pending_gate"] if "pending_gate" in keys else None
+        total_cost_val = row["total_cost_usd"] if "total_cost_usd" in keys else 0.0
+
         data: Dict[str, Any] = {
-            "run_id": row["run_id"],
+            "run_id": run_id,
             "workflow_id": row["workflow_id"],
             "status": WorkflowRunStatus(row["status"]),
-            "inputs": json.loads(row["inputs"] or "{}"),
-            "outputs": json.loads(row["outputs"] or "{}"),
-            "step_results": json.loads(row["step_results"] or "{}"),
-            "current_node_id": row["current_node_id"],
-            "pending_gate": json.loads(row["pending_gate"]) if row["pending_gate"] else None,
-            "total_cost_usd": float(row["total_cost_usd"] or 0.0),
+            "inputs": json.loads(inputs_val or "{}"),
+            "outputs": json.loads(outputs_val or "{}"),
+            "step_results": json.loads(step_results_val or "{}"),
+            "current_node_id": current_node_id_val,
+            "pending_gate": json.loads(pending_gate_val) if pending_gate_val else None,
+            "total_cost_usd": float(total_cost_val or 0.0),
             "created_at": row["created_at"],
-            "completed_at": row["completed_at"],
+            "completed_at": row["completed_at"] if "completed_at" in keys else None,
         }
         return WorkflowRun.model_validate(data)

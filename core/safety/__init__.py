@@ -19,6 +19,7 @@ from core.safety.pending import (
 )
 from core.safety.policy import PolicyDecision, PolicyEngine, PolicyRule
 from core.safety.risk import RiskLevel, RiskScorer
+from core.safety.service import ApprovalService, get_approval_service
 
 _GLOBAL_POLICY_ENGINE = None
 
@@ -44,4 +45,6 @@ __all__ = [
     "get_pending_registry",
     "OperationExpiredError",
     "SecurityBoundaryViolation",
+    "ApprovalService",
+    "get_approval_service",
 ]

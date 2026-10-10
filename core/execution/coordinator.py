@@ -677,6 +677,9 @@ class ExecutionCoordinator:
 
         # Setup canonical cancellation token
         if cancellation_token is None:
+            cancellation_token = getattr(request, "cancellation_token", None)
+
+        if cancellation_token is None:
             token = CancellationToken(exec_id)
         elif isinstance(cancellation_token, CancellationToken):
             token = cancellation_token

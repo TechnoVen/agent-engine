@@ -24,25 +24,25 @@ capabilities:
   - id: "project_manager"
     name: "Project Workspace Manager"
     description: "Workspace indexing, project configuration, and directory containment boundary"
-    canonical_binding: "core.projects.models.Project"
+    canonical_binding: "core.projects.service.ProjectService"
     requires_approval: false
 
-  - id: "model_router"
-    name: "Canonical Model Router"
-    description: "Real-time model tier resolution, privacy gating, and economic optimization"
-    canonical_binding: "core.router.model_router.ModelRouter"
+  - id: "model_execution"
+    name: "Canonical Model Execution"
+    description: "Real-time model selection and authoritative execution kernel with internal routing"
+    canonical_binding: "core.execution.coordinator.ExecutionCoordinator"
     requires_approval: false
 
-  - id: "execution_manager"
-    name: "Durable Execution & Task Manager"
-    description: "Durable job queue, worker lifecycle, cancellation token enforcement, and event ledger"
-    canonical_binding: "core.jobs.worker.JobWorker"
+  - id: "task_manager"
+    name: "Durable Task & Job Manager"
+    description: "Durable job submission, lifecycle control, and event observation with internal queue/worker infrastructure"
+    canonical_binding: "core.jobs.service.JobService"
     requires_approval: false
 
   - id: "approval_service"
     name: "Security Approval Boundary"
     description: "Cryptographic exact-operation authorization verification, replay protection, and atomic consumption"
-    canonical_binding: "core.safety.pending.PendingOperationRegistry"
+    canonical_binding: "core.safety.service.ApprovalService"
     requires_approval: true
 
 skills: []

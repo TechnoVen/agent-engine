@@ -5,28 +5,31 @@ Part of Milestone R5 (Founder Dogfood & Capability Packs) - Task R5.1 (Core Pack
 
 Governing Invariant (ADR-016):
 Every consequential capability declared in a capability pack MUST bind directly
-to an existing canonical subsystem (ExecutionCoordinator, ModelRouter, PendingOperationRegistry,
-JobWorker, ProjectStorage). Zero shadow runtimes are permitted.
+to an existing canonical product service (ExecutionCoordinator, ProjectService,
+JobService, ApprovalService). Zero shadow runtimes are permitted.
 """
 
 from __future__ import annotations
 
 import importlib
+import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Optional, Set, Union
 import yaml
 
 from core.packs.models import PackCapability, PackManifest
+from core.storage.paths import get_private_data_dir
 
 logger = logging.getLogger("agent_engine.packs.service")
 
-# Permitted canonical subsystem bindings for Agent Engine 0.5
+# Permitted canonical product service bindings for Agent Engine 0.5
 CANONICAL_BINDING_ALLOWLIST: Set[str] = {
     "core.execution.coordinator.ExecutionCoordinator",
+    "core.projects.service.ProjectService",
     "core.projects.models.Project",
-    "core.router.model_router.ModelRouter",
-    "core.jobs.worker.JobWorker",
+    "core.jobs.service.JobService",
+    "core.safety.service.ApprovalService",
     "core.safety.pending.PendingOperationRegistry",
     "core.storage.sqlite.SQLiteStorageRepository",
     "core.storage.sqlite.SQLiteJobRepository",
@@ -43,16 +46,51 @@ class PackValidationError(ValueError):
 
 
 class CapabilityPackService:
-    """Manages discovery, validation, and lifecycle of modular Capability Packs."""
+    """Manages discovery, validation, lifecycle, and one-unit enablement of Capability Packs."""
 
-    def __init__(self, packs_dir: Optional[Union[str, Path]] = None):
+    def __init__(
+        self,
+        packs_dir: Optional[Union[str, Path]] = None,
+        state_file: Optional[Union[str, Path]] = None,
+    ):
         if packs_dir is not None:
             self.packs_dir = Path(packs_dir)
         else:
             # Default to repo packs/ directory
             repo_root = Path(__file__).resolve().parents[2]
             self.packs_dir = repo_root / "packs"
+
+        if state_file is not None:
+            self.state_file = Path(state_file)
+        else:
+            self.state_file = get_private_data_dir() / "packs_state.json"
+
         self._packs: Dict[str, PackManifest] = {}
+        self._enabled_states: Dict[str, bool] = {}
+        self.load_states()
+
+    def load_states(self) -> None:
+        """Load persisted pack enablement states from disk."""
+        if self.state_file.is_file():
+            try:
+                with open(self.state_file, "r", encoding="utf-8") as f:
+                    self._enabled_states = json.load(f)
+            except Exception as e:
+                logger.warning("Failed to load pack states from %s: %s", self.state_file, e)
+                self._enabled_states = {}
+        else:
+            self._enabled_states = {}
+
+    def save_states(self) -> None:
+        """Persist pack enablement states atomically to disk."""
+        try:
+            self.state_file.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = self.state_file.with_suffix(".tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(self._enabled_states, f, indent=2)
+            tmp_path.replace(self.state_file)
+        except Exception as e:
+            logger.error("Failed to save pack states to %s: %s", self.state_file, e)
 
     def load_manifest(self, manifest_path: Union[str, Path]) -> PackManifest:
         """Load, validate, and verify a single manifest.yaml file."""
@@ -79,6 +117,12 @@ class CapabilityPackService:
             self._verify_canonical_binding(cap)
 
         self._packs[manifest.id] = manifest
+
+        # Default system packs to enabled
+        if manifest.category == "system" and manifest.id not in self._enabled_states:
+            self._enabled_states[manifest.id] = True
+            self.save_states()
+
         return manifest
 
     def _verify_canonical_binding(self, cap: PackCapability) -> None:
@@ -141,6 +185,69 @@ class CapabilityPackService:
         """List all registered capability packs."""
         return list(self._packs.values())
 
+    def is_pack_enabled(self, pack_id: str) -> bool:
+        """Check whether a pack is currently enabled."""
+        pack = self.get_pack(pack_id)
+        if not pack:
+            return False
+        # System packs are permanently enabled
+        if pack.category == "system":
+            return True
+        return self._enabled_states.get(pack_id, False)
+
+    def enable_pack(self, pack_id: str) -> bool:
+        """Enable capability pack as one unit after verifying all capabilities and bindings."""
+        pack = self.get_pack(pack_id)
+        if not pack:
+            raise PackValidationError(f"Cannot enable unknown pack '{pack_id}'")
+
+        # Validate all capabilities prior to enabling
+        for cap in pack.capabilities:
+            self._verify_canonical_binding(cap)
+
+        self._enabled_states[pack_id] = True
+        self.save_states()
+        logger.info("Capability pack '%s' enabled as one unit", pack_id)
+        return True
+
+    def disable_pack(self, pack_id: str) -> bool:
+        """Disable capability pack (system packs cannot be disabled)."""
+        pack = self.get_pack(pack_id)
+        if not pack:
+            raise PackValidationError(f"Cannot disable unknown pack '{pack_id}'")
+
+        if pack.category == "system":
+            raise PackValidationError(
+                f"Capability pack '{pack_id}' is a system-installed pack and cannot be disabled."
+            )
+
+        self._enabled_states[pack_id] = False
+        self.save_states()
+        logger.info("Capability pack '%s' disabled", pack_id)
+        return True
+
+    def get_pack_summary(self, pack_id: str) -> Optional[Dict[str, Any]]:
+        """Return truthful status summary for a capability pack."""
+        pack = self.get_pack(pack_id)
+        if not pack:
+            return None
+
+        is_system = pack.category == "system"
+        enabled = self.is_pack_enabled(pack_id)
+
+        return {
+            "id": pack.id,
+            "name": pack.name,
+            "version": pack.version,
+            "category": pack.category,
+            "description": pack.description,
+            "author": pack.author,
+            "enabled": enabled,
+            "is_system": is_system,
+            "capabilities": [c.model_dump() for c in pack.capabilities],
+            "permissions": [p.model_dump() for p in pack.permissions],
+        }
+
     def validate_permission(
         self,
         pack: PackManifest,
@@ -173,10 +280,17 @@ _global_pack_service: Optional[CapabilityPackService] = None
 
 def get_capability_pack_service(
     packs_dir: Optional[Union[str, Path]] = None,
+    state_file: Optional[Union[str, Path]] = None,
 ) -> CapabilityPackService:
     """Get or initialize the process-level singleton CapabilityPackService."""
     global _global_pack_service
     if _global_pack_service is None or packs_dir is not None:
-        _global_pack_service = CapabilityPackService(packs_dir=packs_dir)
+        _global_pack_service = CapabilityPackService(packs_dir=packs_dir, state_file=state_file)
         _global_pack_service.discover_packs()
     return _global_pack_service
+
+
+def reset_capability_pack_service() -> None:
+    """Reset global singleton for test isolation."""
+    global _global_pack_service
+    _global_pack_service = None

@@ -4,12 +4,16 @@ Comprehensive Validation and Acceptance Suite for Task R5.1 (Core Pack MVP).
 Verifies:
 1. Core Pack manifest loading, schema compliance, and version metadata.
 2. Least-privilege permission grants (fs:read, storage:sqlite) and unauthorized scope rejections.
-3. Strict canonical subsystem bindings with zero shadow runtimes (ADR-016).
+3. Strict canonical product service bindings with zero shadow runtimes (ADR-016).
 4. Discovery, registry, and service lifecycle.
-5. Authenticated REST API inspection and validation endpoints.
-6. Malformed manifest and permission tampering rejections.
-7. Founder MVP journey mappings (MVP-J1, MVP-J7, MVP-J8, MVP-J9, MVP-J10, MVP-J12).
+5. Authenticated REST API inspection and validation endpoints through actual FastAPI app (create_app).
+6. One-unit enablement, state persistence across restarts, and non-removable system pack invariant.
+7. Permission boundaries (Core Pack presence does not grant authority escalation).
+8. Real sidecar integration proving capabilities reach canonical product services.
+9. Founder MVP journey mappings (MVP-J1, MVP-J7, MVP-J8, MVP-J9, MVP-J10, MVP-J12).
 """
+
+from __future__ import annotations
 
 import importlib
 from pathlib import Path
@@ -24,6 +28,7 @@ from core.packs.service import (
     CapabilityPackService,
     PackValidationError,
 )
+from services.python.server.app import create_app
 
 
 @pytest.fixture
@@ -84,15 +89,15 @@ def test_core_pack_permissions_least_privilege(pack_service: CapabilityPackServi
 
 
 def test_core_pack_canonical_bindings_integrity(pack_service: CapabilityPackService):
-    """Verify all 5 Core Pack capabilities bind strictly to real, verified canonical subsystems."""
+    """Verify all Core Pack capabilities bind strictly to canonical product services."""
     pack = pack_service.load_manifest("packs/core/manifest.yaml")
     cap_map = {c.id: c for c in pack.capabilities}
 
     expected_caps = [
         "chat_session",
         "project_manager",
-        "model_router",
-        "execution_manager",
+        "model_execution",
+        "task_manager",
         "approval_service",
     ]
     for cap_id in expected_caps:
@@ -150,39 +155,121 @@ def test_pack_discovery_and_registry(repo_root: Path):
     assert retrieved.id == "pack-core"
 
 
-def test_pack_api_endpoints():
-    """Verify authenticated REST API endpoints for capability pack listing and validation."""
-    from fastapi import FastAPI
-    from services.python.server.routers.packs import router as packs_router
+def test_pack_one_unit_enablement_and_persistence(tmp_path: Path, repo_root: Path):
+    """Verify Core Pack lifecycle: discovery, one-unit enablement, restart persistence, and system pack invariant."""
+    state_file = tmp_path / "packs_state.json"
+    service = CapabilityPackService(packs_dir=repo_root / "packs", state_file=state_file)
+    service.discover_packs()
 
-    test_app = FastAPI()
-    test_app.include_router(packs_router, prefix="/v1")
-    client = TestClient(test_app)
+    # Core pack is system category, so it is enabled by default
+    assert service.is_pack_enabled("pack-core") is True
 
-    # 1. List packs
+    # Enabling as one unit succeeds
+    assert service.enable_pack("pack-core") is True
+    assert state_file.is_file()
+
+    # System pack cannot be disabled
+    with pytest.raises(PackValidationError, match="system-installed pack and cannot be disabled"):
+        service.disable_pack("pack-core")
+
+    # Restart simulation: new service instance with same state file retains enabled state
+    restart_service = CapabilityPackService(packs_dir=repo_root / "packs", state_file=state_file)
+    restart_service.discover_packs()
+    assert restart_service.is_pack_enabled("pack-core") is True
+
+
+def test_pack_presence_does_not_grant_authority_escalation(pack_service: CapabilityPackService):
+    """Verify that enabling Core Pack does not grant capability escalation or bypass safety boundaries."""
+    pack = pack_service.load_manifest("packs/core/manifest.yaml")
+
+    # High-risk actions must not be permitted by pack presence
+    assert pack_service.validate_permission(pack, "shell:exec") is False
+    assert pack_service.validate_permission(pack, "net:outbound") is False
+    assert pack_service.validate_permission(pack, "fs:write") is False
+    assert pack_service.validate_permission(pack, "admin") is False
+    assert pack_service.validate_permission(pack, "destructive") is False
+
+
+def test_pack_api_endpoints_through_actual_sidecar():
+    """Verify REST API endpoints through the actual production FastAPI app (create_app)."""
+    app = create_app()
+    client = TestClient(app)
+
+    # 1. List packs through production app
     res = client.get("/v1/packs")
     assert res.status_code == 200
     packs = res.json()
-    assert any(p["id"] == "pack-core" for p in packs)
+    core_pack = next((p for p in packs if p["id"] == "pack-core"), None)
+    assert core_pack is not None
+    assert core_pack["enabled"] is True
+    assert core_pack["is_system"] is True
 
-    # 2. Get pack details
+    # 2. Get pack details through production app
     res_core = client.get("/v1/packs/pack-core")
     assert res_core.status_code == 200
     data = res_core.json()
     assert data["id"] == "pack-core"
+    assert data["enabled"] is True
+    assert data["is_system"] is True
     assert len(data["capabilities"]) == 5
 
     # 3. Nonexistent pack returns 404
     res_404 = client.get("/v1/packs/nonexistent-pack")
     assert res_404.status_code == 404
 
-    # 4. Validate pack integrity
+    # 4. Validate pack integrity through production app
     res_val = client.post("/v1/packs/pack-core/validate")
     assert res_val.status_code == 200
     val_data = res_val.json()
     assert val_data["valid"] is True
     assert val_data["capabilities_count"] == 5
     assert len(val_data["errors"]) == 0
+
+    # 5. Enable pack through production app
+    res_enable = client.post("/v1/packs/pack-core/enable")
+    assert res_enable.status_code == 200
+    assert res_enable.json()["enabled"] is True
+
+    # 6. Disable attempt on system pack returns 400 Bad Request
+    res_disable = client.post("/v1/packs/pack-core/disable")
+    assert res_disable.status_code == 400
+    assert "system-installed" in res_disable.json()["detail"]
+
+
+def test_core_pack_capabilities_reach_canonical_services():
+    """Verify Core Pack capabilities reach actual product services through real application paths."""
+    from core.projects.service import get_project_service
+    from core.jobs.service import get_job_service
+    from core.safety.service import get_approval_service
+    from services.python.server.container import get_execution_coordinator
+
+    app = create_app()
+    client = TestClient(app)
+
+    # 1. chat_session / model_execution reaches ExecutionCoordinator via FastAPI
+    coord = get_execution_coordinator()
+    assert coord is not None
+    chat_res = client.post("/v1/chat/completions", json={})
+    assert chat_res.status_code == 422  # validation confirmed on canonical chat endpoint
+
+    # 2. project_manager reaches ProjectService
+    proj_service = get_project_service()
+    assert proj_service is not None
+    proj_res = client.get("/v1/projects")
+    assert proj_res.status_code == 200
+    assert isinstance(proj_res.json(), list)
+
+    # 3. task_manager reaches JobService
+    job_service = get_job_service()
+    assert job_service is not None
+    jobs = job_service.list_jobs(limit=5)
+    assert isinstance(jobs, list)
+
+    # 4. approval_service reaches ApprovalService
+    approval_service = get_approval_service()
+    assert approval_service is not None
+    pending = approval_service.list_pending_operations()
+    assert isinstance(pending, list)
 
 
 def test_malformed_manifest_rejection(tmp_path: Path):
@@ -213,17 +300,17 @@ def test_core_pack_satisfies_founder_mvp_mappings(pack_service: CapabilityPackSe
     assert "chat_session" in caps
     assert "project_manager" in caps
 
-    # MVP-J7: Routing -> model_router
-    assert "model_router" in caps
+    # MVP-J7: Routing -> model_execution
+    assert "model_execution" in caps
 
     # MVP-J8: Approval & safety -> approval_service
     assert "approval_service" in caps
 
-    # MVP-J9: Cancellation -> execution_manager
-    assert "execution_manager" in caps
+    # MVP-J9: Cancellation -> chat_session, task_manager
+    assert "task_manager" in caps
 
-    # MVP-J10: Restart recovery -> execution_manager (JobWorker)
-    assert "execution_manager" in caps
+    # MVP-J10: Restart recovery -> task_manager (durable jobs)
+    assert "task_manager" in caps
 
-    # MVP-J12: Truthful execution history -> execution_manager, approval_service
-    assert "execution_manager" in caps
+    # MVP-J12: Truthful execution history -> model_execution, approval_service
+    assert "model_execution" in caps

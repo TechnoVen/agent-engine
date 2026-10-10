@@ -115,6 +115,10 @@ from core.jobs.worker import (
     WorkerContext,
     generate_worker_id,
 )
+from core.jobs.service import (
+    JobService,
+    get_job_service,
+)
 
 __all__ = [
     # Domain Models
@@ -214,4 +218,7 @@ __all__ = [
     "format_utc_iso",
     "parse_utc_iso",
     "normalize_utc_iso",
+    # Canonical Job Service
+    "JobService",
+    "get_job_service",
 ]
