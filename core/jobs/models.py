@@ -279,6 +279,13 @@ class JobEventType(str, Enum):
     OCCURRENCE_MATERIALIZED = "occurrence_materialized"
     MISSED_RUN_SKIPPED = "missed_run_skipped"
     MISSED_RUN_MATERIALIZED = "missed_run_materialized"
+    # R4.8 Canonical Workflow lifecycle events
+    WORKFLOW_RUN_CREATED = "workflow_run_created"
+    WORKFLOW_NODE_RELEASED = "workflow_node_released"
+    WORKFLOW_NODE_COMPLETED = "workflow_node_completed"
+    WORKFLOW_RUN_COMPLETED = "workflow_run_completed"
+    WORKFLOW_RUN_FAILED = "workflow_run_failed"
+    WORKFLOW_RUN_CANCELLED = "workflow_run_cancelled"
 
 
 class MissedRunPolicy(str, Enum):

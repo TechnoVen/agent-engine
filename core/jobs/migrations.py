@@ -273,6 +273,66 @@ def _migration_006_timezone_aware_scheduler(conn: sqlite3.Connection) -> None:
                 raise
 
 
+def _migration_007_canonical_workflows(conn: sqlite3.Connection) -> None:
+    """Migration 007: Canonical Workflow Domain tables, indexes, and constraints (Task R4.8)."""
+    ddl_statements = [
+        """
+        CREATE TABLE IF NOT EXISTS workflow_definitions (
+            workflow_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            definition_json TEXT NOT NULL,
+            definition_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_workflow_defs_status ON workflow_definitions(status);",
+        """
+        CREATE TABLE IF NOT EXISTS workflow_runs (
+            workflow_run_id TEXT PRIMARY KEY,
+            workflow_id TEXT NOT NULL REFERENCES workflow_definitions(workflow_id) ON DELETE CASCADE,
+            definition_hash TEXT NOT NULL,
+            definition_snapshot_json TEXT NOT NULL,
+            status TEXT NOT NULL,
+            inputs_json TEXT NOT NULL DEFAULT '{}',
+            outputs_json TEXT NOT NULL DEFAULT '{}',
+            error TEXT,
+            created_at TEXT NOT NULL,
+            completed_at TEXT,
+            updated_at TEXT NOT NULL
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow_id ON workflow_runs(workflow_id);",
+        "CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status);",
+        """
+        CREATE TABLE IF NOT EXISTS workflow_node_runs (
+            node_run_id TEXT PRIMARY KEY,
+            workflow_run_id TEXT NOT NULL REFERENCES workflow_runs(workflow_run_id) ON DELETE CASCADE,
+            node_id TEXT NOT NULL,
+            node_type TEXT NOT NULL,
+            job_id TEXT REFERENCES jobs(job_id) ON DELETE SET NULL,
+            status TEXT NOT NULL,
+            inputs_json TEXT NOT NULL DEFAULT '{}',
+            outputs_json TEXT NOT NULL DEFAULT '{}',
+            error TEXT,
+            started_at TEXT NOT NULL,
+            completed_at TEXT,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workflow_run_id, node_id)
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_node_runs_run_id ON workflow_node_runs(workflow_run_id);",
+        "CREATE INDEX IF NOT EXISTS idx_node_runs_job_id ON workflow_node_runs(job_id);",
+        "CREATE INDEX IF NOT EXISTS idx_node_runs_status ON workflow_node_runs(status);",
+    ]
+    cursor = conn.cursor()
+    for stmt in ddl_statements:
+        cursor.execute(stmt)
+
+
 MIGRATION_REGISTRY: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "001_initial_job_domain", _migration_001_initial_job_domain),
     (2, "002_persistent_job_queue", _migration_002_persistent_job_queue),
@@ -280,6 +340,7 @@ MIGRATION_REGISTRY: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] 
     (4, "004_job_idempotency_and_retry", _migration_004_job_idempotency_and_retry),
     (5, "005_job_control_and_timeouts", _migration_005_job_control_and_timeouts),
     (6, "006_timezone_aware_scheduler", _migration_006_timezone_aware_scheduler),
+    (7, "007_canonical_workflows", _migration_007_canonical_workflows),
 ]
 
 

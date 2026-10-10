@@ -93,6 +93,9 @@ SUPPORTED_JOB_TYPES: Set[str] = {
     "document_summary",
     "agent_task",
     "test_job",
+    "workflow_step",
+    "pipeline",
+    "skill",
 }
 
 
@@ -158,6 +161,8 @@ class JobExecutionRequestFactory:
             task_type = "chat"
         elif job.job_type == "test_job":
             task_type = "chat"
+        elif job.job_type in ("workflow_step", "pipeline", "skill"):
+            task_type = "agent_task"
 
         return ExecutionRequest(
             id=generate_request_id(),

@@ -134,6 +134,48 @@ class WorkflowDefinition(BaseModel):
         """Serialize workflow definition to plain dict."""
         return self.model_dump()
 
+    def compute_definition_hash(self) -> str:
+        """Compute deterministic SHA-256 digest of canonical definition JSON."""
+        import hashlib
+        import json
+
+        dumped = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(dumped.encode("utf-8")).hexdigest()
+
+
+class NodeRunStatus(str, Enum):
+    """Lifecycle status of a single node run within a workflow run."""
+
+    PENDING = "pending"
+    BLOCKED = "blocked"
+    READY = "ready"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    SKIPPED = "skipped"
+
+
+def generate_workflow_id() -> str:
+    """Generate canonical workflow ID with 'wf_' prefix."""
+    import uuid
+
+    return f"wf_{uuid.uuid4().hex[:12]}"
+
+
+def generate_workflow_run_id() -> str:
+    """Generate canonical workflow run ID with 'wfr_' prefix."""
+    import uuid
+
+    return f"wfr_{uuid.uuid4().hex[:12]}"
+
+
+def generate_node_run_id() -> str:
+    """Generate canonical workflow node run ID with 'wfnr_' prefix."""
+    import uuid
+
+    return f"wfnr_{uuid.uuid4().hex[:12]}"
+
 
 class StepResult(BaseModel):
     """Execution outcome of a single node in a workflow run."""
@@ -148,11 +190,40 @@ class StepResult(BaseModel):
     cost_usd: float = 0.0
 
 
+class WorkflowNodeRun(BaseModel):
+    """Traceable execution record for a single node inside a WorkflowRun."""
+
+    node_run_id: str = Field(default_factory=generate_node_run_id)
+    workflow_run_id: str = Field(..., description="Parent workflow run identifier")
+    node_id: str = Field(..., description="Node ID within workflow definition")
+    node_type: WorkflowNodeType = Field(..., description="Node classification")
+    job_id: Optional[str] = Field(None, description="Associated canonical Job ID")
+    status: NodeRunStatus = Field(default=NodeRunStatus.PENDING)
+    inputs: Dict[str, Any] = Field(default_factory=dict)
+    outputs: Dict[str, Any] = Field(default_factory=dict)
+    error: Optional[str] = None
+    started_at: str = Field(
+        default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    )
+    completed_at: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self.model_dump()
+
+
 class WorkflowRun(BaseModel):
     """Execution state and trace of a specific workflow instance."""
 
-    run_id: str = Field(..., description="Unique run identifier")
+    run_id: str = Field(
+        default_factory=generate_workflow_run_id, description="Unique run identifier"
+    )
     workflow_id: str = Field(..., description="Associated workflow definition identifier")
+    definition_hash: str = Field(
+        default="", description="Immutable SHA-256 digest of the executed workflow definition"
+    )
+    definition_snapshot: Dict[str, Any] = Field(
+        default_factory=dict, description="Immutable snapshot of definition at run time"
+    )
     status: WorkflowRunStatus = Field(
         default=WorkflowRunStatus.PENDING, description="Current run status"
     )
@@ -162,8 +233,12 @@ class WorkflowRun(BaseModel):
     outputs: Dict[str, Any] = Field(
         default_factory=dict, description="Final aggregated outputs emitted by the run"
     )
+    node_runs: Dict[str, WorkflowNodeRun] = Field(
+        default_factory=dict, description="Per-node execution records keyed by node ID"
+    )
+    error: Optional[str] = Field(None, description="Terminal failure or error message")
     step_results: Dict[str, StepResult] = Field(
-        default_factory=dict, description="Execution traces keyed by node ID"
+        default_factory=dict, description="Legacy execution traces keyed by node ID"
     )
     current_node_id: Optional[str] = Field(default=None, description="Active or paused node ID")
     pending_gate: Optional[Dict[str, Any]] = Field(
@@ -176,6 +251,11 @@ class WorkflowRun(BaseModel):
     completed_at: Optional[str] = Field(
         default=None, description="Timestamp when execution completed or failed"
     )
+
+    @property
+    def workflow_run_id(self) -> str:
+        """Alias for canonical workflow_run_id."""
+        return self.run_id
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize workflow run to plain dict."""
