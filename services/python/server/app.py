@@ -36,7 +36,6 @@ from services.python.server.routers import (
     tasks,
     telemetry,
     workflows,
-    packs,
 )
 
 
@@ -144,7 +143,6 @@ def create_app() -> FastAPI:
     v1_router.include_router(collaboration.router)
     v1_router.include_router(patches.router)
     v1_router.include_router(system.router)
-    v1_router.include_router(packs.router)
 
     app.include_router(v1_router)
 

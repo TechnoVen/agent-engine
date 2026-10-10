@@ -24,7 +24,6 @@ from core.packs.service import (
     CapabilityPackService,
     PackValidationError,
 )
-from services.python.server.api import app
 
 
 @pytest.fixture
@@ -153,7 +152,12 @@ def test_pack_discovery_and_registry(repo_root: Path):
 
 def test_pack_api_endpoints():
     """Verify authenticated REST API endpoints for capability pack listing and validation."""
-    client = TestClient(app)
+    from fastapi import FastAPI
+    from services.python.server.routers.packs import router as packs_router
+
+    test_app = FastAPI()
+    test_app.include_router(packs_router, prefix="/v1")
+    client = TestClient(test_app)
 
     # 1. List packs
     res = client.get("/v1/packs")
