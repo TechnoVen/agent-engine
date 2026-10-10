@@ -77,3 +77,23 @@ class UnsupportedJobTypeError(JobDomainError):
 
 class WorkerLeaseLostError(JobQueueError):
     """Raised when a worker loses its lease during execution and can no longer mutate state."""
+
+
+class IdempotencyError(JobDomainError):
+    """Base exception for idempotency tracking errors."""
+
+
+class IdempotencyConflictError(IdempotencyError):
+    """Raised when an operation with the same key was already attempted with conflicting parameters."""
+
+
+class OperationAlreadyInProgressError(IdempotencyError):
+    """Raised when another attempt/worker is actively executing an operation with the same key."""
+
+
+class NonRetryableOperationError(JobDomainError):
+    """Raised when an automatic retry is prohibited (e.g. non-idempotent operation with unknown outcome)."""
+
+
+class RetryExhaustedError(JobDomainError):
+    """Raised when a job has exceeded its maximum configured retry attempts."""

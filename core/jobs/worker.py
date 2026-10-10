@@ -24,7 +24,7 @@ Governing Principles:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import os
@@ -50,6 +50,11 @@ from core.jobs.exceptions import (
     StaleLeaseError,
     UnsupportedJobTypeError,
 )
+from core.jobs.idempotency import (
+    IdempotencyStore,
+    SQLiteIdempotencyStore,
+    classify_failure,
+)
 from core.jobs.models import (
     EXECUTION_OUTCOME_UNKNOWN,
     FAILURE_CLASSIFICATION_WORKER_CRASH_OR_LEASE_LOST,
@@ -59,6 +64,8 @@ from core.jobs.models import (
     JobEventType,
     JobLease,
     JobStatus,
+    OperationIdempotencyCapability,
+    RetryPolicy,
     SIDE_EFFECT_STATE_UNKNOWN,
     current_timestamp_iso,
     format_utc_iso,
@@ -184,6 +191,8 @@ class JobWorker:
         queue: Optional[PersistentJobQueue] = None,
         coordinator: Optional[ExecutionCoordinator] = None,
         request_factory: Optional[JobExecutionRequestFactory] = None,
+        retry_policy: Optional[RetryPolicy] = None,
+        idempotency_store: Optional[IdempotencyStore] = None,
         lease_ttl_seconds: float = 60.0,
         heartbeat_interval_seconds: Optional[float] = None,
         poll_interval_seconds: float = 1.0,
@@ -197,6 +206,10 @@ class JobWorker:
 
         self.repo = repo or SQLiteJobRepository(db_path=self.db_path)
         self.queue = queue or SQLiteJobQueue(db_path=self.db_path, clock=clock)
+        self.retry_policy = retry_policy
+        self.idempotency_store = idempotency_store or SQLiteIdempotencyStore(
+            db_path=self.db_path, clock=clock
+        )
         if coordinator is not None:
             self.coordinator = coordinator
         else:
@@ -336,7 +349,7 @@ class JobWorker:
                     raise JobNotFoundError(f"Job {lease.job_id} not found.")
 
                 curr_status = JobStatus(j_row["status"])
-                if curr_status not in (JobStatus.READY, JobStatus.RUNNING):
+                if curr_status not in (JobStatus.READY, JobStatus.RUNNING, JobStatus.WAITING):
                     conn.rollback()
                     raise JobNotClaimableError(
                         f"Job {lease.job_id} in status '{curr_status.value}' cannot start attempt."
@@ -834,6 +847,115 @@ class JobWorker:
             self._heartbeat_thread.join(timeout=2.0)
         self._heartbeat_thread = None
 
+    def _mark_attempt_failed(
+        self,
+        job_id: str,
+        attempt_id: str,
+        classification: Optional[str] = None,
+        failure_message: Optional[str] = None,
+        now: Optional[Union[datetime, str]] = None,
+    ) -> None:
+        """Mark an attempt failed without removing the queue entry or finalizing the parent job."""
+        now_dt = self._now_dt(override=now)
+        now_iso = format_utc_iso(now_dt)
+
+        with self._lock:
+            conn = self.queue._get_connection()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    UPDATE job_attempts
+                    SET status = 'failed',
+                        finished_at = ?,
+                        failure_classification = ?,
+                        failure_message = ?
+                    WHERE attempt_id = ? AND job_id = ? AND worker_id = ?
+                    """,
+                    (now_iso, classification, failure_message, attempt_id, job_id, self.worker_id),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                if not self.queue._is_memory:
+                    conn.close()
+
+    def _record_event(
+        self,
+        job_id: str,
+        attempt_id: Optional[str],
+        event_type: JobEventType,
+        metadata: Dict[str, Any],
+        now: Optional[Union[datetime, str]] = None,
+    ) -> None:
+        """Append an audit event with per-job monotonic sequence number."""
+        now_dt = self._now_dt(override=now)
+        now_iso = format_utc_iso(now_dt)
+
+        with self._lock:
+            conn = self.queue._get_connection()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM job_events WHERE job_id = ?",
+                    (job_id,),
+                )
+                seq_num = cursor.fetchone()[0]
+                cursor.execute(
+                    """
+                    INSERT INTO job_events (
+                        event_id, job_id, attempt_id, event_type, sequence_number, timestamp, metadata_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"jev_{uuid.uuid4().hex[:12]}",
+                        job_id,
+                        attempt_id,
+                        event_type.value,
+                        seq_num,
+                        now_iso,
+                        json.dumps(sanitize_bounded_dict(metadata)),
+                    ),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                if not self.queue._is_memory:
+                    conn.close()
+
+    def execute_idempotent_operation(
+        self,
+        job_id: str,
+        operation_kind: str,
+        args: Dict[str, Any],
+        fn: Callable[[], Any],
+        capability: OperationIdempotencyCapability = OperationIdempotencyCapability.UNKNOWN,
+        attempt_id: Optional[str] = None,
+        scope: Optional[str] = None,
+        now: Optional[Union[datetime, str]] = None,
+    ) -> Any:
+        """Execute an operation with durable idempotency tracking under the current worker attempt."""
+        att_id = attempt_id
+        if att_id is None and self._active_context is not None:
+            att_id = self._active_context.attempt.attempt_id
+
+        return self.idempotency_store.execute_with_idempotency(
+            job_id=job_id,
+            operation_kind=operation_kind,
+            args=args,
+            fn=fn,
+            capability=capability,
+            attempt_id=att_id,
+            scope=scope,
+            now=now,
+        )
+
     # --------------------------------------------------------------------------
     # Execution Lifecycle Step
     # --------------------------------------------------------------------------
@@ -927,6 +1049,72 @@ class JobWorker:
             )
             fail_msg = exec_result.error
 
+            if target_status == JobStatus.FAILED:
+                # Check retry policy
+                policy = self.retry_policy
+                if policy is None and "retry_policy" in job.payload_summary:
+                    try:
+                        policy = RetryPolicy(**job.payload_summary["retry_policy"])
+                    except Exception:
+                        policy = None
+
+                classification = classify_failure(
+                    error=fail_msg,
+                    error_code=exec_result.error_code,
+                )
+
+                if policy is not None:
+                    if (
+                        classification in policy.retryable_classifications
+                        and attempt.attempt_number < policy.max_attempts
+                    ):
+                        # Retryable! Calculate backoff delay
+                        delay = policy.calculate_backoff_delay(attempt.attempt_number)
+                        now_dt = self._now_dt(override=now)
+                        next_avail_dt = now_dt + timedelta(seconds=delay)
+                        next_avail_iso = format_utc_iso(next_avail_dt)
+
+                        self._mark_attempt_failed(
+                            job_id=job.job_id,
+                            attempt_id=attempt.attempt_id,
+                            classification=classification.value,
+                            failure_message=fail_msg,
+                            now=now,
+                        )
+
+                        self.queue.requeue_at(
+                            job_id=job.job_id,
+                            available_at=next_avail_iso,
+                            lease_token=lease.lease_token,
+                            lease_generation=lease.lease_generation,
+                            now=now,
+                        )
+                        logger.info(
+                            "Worker %s scheduled retry for job %s (attempt %d/%d) at %s",
+                            self.worker_id,
+                            job.job_id,
+                            attempt.attempt_number,
+                            policy.max_attempts,
+                            next_avail_iso,
+                        )
+                        return True
+                    else:
+                        if attempt.attempt_number >= policy.max_attempts:
+                            self._record_event(
+                                job_id=job.job_id,
+                                attempt_id=attempt.attempt_id,
+                                event_type=JobEventType.RETRY_EXHAUSTED,
+                                metadata={
+                                    "worker_id": self.worker_id,
+                                    "attempt_id": attempt.attempt_id,
+                                    "attempt_number": attempt.attempt_number,
+                                    "max_attempts": policy.max_attempts,
+                                    "classification": classification.value,
+                                },
+                                now=now,
+                            )
+                        fail_class = classification.value
+
             # 10. Atomically finalize attempt and job
             self.finalize_claimed_attempt(
                 job.job_id,
@@ -946,13 +1134,82 @@ class JobWorker:
                     ex,
                     exc_info=True,
                 )
+                policy = self.retry_policy
+                if policy is None and "retry_policy" in job.payload_summary:
+                    try:
+                        policy = RetryPolicy(**job.payload_summary["retry_policy"])
+                    except Exception:
+                        policy = None
+
+                classification = classify_failure(
+                    error=ex,
+                    error_code=getattr(ex, "error_code", None),
+                )
+
+                if policy is not None and (
+                    classification in policy.retryable_classifications
+                    and attempt.attempt_number < policy.max_attempts
+                ):
+                    try:
+                        delay = policy.calculate_backoff_delay(attempt.attempt_number)
+                        now_dt = self._now_dt(override=now)
+                        next_avail_dt = now_dt + timedelta(seconds=delay)
+                        next_avail_iso = format_utc_iso(next_avail_dt)
+
+                        self._mark_attempt_failed(
+                            job_id=job.job_id,
+                            attempt_id=attempt.attempt_id,
+                            classification=classification.value,
+                            failure_message=str(ex)[:1024],
+                            now=now,
+                        )
+
+                        self.queue.requeue_at(
+                            job_id=job.job_id,
+                            available_at=next_avail_iso,
+                            lease_token=lease.lease_token,
+                            lease_generation=lease.lease_generation,
+                            now=now,
+                        )
+                        logger.info(
+                            "Worker %s scheduled retry on exception for job %s (attempt %d/%d) at %s",
+                            self.worker_id,
+                            job.job_id,
+                            attempt.attempt_number,
+                            policy.max_attempts,
+                            next_avail_iso,
+                        )
+                        return True
+                    except Exception as retry_ex:
+                        logger.warning(
+                            "Failed to schedule retry for job %s: %s", job.job_id, retry_ex
+                        )
+
+                if policy is not None and attempt.attempt_number >= policy.max_attempts:
+                    try:
+                        self._record_event(
+                            job_id=job.job_id,
+                            attempt_id=attempt.attempt_id,
+                            event_type=JobEventType.RETRY_EXHAUSTED,
+                            metadata={
+                                "worker_id": self.worker_id,
+                                "attempt_id": attempt.attempt_id,
+                                "attempt_number": attempt.attempt_number,
+                                "max_attempts": policy.max_attempts,
+                                "classification": classification.value,
+                            },
+                            now=now,
+                        )
+                    except Exception:
+                        pass
+
                 try:
                     self.finalize_claimed_attempt(
                         job.job_id,
                         attempt.attempt_id,
                         lease,
                         JobStatus.FAILED,
-                        failure_classification="runtime_error",
+                        failure_classification=classification.value if policy else "runtime_error",
                         failure_message=str(ex)[:1024],
                         now=now,
                     )
@@ -1059,6 +1316,8 @@ class JobWorker:
     def close(self) -> None:
         """Clean up worker resources."""
         self.stop()
+        if hasattr(self, "idempotency_store") and hasattr(self.idempotency_store, "close"):
+            self.idempotency_store.close()
         if hasattr(self.queue, "close"):
             self.queue.close()
         if hasattr(self.repo, "close"):

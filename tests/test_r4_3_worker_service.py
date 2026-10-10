@@ -907,10 +907,10 @@ def test_migration_v2_to_v3_populated_database_upgrade(tmp_path: Path) -> None:
     finally:
         conn.close()
 
-    # 3. Close DB, then reopen and run current migrations
+    # 3. Close DB, then reopen and run migrations up to v3
     conn2 = sqlite3.connect(str(db_file))
     try:
-        applied = apply_job_migrations(conn2)
+        applied = apply_job_migrations(conn2, target_version=3)
         assert applied == 1  # Migration 3 applied
         assert get_current_job_schema_version(conn2) == 3
 
@@ -1023,8 +1023,8 @@ def test_event_sequence_backfill_populated_pre_sequence_database(tmp_path: Path)
         )
         conn.commit()
 
-        # Apply all migrations (Migration 2 and 3)
-        applied = apply_job_migrations(conn)
+        # Apply migrations up to v3 (Migration 2 and 3)
+        applied = apply_job_migrations(conn, target_version=3)
         assert applied == 2
         assert get_current_job_schema_version(conn) == 3
 

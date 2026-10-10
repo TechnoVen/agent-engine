@@ -28,6 +28,7 @@ import secrets
 import sqlite3
 import threading
 from typing import Callable, List, Optional, Union
+import uuid
 
 from core.jobs.exceptions import (
     DuplicateQueueEntryError,
@@ -127,6 +128,27 @@ class PersistentJobQueue(ABC):
             QueueEntryNotFoundError: If no queue entry exists for job_id.
             InvalidLeaseError: If lease token or generation does not match current active lease.
             LeaseExpiredError: If the lease has already expired.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def requeue_at(
+        self,
+        job_id: str,
+        available_at: Union[datetime, str],
+        lease_token: str,
+        lease_generation: int,
+        now: Optional[Union[datetime, str]] = None,
+    ) -> JobQueueEntry:
+        """Schedule durable retry by clearing active lease and setting future available_at.
+
+        Transitions job status to WAITING and emits RETRY_SCHEDULED event.
+
+        Raises:
+            QueueEntryNotFoundError: If no queue entry exists for job_id.
+            InvalidLeaseError: If lease token or generation does not match active lease.
+            StaleLeaseError: If lease generation is stale.
+            LeaseExpiredError: If lease has expired.
         """
         raise NotImplementedError
 
@@ -399,7 +421,7 @@ class SQLiteJobQueue(PersistentJobQueue):
                     SELECT q.queue_entry_id, q.job_id, q.lease_generation, q.lease_expires_at
                     FROM job_queue q
                     JOIN jobs j ON q.job_id = j.job_id
-                    WHERE (j.status = 'ready' OR (j.status = 'running' AND q.lease_expires_at IS NOT NULL AND q.lease_expires_at <= ?))
+                    WHERE (j.status IN ('ready', 'waiting') OR (j.status = 'running' AND q.lease_expires_at IS NOT NULL AND q.lease_expires_at <= ?))
                       AND q.available_at <= ?
                       AND (q.lease_expires_at IS NULL OR q.lease_expires_at <= ?)
                     ORDER BY q.available_at ASC, q.enqueued_at ASC, q.queue_entry_id ASC
@@ -699,6 +721,146 @@ class SQLiteJobQueue(PersistentJobQueue):
                     conn.close()
 
     # --------------------------------------------------------------------------
+    # Durable Retry Requeue
+    # --------------------------------------------------------------------------
+
+    def requeue_at(
+        self,
+        job_id: str,
+        available_at: Union[datetime, str],
+        lease_token: str,
+        lease_generation: int,
+        now: Optional[Union[datetime, str]] = None,
+    ) -> JobQueueEntry:
+        """Schedule durable retry by clearing active lease and setting future available_at.
+
+        Transitions job status to WAITING and emits RETRY_SCHEDULED event.
+
+        Raises:
+            QueueEntryNotFoundError: If no queue entry exists for job_id.
+            InvalidLeaseError: If lease token or generation does not match active lease.
+            StaleLeaseError: If lease generation is stale.
+            LeaseExpiredError: If lease has expired.
+        """
+        now_dt = self._now_dt(override=now)
+        now_iso = format_utc_iso(now_dt)
+
+        if isinstance(available_at, str):
+            avail_iso = normalize_utc_iso(available_at)
+        else:
+            avail_iso = format_utc_iso(available_at)
+
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                cursor = conn.cursor()
+
+                # Verify entry and lease authority
+                cursor.execute(
+                    """
+                    SELECT queue_entry_id, lease_owner, lease_token, lease_generation,
+                           lease_expires_at, enqueued_at, created_at
+                    FROM job_queue WHERE job_id = ?
+                    """,
+                    (job_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    conn.rollback()
+                    raise QueueEntryNotFoundError(f"No queue entry found for job {job_id}.")
+
+                current_gen = row["lease_generation"]
+                current_tok = row["lease_token"]
+                lease_expires = row["lease_expires_at"]
+
+                if current_gen != lease_generation:
+                    conn.rollback()
+                    raise StaleLeaseError(
+                        f"Cannot requeue job {job_id}: lease generation {lease_generation} is stale (active is {current_gen})."
+                    )
+
+                if current_tok != lease_token:
+                    conn.rollback()
+                    raise InvalidLeaseError(f"Cannot requeue job {job_id}: lease token mismatch.")
+
+                if lease_expires is not None and lease_expires <= now_iso:
+                    conn.rollback()
+                    raise LeaseExpiredError(
+                        f"Cannot requeue job {job_id}: lease expired at {lease_expires}."
+                    )
+
+                # Clear lease and set available_at
+                cursor.execute(
+                    """
+                    UPDATE job_queue
+                    SET available_at = ?,
+                        lease_owner = NULL,
+                        lease_token = NULL,
+                        lease_acquired_at = NULL,
+                        lease_expires_at = NULL,
+                        updated_at = ?
+                    WHERE job_id = ? AND lease_generation = ?
+                    """,
+                    (avail_iso, now_iso, job_id, lease_generation),
+                )
+                if cursor.rowcount != 1:
+                    conn.rollback()
+                    raise InvalidLeaseError(f"Failed to requeue job {job_id}.")
+
+                # Transition Job state to WAITING
+                cursor.execute(
+                    "UPDATE jobs SET status = 'waiting', updated_at = ? WHERE job_id = ?",
+                    (now_iso, job_id),
+                )
+
+                # Append RETRY_SCHEDULED audit event
+                cursor.execute(
+                    "SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM job_events WHERE job_id = ?",
+                    (job_id,),
+                )
+                seq_num = cursor.fetchone()[0]
+                cursor.execute(
+                    """
+                    INSERT INTO job_events (
+                        event_id, job_id, attempt_id, event_type, sequence_number, timestamp, metadata_json
+                    ) VALUES (?, ?, NULL, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"jev_{uuid.uuid4().hex[:12]}",
+                        job_id,
+                        JobEventType.RETRY_SCHEDULED.value,
+                        seq_num,
+                        now_iso,
+                        json.dumps(
+                            {
+                                "available_at": avail_iso,
+                                "lease_generation": lease_generation,
+                            }
+                        ),
+                    ),
+                )
+
+                conn.commit()
+                cursor.execute(
+                    """
+                    SELECT queue_entry_id, job_id, enqueued_at, available_at,
+                           lease_owner, lease_token, lease_generation,
+                           lease_acquired_at, lease_expires_at, created_at, updated_at
+                    FROM job_queue WHERE job_id = ?
+                    """,
+                    (job_id,),
+                )
+                entry_row = cursor.fetchone()
+                return self._row_to_entry(entry_row)
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    # --------------------------------------------------------------------------
     # Retrieval and Maintenance
     # --------------------------------------------------------------------------
 
@@ -770,7 +932,7 @@ class SQLiteJobQueue(PersistentJobQueue):
                     SELECT COUNT(*)
                     FROM job_queue q
                     JOIN jobs j ON q.job_id = j.job_id
-                    WHERE (j.status = 'ready' OR (j.status = 'running' AND q.lease_expires_at IS NOT NULL AND q.lease_expires_at <= ?))
+                    WHERE (j.status IN ('ready', 'waiting') OR (j.status = 'running' AND q.lease_expires_at IS NOT NULL AND q.lease_expires_at <= ?))
                       AND q.available_at <= ?
                       AND (q.lease_expires_at IS NULL OR q.lease_expires_at <= ?)
                     """,

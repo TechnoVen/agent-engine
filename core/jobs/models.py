@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+import hashlib
+import json
 import re
 from typing import Any, Dict, Optional, Set, Union
 import uuid
@@ -238,6 +240,140 @@ class JobEventType(str, Enum):
     ATTEMPT_RECONCILED = "attempt_reconciled"
     JOB_COMPLETED = "job_completed"
     JOB_FAILED = "job_failed"
+    # R4.4 Idempotency & Retry lifecycle events
+    RETRY_SCHEDULED = "retry_scheduled"
+    RETRY_EXHAUSTED = "retry_exhausted"
+    IDEMPOTENCY_RESERVED = "idempotency_reserved"
+    IDEMPOTENCY_REUSED = "idempotency_reused"
+    IDEMPOTENCY_OUTCOME_UNKNOWN = "idempotency_outcome_unknown"
+
+
+class OperationIdempotencyCapability(str, Enum):
+    """Capability model defining whether and how an operation supports idempotency."""
+
+    NATIVE_KEY = "native_key"  # Provider supports native idempotency key header/argument
+    AE_GUARDED = (
+        "ae_guarded"  # Local/system operation protected by Agent Engine transaction boundary
+    )
+    NATURALLY_IDEMPOTENT = (
+        "naturally_idempotent"  # Operation is naturally idempotent (PUT exact state, read-only)
+    )
+    NON_IDEMPOTENT = "non_idempotent"  # Consequential side-effect without idempotency support (e.g. email, card charge)
+    UNKNOWN = "unknown"  # Unclassified capability
+
+
+class IdempotencyRecordStatus(str, Enum):
+    """Lifecycle state of a durable idempotency reservation."""
+
+    RESERVED = "reserved"
+    IN_PROGRESS = "in_progress"
+    SUCCEEDED = "succeeded"
+    FAILED_SAFE_TO_RETRY = "failed_safe_to_retry"
+    OUTCOME_UNKNOWN = "outcome_unknown"
+
+
+class RetryClassification(str, Enum):
+    """Structured failure classification for retry decisioning."""
+
+    RETRYABLE = "retryable"
+    NON_RETRYABLE = "non_retryable"
+    OUTCOME_UNKNOWN = "outcome_unknown"
+    POLICY_BLOCKED = "policy_blocked"
+
+
+class RetryPolicy(BaseModel):
+    """Versioned policy governing durable exponential backoff and retry limits."""
+
+    max_attempts: int = Field(default=3, ge=1, le=20, description="Maximum total attempts")
+    initial_delay: float = Field(default=1.0, ge=0.0, description="Base initial backoff in seconds")
+    multiplier: float = Field(default=2.0, ge=1.0, description="Exponential multiplier")
+    max_delay: float = Field(default=60.0, ge=0.0, description="Maximum backoff ceiling in seconds")
+    jitter: bool = Field(default=False, description="Whether to apply backoff jitter")
+    retryable_classifications: Set[RetryClassification] = Field(
+        default_factory=lambda: {RetryClassification.RETRYABLE}
+    )
+
+    def calculate_backoff_delay(
+        self, attempt_number: int, jitter_seed: Optional[float] = None
+    ) -> float:
+        """Calculate deterministic exponential backoff delay in seconds."""
+        if attempt_number <= 1:
+            raw_delay = self.initial_delay
+        else:
+            raw_delay = self.initial_delay * (self.multiplier ** (attempt_number - 1))
+        bounded = min(self.max_delay, raw_delay)
+        if self.jitter:
+            factor = jitter_seed if jitter_seed is not None else 0.5
+            return bounded * (0.8 + 0.4 * factor)
+        return bounded
+
+
+def compute_argument_digest(args: Dict[str, Any]) -> str:
+    """Compute deterministic SHA-256 digest of normalized arguments."""
+    sanitized = sanitize_bounded_dict(args)
+    serialized = json.dumps(sanitized, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+class IdempotencyKey(BaseModel):
+    """Canonical typed concept binding logical job, operation identity, and argument digest."""
+
+    job_id: str
+    operation_kind: str
+    argument_digest: str
+    key: str
+
+    def __repr__(self) -> str:
+        return f"IdempotencyKey(job_id='{self.job_id}', operation='{self.operation_kind}', key='{self.key}')"
+
+    def __str__(self) -> str:
+        return self.key
+
+
+def compute_idempotency_key(
+    job_id: str,
+    operation_kind: str,
+    args: Dict[str, Any],
+    scope: Optional[str] = None,
+) -> IdempotencyKey:
+    """Derive deterministic idempotency key for a logical consequential operation."""
+    arg_digest = compute_argument_digest(args)
+    scope_str = f":{scope}" if scope else ""
+    key_material = f"{job_id}:{operation_kind}{scope_str}:{arg_digest}"
+    key_hash = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:24]
+    return IdempotencyKey(
+        job_id=job_id,
+        operation_kind=operation_kind,
+        argument_digest=arg_digest,
+        key=f"ik_{key_hash}",
+    )
+
+
+class IdempotencyRecord(BaseModel):
+    """Durable representation of an operation's execution and outcome state."""
+
+    idempotency_key: str = Field(..., description="Unique idempotency key, e.g. ik_<24_hex>")
+    job_id: str = Field(..., description="Target job identifier")
+    operation_kind: str = Field(..., description="Tool or operation identifier")
+    argument_digest: str = Field(..., description="SHA-256 digest of normalized arguments")
+    capability: OperationIdempotencyCapability = Field(
+        default=OperationIdempotencyCapability.UNKNOWN
+    )
+    status: IdempotencyRecordStatus = Field(default=IdempotencyRecordStatus.RESERVED)
+    claimed_by_attempt: Optional[str] = Field(
+        None, description="Attempt ID currently holding reservation"
+    )
+    result_reference: Optional[str] = Field(
+        None, description="Reference or URI to canonical result"
+    )
+    result_payload: Optional[Dict[str, Any]] = Field(
+        None, description="Bounded non-sensitive result summary"
+    )
+    created_at: str = Field(default_factory=current_timestamp_iso)
+    updated_at: str = Field(default_factory=current_timestamp_iso)
+    completed_at: Optional[str] = None
+
+    model_config = ConfigDict(extra="ignore")
 
 
 class JobDependencyType(str, Enum):

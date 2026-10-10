@@ -175,10 +175,45 @@ def _migration_003_worker_attempt_ownership(conn: sqlite3.Connection) -> None:
                 raise
 
 
+def _migration_004_job_idempotency_and_retry(conn: sqlite3.Connection) -> None:
+    """Migration 004: Durable idempotency records and retry tracking."""
+    ddl_statements = [
+        """
+        CREATE TABLE IF NOT EXISTS job_idempotency_records (
+            idempotency_key TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
+            operation_kind TEXT NOT NULL,
+            argument_digest TEXT NOT NULL,
+            capability TEXT NOT NULL,
+            status TEXT NOT NULL,
+            claimed_by_attempt TEXT,
+            result_reference TEXT,
+            result_payload_json TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            completed_at TEXT
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_idempotency_job_id ON job_idempotency_records(job_id);",
+        "CREATE INDEX IF NOT EXISTS idx_idempotency_status ON job_idempotency_records(status);",
+        "CREATE INDEX IF NOT EXISTS idx_idempotency_digest ON job_idempotency_records(argument_digest);",
+    ]
+
+    for stmt in ddl_statements:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" in str(e).lower() or "already exists" in str(e).lower():
+                pass
+            else:
+                raise
+
+
 MIGRATION_REGISTRY: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "001_initial_job_domain", _migration_001_initial_job_domain),
     (2, "002_persistent_job_queue", _migration_002_persistent_job_queue),
     (3, "003_worker_attempt_ownership", _migration_003_worker_attempt_ownership),
+    (4, "004_job_idempotency_and_retry", _migration_004_job_idempotency_and_retry),
 ]
 
 
