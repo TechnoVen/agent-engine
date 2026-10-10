@@ -304,9 +304,10 @@ class PendingOperationRegistry:
         ttl_seconds: Optional[float] = None,
         actor: Optional[str] = "local_operator",
         capability: Optional[str] = None,
+        operation_id: Optional[str] = None,
     ) -> PendingOperation:
         with self._lock:
-            op_id = f"op_{uuid.uuid4().hex[:12]}"
+            op_id = operation_id or f"op_{uuid.uuid4().hex[:12]}"
             args_hash = self.compute_args_hash(tool_args)
             effective_capability = capability or tool_name
             effective_actor = actor or "local_operator"
@@ -318,6 +319,16 @@ class PendingOperationRegistry:
                 actor=effective_actor,
                 version=OPERATION_DIGEST_VERSION,
             )
+            # Check for existing pending operation with identical operation_id and digest (deduplication)
+            if operation_id:
+                existing = self.get_operation(op_id)
+                if (
+                    existing
+                    and existing.status == "pending"
+                    and existing.digest == digest
+                    and not existing.is_expired()
+                ):
+                    return existing
             now = time.time()
             ttl = ttl_seconds if ttl_seconds is not None else self.default_ttl_seconds
             if ttl <= 0:
@@ -586,6 +597,99 @@ class PendingOperationRegistry:
                     )
 
             # Burn the token in memory
+            op.status = "consumed"
+            op.consumed_at = now
+            return op
+
+    def consume_exact_approval(
+        self,
+        approval_id: str,
+        tool_name: str,
+        tool_args: Dict[str, Any],
+        execution_id: Optional[str] = None,
+        actor: Optional[str] = None,
+        capability: Optional[str] = None,
+    ) -> PendingOperation:
+        """Validate and immediately consume an exact approved operation using atomic CAS.
+
+        Fails closed with SecurityBoundaryViolation if approval is missing, invalid,
+        non-approved, expired, replayed, or arguments/execution_id/actor do not cryptographically match.
+        """
+        with self._lock:
+            op = self.get_operation(approval_id)
+            if not op:
+                raise SecurityBoundaryViolation(f"Unknown approval id: '{approval_id}'")
+
+            # Check status
+            if op.status == "consumed":
+                raise SecurityBoundaryViolation(
+                    f"Approval '{approval_id}' has already been consumed (replay attack detected)"
+                )
+            if op.status == "rejected":
+                raise SecurityBoundaryViolation(
+                    f"Cannot consume rejected operation '{approval_id}'"
+                )
+            if op.status != "approved":
+                raise SecurityBoundaryViolation(
+                    f"Operation '{approval_id}' is in non-executable state: {op.status}"
+                )
+
+            # Check expiration
+            if op.is_expired():
+                op.status = "expired"
+                self._sync_to_storage(op)
+                raise OperationExpiredError(f"Approval '{approval_id}' has expired")
+
+            # Check tool name
+            if op.tool_name != tool_name:
+                raise SecurityBoundaryViolation(
+                    f"Tool name mismatch: approved '{op.tool_name}', got '{tool_name}'"
+                )
+
+            # Check execution ID binding if present
+            if op.execution_id and execution_id and op.execution_id != execution_id:
+                raise SecurityBoundaryViolation(
+                    f"Execution ID mismatch: token bound to execution '{op.execution_id}', got '{execution_id}'"
+                )
+
+            # Check actor binding if explicitly provided
+            if (
+                actor is not None
+                and op.actor is not None
+                and not hmac.compare_digest(op.actor, actor)
+            ):
+                raise SecurityBoundaryViolation(
+                    f"Actor mismatch: token bound to actor '{op.actor}', got '{actor}'"
+                )
+
+            # Verify cryptographic arguments digest
+            incoming_digest = compute_canonical_operation_digest(
+                tool_name=tool_name,
+                tool_args=tool_args,
+                capability=capability or op.capability or tool_name,
+                execution_id=op.execution_id,
+                actor=op.actor,
+                version=op.digest_version,
+            )
+            if not hmac.compare_digest(incoming_digest, op.digest):
+                raise SecurityBoundaryViolation(
+                    "Cryptographic argument verification failed: tool arguments do not match approved digest"
+                )
+
+            # Atomic database CAS transition
+            now = time.time()
+            if self.storage is not None:
+                consumed = self.storage.atomic_consume_approval_exact(
+                    approval_id=op.operation_id,
+                    expected_digest=op.digest,
+                    now=now,
+                )
+                if not consumed:
+                    raise SecurityBoundaryViolation(
+                        f"Approval '{approval_id}' has already been consumed or expired (atomic CAS race failed)"
+                    )
+
+            # Burn in memory
             op.status = "consumed"
             op.consumed_at = now
             return op

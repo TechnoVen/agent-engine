@@ -171,6 +171,13 @@ class WorkflowParser:
                 outgoing = [e for e in workflow.edges if e.source == node.id]
                 if not outgoing:
                     errors.append(f"Condition node '{node.id}' has no outgoing conditional edges.")
+            elif node.type == WorkflowNodeType.GATE:
+                outgoing = [e for e in workflow.edges if e.source == node.id]
+                if len(outgoing) > 1:
+                    errors.append(
+                        f"Gate node '{node.id}' has multiple downstream edges ({len(outgoing)}). "
+                        "Under 0.5 semantics, each gate must govern exactly one canonical protected operation."
+                    )
 
         return len(errors) == 0, errors
 

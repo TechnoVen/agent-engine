@@ -486,8 +486,6 @@ def _build_gated_workflow() -> WorkflowDefinition:
     edges = [
         WorkflowEdge(id="e1", source="prep_step", target="human_gate"),
         WorkflowEdge(id="e2", source="human_gate", target="deploy_step", condition="approved"),
-        WorkflowEdge(id="e3", source="human_gate", target="rollback_step", condition="false"),
-        WorkflowEdge(id="e4", source="human_gate", target="sandbox_step", condition="redirect"),
     ]
 
     return WorkflowDefinition(
@@ -585,14 +583,12 @@ def test_workflow_gate_rejection_and_branching():
         reason="Security audit failed",
     )
 
-    assert resumed.status == WorkflowRunStatus.COMPLETED
+    assert resumed.status == WorkflowRunStatus.CANCELLED
     assert "human_gate" in resumed.step_results
     assert resumed.step_results["human_gate"].status == "rejected"
     assert resumed.step_results["human_gate"].outputs["approved"] is False
 
-    # Rejected edge (condition="false") led to rollback_step
-    assert "rollback_step" in resumed.step_results
-    assert resumed.step_results["rollback_step"].status == "completed"
+    # Under Option A, rejecting the gate halts workflow execution without invoking downstream protected step
     assert "deploy_step" not in resumed.step_results
 
 

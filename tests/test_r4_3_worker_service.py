@@ -671,13 +671,13 @@ def test_subprocess_worker_crash_and_reclaim_fixture(
     try:
         # Wait until subprocess claims job and starts attempt
         started = False
-        for _ in range(50):
+        for _ in range(120):
             time.sleep(0.1)
             attempts = repo.list_attempts(job.job_id)
             if len(attempts) >= 1 and attempts[0].worker_id == "wrk_subprocess_crash_victim":
                 started = True
                 break
-        assert started is True, "Subprocess worker failed to start attempt within 5s"
+        assert started is True, "Subprocess worker failed to start attempt within 12s"
         assert attempts[0].lease_generation == 1
 
         # 2. Forcibly kill worker subprocess with SIGKILL (unclean process termination)

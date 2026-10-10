@@ -2879,6 +2879,31 @@ class SQLiteBackend(StorageBackend):
                 if not self._is_memory:
                     conn.close()
 
+    def atomic_consume_approval_exact(
+        self, approval_id: str, expected_digest: str, now: float
+    ) -> bool:
+        """Atomically transition approval from 'approved' to 'consumed' matching exact digest."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    UPDATE approvals
+                    SET status = 'consumed', consumed_at = ?
+                    WHERE approval_id = ?
+                      AND operation_digest = ?
+                      AND status = 'approved'
+                      AND expires_at > ?
+                    """,
+                    (now, approval_id, expected_digest, now),
+                )
+                conn.commit()
+                return cursor.rowcount == 1
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
     def list_approvals(
         self, status: Optional[str] = None, execution_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:

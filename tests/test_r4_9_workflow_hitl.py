@@ -36,12 +36,16 @@ import sqlite3
 import time
 import pytest
 
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
+
 from core.jobs.migrations import apply_job_migrations, get_current_job_schema_version
 from core.jobs.models import (
     JobStatus,
 )
 from core.jobs.sqlite import SQLiteJobRepository
 from core.safety.pending import (
+    OPERATION_DIGEST_VERSION,
     compute_canonical_operation_digest,
 )
 from core.safety.policy import PolicyEngine, PolicyRule
@@ -294,12 +298,25 @@ def test_exact_operation_digest_computation(workflow_service: WorkflowService) -
     run = workflow_service.start_run("wf_digest_test", {})
 
     node_run = run.node_runs["deploy_gate"]
+    manifest = {
+        "workflow_run_id": run.run_id,
+        "gate_node_run_id": node_run.node_run_id,
+        "gate_node_id": "deploy_gate",
+        "protected_node_id": "deploy_gate",
+        "protected_operation": "workflow_gate:wf_digest_test:deploy_gate",
+        "capability": "deploy:prod",
+        "target": "default",
+        "arguments": {"cluster": "us-east-1", "version": "1.2.3"},
+        "artifact_digests": {},
+        "provenance_tool": "workflow_gate:wf_digest_test:deploy_gate",
+    }
     expected_digest = compute_canonical_operation_digest(
         tool_name="workflow_gate:wf_digest_test:deploy_gate",
-        tool_args={"version": "1.2.3", "cluster": "us-east-1"},
+        tool_args=manifest,
         capability="deploy:prod",
         execution_id=run.run_id,
         actor="deploy_operator",
+        version=OPERATION_DIGEST_VERSION,
     )
 
     assert node_run.operation_digest == expected_digest
@@ -874,3 +891,334 @@ def test_zero_shadow_tables_and_zero_secret_leakage(workflow_service: WorkflowSe
     for nr in finished_run.node_runs.values():
         serialized = json.dumps(nr.model_dump())
         assert "tok_" not in serialized
+
+
+# ==============================================================================
+# 15. Option A: Single Downstream Protected Operation Constraint
+# ==============================================================================
+
+
+def test_gate_multiple_downstream_operations_rejected(workflow_service: WorkflowService) -> None:
+    """Option A enforcement: a GATE node cannot branch into multiple downstream edges."""
+    gate_node = WorkflowNode(
+        id="gate_step",
+        type=WorkflowNodeType.GATE,
+        name="Branching Gate",
+    )
+    worker1 = WorkflowNode(id="worker_1", type=WorkflowNodeType.PIPELINE, name="Worker 1")
+    worker2 = WorkflowNode(id="worker_2", type=WorkflowNodeType.PIPELINE, name="Worker 2")
+
+    wf_def = WorkflowDefinition(
+        id="wf_multi_downstream_rejected",
+        name="Multi Downstream Reject Test",
+        nodes=[gate_node, worker1, worker2],
+        edges=[
+            WorkflowEdge(id="e1", source="gate_step", target="worker_1"),
+            WorkflowEdge(id="e2", source="gate_step", target="worker_2"),
+        ],
+    )
+    # Validation must reject multi-downstream gate
+    with pytest.raises(WorkflowValidationError) as exc_info:
+        workflow_service.create_definition(wf_def)
+    assert "multiple downstream edges" in str(exc_info.value)
+
+
+# ==============================================================================
+# 16. Five Exact Invalidations Suite
+# ==============================================================================
+
+
+def test_five_exact_invalidations(workflow_service: WorkflowService) -> None:
+    """Verify all 5 exact invalidations: arguments, target, operation/tool, artifact digest, actor mismatch."""
+    # Setup gate governing deploy node
+    deploy_node = WorkflowNode(
+        id="deploy_node",
+        type=WorkflowNodeType.PIPELINE,
+        name="Deploy Step",
+        config={"tool_name": "deploy_tool", "capability": "deploy:prod"},
+        inputs={"target": "cluster-a", "version": "1.0.0", "artifact_digest": "sha256:abc"},
+    )
+    gate_node = WorkflowNode(
+        id="deploy_gate",
+        type=WorkflowNodeType.GATE,
+        name="Deploy Gate",
+        config={"actor": "lead_operator"},
+    )
+    wf_def = WorkflowDefinition(
+        id="wf_5_invalidations",
+        name="5 Invalidations Test",
+        nodes=[gate_node, deploy_node],
+        edges=[WorkflowEdge(id="e1", source="deploy_gate", target="deploy_node")],
+    )
+    workflow_service.create_definition(wf_def)
+    run = workflow_service.start_run("wf_5_invalidations", {})
+
+    initial_op_id = run.node_runs["deploy_gate"].approval_id
+    initial_digest = run.node_runs["deploy_gate"].operation_digest
+    assert initial_op_id is not None
+    assert initial_digest is not None
+
+    # (5) Actor mismatch: approval attempted by unauthorized actor
+    with pytest.raises(WorkflowValidationError) as actor_exc:
+        workflow_service.approve_gate(run.run_id, "deploy_gate", actor="intruder_actor")
+    assert "requires approval by actor 'lead_operator'" in str(actor_exc.value)
+
+    # (1) Arguments change: modify version input directly on node run
+    conn = workflow_service._get_connection()
+    try:
+        with conn:
+            conn.execute(
+                """
+                UPDATE workflow_runs
+                SET inputs_json = ?
+                WHERE workflow_run_id = ?
+                """,
+                (json.dumps({"version": "2.0.0"}), run.run_id),
+            )
+            # Change target node inputs in snapshot to simulate argument change
+            snapshot = run.definition_snapshot
+            for n in snapshot["nodes"]:
+                if n["id"] == "deploy_node":
+                    n["inputs"]["version"] = "2.0.0"
+            conn.execute(
+                """
+                UPDATE workflow_runs
+                SET definition_snapshot_json = ?
+                WHERE workflow_run_id = ?
+                """,
+                (json.dumps(snapshot), run.run_id),
+            )
+    finally:
+        if not workflow_service._is_memory:
+            conn.close()
+
+    # Reconciling must invalidate prior approval and register fresh one
+    reconciled_run = workflow_service.reconcile_run(run.run_id)
+    new_op_id = reconciled_run.node_runs["deploy_gate"].approval_id
+    new_digest = reconciled_run.node_runs["deploy_gate"].operation_digest
+    assert new_op_id != initial_op_id
+    assert new_digest != initial_digest
+
+    # Verify old approval was marked rejected
+    old_op = workflow_service.approval_registry.get_operation(initial_op_id)
+    assert old_op is not None
+    assert old_op.status == "rejected"
+    assert "Invalidated" in (old_op.decision_reason or "")
+
+    # (2) Target change invalidation
+    snapshot = reconciled_run.definition_snapshot
+    for n in snapshot["nodes"]:
+        if n["id"] == "deploy_node":
+            n["inputs"]["target"] = "cluster-b"
+    conn = workflow_service._get_connection()
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE workflow_runs SET definition_snapshot_json = ? WHERE workflow_run_id = ?",
+                (json.dumps(snapshot), run.run_id),
+            )
+    finally:
+        if not workflow_service._is_memory:
+            conn.close()
+
+    run_target_changed = workflow_service.reconcile_run(run.run_id)
+    target_op_id = run_target_changed.node_runs["deploy_gate"].approval_id
+    assert target_op_id != new_op_id
+
+    # (3) Tool / operation change invalidation
+    for n in snapshot["nodes"]:
+        if n["id"] == "deploy_node":
+            n["config"]["tool_name"] = "destroy_tool"
+    conn = workflow_service._get_connection()
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE workflow_runs SET definition_snapshot_json = ? WHERE workflow_run_id = ?",
+                (json.dumps(snapshot), run.run_id),
+            )
+    finally:
+        if not workflow_service._is_memory:
+            conn.close()
+
+    run_tool_changed = workflow_service.reconcile_run(run.run_id)
+    tool_op_id = run_tool_changed.node_runs["deploy_gate"].approval_id
+    assert tool_op_id != target_op_id
+
+    # (4) Artifact digest change invalidation
+    for n in snapshot["nodes"]:
+        if n["id"] == "deploy_node":
+            n["inputs"]["artifact_digest"] = "sha256:different_hash_999"
+    conn = workflow_service._get_connection()
+    try:
+        with conn:
+            conn.execute(
+                "UPDATE workflow_runs SET definition_snapshot_json = ? WHERE workflow_run_id = ?",
+                (json.dumps(snapshot), run.run_id),
+            )
+    finally:
+        if not workflow_service._is_memory:
+            conn.close()
+
+    run_artifact_changed = workflow_service.reconcile_run(run.run_id)
+    artifact_op_id = run_artifact_changed.node_runs["deploy_gate"].approval_id
+    assert artifact_op_id != tool_op_id
+
+
+# ==============================================================================
+# 17. Central R2 Approval Service Ownership of Consumption
+# ==============================================================================
+
+
+def test_central_r2_approval_service_owns_consumption(workflow_service: WorkflowService) -> None:
+    """Verify WorkflowService routes approval consumption strictly through central PendingOperationRegistry."""
+    gate_node = WorkflowNode(id="gate_step", type=WorkflowNodeType.GATE, name="Approval Gate")
+    worker_node = WorkflowNode(id="worker_step", type=WorkflowNodeType.PIPELINE, name="Worker Step")
+    wf_def = WorkflowDefinition(
+        id="wf_r2_consumption_ownership",
+        name="R2 Consumption Ownership Test",
+        nodes=[gate_node, worker_node],
+        edges=[WorkflowEdge(id="e1", source="gate_step", target="worker_step")],
+    )
+    workflow_service.create_definition(wf_def)
+    run = workflow_service.start_run("wf_r2_consumption_ownership", {})
+
+    approval_id = run.node_runs["gate_step"].approval_id
+    assert approval_id is not None
+
+    with patch.object(
+        workflow_service.approval_registry,
+        "consume_exact_approval",
+        wraps=workflow_service.approval_registry.consume_exact_approval,
+    ) as mock_consume:
+        workflow_service.approve_gate(run.run_id, "gate_step")
+        assert mock_consume.called
+        assert mock_consume.call_args[1]["approval_id"] == approval_id
+
+    # Verify atomic CAS consumption in DB
+    op = workflow_service.approval_registry.get_operation(approval_id)
+    assert op is not None
+    assert op.status == "consumed"
+    assert op.consumed_at is not None
+
+
+# ==============================================================================
+# 18. Multi-Process Race Request Deduplication
+# ==============================================================================
+
+
+def test_approval_request_deduplication_multi_process_race(
+    workflow_service: WorkflowService,
+) -> None:
+    """Verify concurrent reconcile races produce exactly one pending approval record (deterministic ID)."""
+    gate_node = WorkflowNode(id="gate_step", type=WorkflowNodeType.GATE, name="Dedup Gate")
+    wf_def = WorkflowDefinition(
+        id="wf_dedup_race",
+        name="Dedup Race Test",
+        nodes=[gate_node],
+        edges=[],
+    )
+    workflow_service.create_definition(wf_def)
+    run = workflow_service.start_run("wf_dedup_race", {})
+
+    initial_approval_id = run.node_runs["gate_step"].approval_id
+
+    # Run 10 concurrent reconcile operations
+    def run_reconcile() -> str:
+        r = workflow_service.reconcile_run(run.run_id)
+        return r.node_runs["gate_step"].approval_id
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        futures = [pool.submit(run_reconcile) for _ in range(10)]
+        results = [f.result() for f in futures]
+
+    # Every concurrent reconcile returned the exact same deterministic approval ID
+    assert all(r == initial_approval_id for r in results)
+
+    # In database approvals table, exactly one record exists for this execution
+    conn = workflow_service._get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM approvals WHERE execution_id = ?",
+            (run.run_id,),
+        )
+        assert cursor.fetchone()[0] == 1
+    finally:
+        if not workflow_service._is_memory:
+            conn.close()
+
+
+# ==============================================================================
+# 19. Expired Gate Renewal Recovery (No Deadlock, No Auto-Authorize, No Spam)
+# ==============================================================================
+
+
+def test_expired_gate_re_request_recovery(workflow_service: WorkflowService) -> None:
+    """Expired gates remain suspended (no deadlock, no auto-auth). Explicit renewal creates fresh approval."""
+    gate_node = WorkflowNode(
+        id="gate_step",
+        type=WorkflowNodeType.GATE,
+        name="Expiring Gate",
+        config={"ttl_seconds": 0.05},
+    )
+    worker_node = WorkflowNode(id="worker_step", type=WorkflowNodeType.PIPELINE, name="Worker Step")
+    wf_def = WorkflowDefinition(
+        id="wf_expire_renewal",
+        name="Expire Renewal Test",
+        nodes=[gate_node, worker_node],
+        edges=[WorkflowEdge(id="e1", source="gate_step", target="worker_step")],
+    )
+    workflow_service.create_definition(wf_def)
+    run = workflow_service.start_run("wf_expire_renewal", {})
+
+    orig_approval_id = run.node_runs["gate_step"].approval_id
+    time.sleep(0.1)
+
+    # Reconcile after expiry: must not auto-authorize or advance
+    run_after_expiry = workflow_service.reconcile_run(run.run_id)
+    assert run_after_expiry.status == WorkflowRunStatus.WAITING_APPROVAL
+    assert run_after_expiry.node_runs["gate_step"].status == NodeRunStatus.WAITING_APPROVAL
+    assert run_after_expiry.node_runs["worker_step"].status == NodeRunStatus.BLOCKED
+
+    # Attempting to approve the expired token fails closed
+    with pytest.raises(Exception):
+        workflow_service.approve_gate(run.run_id, "gate_step")
+
+    # Explicit renewal creates a valid new approval record with fresh TTL
+    renewed_run = workflow_service.renew_gate_approval(run.run_id, "gate_step", ttl_seconds=3600.0)
+    new_approval_id = renewed_run.node_runs["gate_step"].approval_id
+    assert new_approval_id != orig_approval_id
+    assert renewed_run.status == WorkflowRunStatus.WAITING_APPROVAL
+
+    # Approving the renewed gate cleanly unblocks the workflow
+    approved_run = workflow_service.approve_gate(run.run_id, "gate_step")
+    assert approved_run.node_runs["gate_step"].status == NodeRunStatus.COMPLETED
+    assert approved_run.node_runs["worker_step"].status == NodeRunStatus.READY
+
+
+# ==============================================================================
+# 20. Approvals Schema Ownership & Migration Immutability Regression
+# ==============================================================================
+
+
+def test_approval_schema_ownership_regression() -> None:
+    """Verify Migration 009 is immutable, exactly 9 migrations exist (no Migration 010), and SQLiteBackend owns approvals DDL."""
+    from core.jobs.migrations import MIGRATION_REGISTRY
+
+    # Exactly 9 migrations exist in 0.5 (no unnecessary migration 010)
+    assert len(MIGRATION_REGISTRY) == 9
+    version, name, func = MIGRATION_REGISTRY[8]
+    assert version == 9
+    assert name == "009_workflow_hitl_gates"
+
+    # In clean database with WorkflowService, approvals and workflow tables are created canonically
+    svc = WorkflowService(db_path=":memory:")
+    conn = svc._get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='approvals'")
+    assert cursor.fetchone() is not None
+
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='workflow_node_runs'"
+    )
+    assert cursor.fetchone() is not None

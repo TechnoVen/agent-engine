@@ -42,7 +42,10 @@ from core.jobs.models import (
 from core.jobs.queue import SQLiteJobQueue
 from core.jobs.sqlite import SQLiteJobRepository
 from core.safety.pending import (
+    OPERATION_DIGEST_VERSION,
+    OperationExpiredError,
     PendingOperationRegistry,
+    SecurityBoundaryViolation,
     compute_canonical_operation_digest,
 )
 from core.storage.sqlite import SQLiteBackend
@@ -106,6 +109,7 @@ class WorkflowService:
         node: Optional[WorkflowNode],
         inputs: Dict[str, Any],
         workflow_run_id: str,
+        workflow_id: Optional[str] = None,
     ) -> Tuple[bool, Optional[str]]:
         """Check if a gate node is authoritatively blocked or denied by safety policy."""
         if not node:
@@ -123,26 +127,121 @@ class WorkflowService:
 
         # 2. Central Guardrail PolicyEngine evaluation if configured
         if self.policy_engine:
-            tool_name = f"workflow_gate:{node.id}"
+            tool_names = [f"workflow_gate:{node.id}"]
+            if workflow_id:
+                tool_names.append(f"workflow_gate:{workflow_id}:{node.id}")
             capability = node.config.get("capability", f"workflow_gate:{node.id}")
-            try:
-                decision = self.policy_engine.evaluate(
-                    tool_name=tool_name,
-                    tool_args=inputs,
-                    context={
-                        "session_id": workflow_run_id,
-                        "execution_id": workflow_run_id,
-                        "capability": capability,
-                    },
-                )
-                if getattr(decision, "is_denied", False):
-                    return True, getattr(decision, "reason", None) or "Denied by guardrail policy"
-                if str(getattr(decision, "decision", "")).lower() in ("deny", "block"):
-                    return True, getattr(decision, "reason", None) or "Denied by guardrail policy"
-            except Exception as e:
-                logger.warning("Policy evaluation error for gate '%s': %s", node.id, e)
+            for t_name in tool_names:
+                try:
+                    decision = self.policy_engine.evaluate(
+                        tool_name=t_name,
+                        tool_args=inputs,
+                        context={
+                            "session_id": workflow_run_id,
+                            "execution_id": workflow_run_id,
+                            "capability": capability,
+                        },
+                    )
+                    if getattr(decision, "is_denied", False):
+                        return True, getattr(
+                            decision, "reason", None
+                        ) or "Denied by guardrail policy"
+                    if str(getattr(decision, "decision", "")).lower() in ("deny", "block"):
+                        return True, getattr(
+                            decision, "reason", None
+                        ) or "Denied by guardrail policy"
+                except Exception as e:
+                    logger.warning("Policy evaluation error for gate '%s': %s", node.id, e)
 
         return False, None
+
+    def _build_gate_protected_operation_manifest(
+        self,
+        gate_node: WorkflowNode,
+        definition: WorkflowDefinition,
+        workflow_run_id: str,
+        workflow_inputs: Dict[str, Any],
+        step_outputs: Dict[str, Dict[str, Any]],
+        gate_node_run_id: Optional[str] = None,
+    ) -> Tuple[str, str, Dict[str, Any], str, str]:
+        """Construct canonical protected-operation manifest and metadata from immutable run context.
+
+        Under Milestone R4.9 semantics, an approval authorizes:
+        "perform exactly this protected downstream operation", not merely "continue past gate X".
+        """
+        downstream_edges = [e for e in definition.edges if e.source == gate_node.id]
+        if len(downstream_edges) > 1:
+            raise WorkflowValidationError(
+                f"Gate node '{gate_node.id}' has multiple downstream edges. "
+                "Under 0.5 semantics, each gate must govern exactly one canonical protected operation."
+            )
+
+        if len(downstream_edges) == 1:
+            target_node_id = downstream_edges[0].target
+            target_node = next((n for n in definition.nodes if n.id == target_node_id), None)
+            if not target_node:
+                raise WorkflowValidationError(
+                    f"Gate node '{gate_node.id}' targets non-existent downstream node '{target_node_id}'"
+                )
+            resolved_args = sanitize_bounded_dict(
+                self.resolve_node_inputs(target_node, workflow_inputs, step_outputs)
+            )
+            protected_tool_name = (
+                target_node.config.get("tool_name")
+                or target_node.config.get("operation")
+                or target_node.inputs.get("tool_name")
+                or target_node.id
+            )
+            capability = (
+                target_node.config.get("capability")
+                or gate_node.config.get("capability")
+                or f"workflow:{protected_tool_name}"
+            )
+            target_resource = str(
+                resolved_args.get("target")
+                or target_node.config.get("target")
+                or gate_node.config.get("target")
+                or "default"
+            )
+            artifact_digests = (
+                resolved_args.get("artifact_digest") or resolved_args.get("artifact_digests") or {}
+            )
+            protected_node_id = target_node.id
+        else:
+            resolved_args = sanitize_bounded_dict(
+                self.resolve_node_inputs(gate_node, workflow_inputs, step_outputs)
+            )
+            protected_tool_name = (
+                gate_node.config.get("tool_name")
+                or gate_node.config.get("operation")
+                or gate_node.inputs.get("tool_name")
+                or f"workflow_gate:{definition.id}:{gate_node.id}"
+            )
+            capability = gate_node.config.get("capability") or f"workflow_gate:{gate_node.id}"
+            target_resource = str(
+                resolved_args.get("target") or gate_node.config.get("target") or "default"
+            )
+            artifact_digests = (
+                resolved_args.get("artifact_digest") or resolved_args.get("artifact_digests") or {}
+            )
+            protected_node_id = gate_node.id
+
+        actor = gate_node.config.get("actor")
+
+        manifest: Dict[str, Any] = {
+            "workflow_run_id": workflow_run_id,
+            "gate_node_run_id": gate_node_run_id or f"wfnr_gate_{workflow_run_id}_{gate_node.id}",
+            "gate_node_id": gate_node.id,
+            "protected_node_id": protected_node_id,
+            "protected_operation": protected_tool_name,
+            "capability": capability,
+            "target": target_resource,
+            "arguments": resolved_args,
+            "artifact_digests": artifact_digests,
+            "provenance_tool": f"workflow_gate:{definition.id}:{gate_node.id}",
+        }
+
+        return protected_tool_name, capability, manifest, actor, target_resource
 
     def _get_connection(self) -> sqlite3.Connection:
         if self._is_memory:
@@ -457,48 +556,60 @@ class WorkflowService:
                     suspended_at = None
                     node_error = None
                 else:
-                    resolved_inputs = sanitize_bounded_dict(
-                        self.resolve_node_inputs(node, workflow_inputs, {})
+                    (
+                        protected_tool_name,
+                        capability,
+                        manifest,
+                        actor,
+                        target_resource,
+                    ) = self._build_gate_protected_operation_manifest(
+                        node, definition, run_id, workflow_inputs, {}, node_run_id
                     )
-                    is_denied, reason = self._is_policy_denied(node, resolved_inputs, run_id)
+                    is_denied, reason = self._is_policy_denied(
+                        node, manifest["arguments"], run_id, definition.id
+                    )
                     if is_denied:
                         initial_node_status = NodeRunStatus.FAILED
                         approval_id = None
                         operation_digest = None
                         suspended_at = None
                         node_error = reason or "Policy denied gate execution"
+                        resolved_inputs = manifest
                     else:
                         initial_node_status = NodeRunStatus.WAITING_APPROVAL
-                        tool_name = f"workflow_gate:{workflow_id}:{node.id}"
-                        capability = node.config.get("capability", f"workflow_gate:{node.id}")
-                        actor = node.config.get("actor", "local_operator")
+                        effective_actor = actor or "local_operator"
                         operation_digest = compute_canonical_operation_digest(
-                            tool_name=tool_name,
-                            tool_args=resolved_inputs,
+                            tool_name=protected_tool_name,
+                            tool_args=manifest,
                             capability=capability,
                             execution_id=run_id,
-                            actor=actor,
+                            actor=effective_actor,
+                            version=OPERATION_DIGEST_VERSION,
                         )
                         ttl = float(node.config.get("ttl_seconds", 3600.0))
+                        deterministic_op_id = f"op_gate_{run_id}_{node.id}_{operation_digest[:8]}"
                         pending_op = self.approval_registry.register_operation(
-                            tool_name=tool_name,
-                            tool_args=resolved_inputs,
+                            tool_name=protected_tool_name,
+                            tool_args=manifest,
                             risk_level=node.config.get("risk_level", "high"),
                             risk_score=float(node.config.get("risk_score", 0.9)),
                             session_id=run_id,
                             execution_id=run_id,
                             reason=node.config.get(
-                                "reason", f"Approval required for gate '{node.name}'"
+                                "reason",
+                                f"Approval required for protected operation '{protected_tool_name}' on target '{target_resource}'",
                             ),
                             suggestion=node.config.get("suggestion"),
                             diff=node.config.get("diff"),
                             ttl_seconds=ttl,
-                            actor=actor,
+                            actor=effective_actor,
                             capability=capability,
+                            operation_id=deterministic_op_id,
                         )
                         approval_id = pending_op.operation_id
                         suspended_at = now_iso
                         node_error = None
+                        resolved_inputs = manifest
 
                 node_run = WorkflowNodeRun(
                     node_run_id=node_run_id,
@@ -739,7 +850,7 @@ class WorkflowService:
             # Stage 2: Evaluate WAITING_APPROVAL GATE nodes (without holding DB lock)
             gate_failed: Dict[str, str] = {}
             gate_invalidated_regs: Dict[str, Tuple[str, str, Dict[str, Any]]] = {}
-            gate_cas_consume: List[str] = []
+            gate_consumed_nodes: Dict[str, Any] = {}
 
             for node_id, nr in run.node_runs.items():
                 if (
@@ -751,71 +862,117 @@ class WorkflowService:
                 if not node_def:
                     continue
 
+                (
+                    protected_tool_name,
+                    capability,
+                    manifest,
+                    actor,
+                    target_resource,
+                ) = self._build_gate_protected_operation_manifest(
+                    node_def, definition, workflow_run_id, run.inputs, step_outputs, nr.node_run_id
+                )
+
                 # Policy denial check
-                is_denied, reason = self._is_policy_denied(node_def, nr.inputs, workflow_run_id)
+                is_denied, reason = self._is_policy_denied(
+                    node_def, manifest["arguments"], workflow_run_id, definition.id
+                )
                 if is_denied:
                     gate_failed[node_id] = reason or "Policy denied gate execution"
                     any_failed = True
                     continue
 
-                # Input invalidation check
-                curr_inputs = sanitize_bounded_dict(
-                    self.resolve_node_inputs(node_def, run.inputs, step_outputs)
+                op = (
+                    self.approval_registry.get_operation(nr.approval_id) if nr.approval_id else None
                 )
-                tool_name = f"workflow_gate:{run.workflow_id}:{node_def.id}"
-                capability = node_def.config.get("capability", f"workflow_gate:{node_def.id}")
-                actor = node_def.config.get("actor", "local_operator")
+                if op and op.status == "rejected":
+                    gate_failed[node_id] = op.decision_reason or "Gate rejected by operator"
+                    any_failed = True
+                    continue
+
+                effective_actor = (op.actor if (op and op.actor) else actor) or "local_operator"
+
                 expected_digest = compute_canonical_operation_digest(
-                    tool_name=tool_name,
-                    tool_args=curr_inputs,
+                    tool_name=protected_tool_name,
+                    tool_args=manifest,
                     capability=capability,
                     execution_id=workflow_run_id,
-                    actor=actor,
+                    actor=effective_actor,
+                    version=OPERATION_DIGEST_VERSION,
                 )
 
+                # Input / target / tool / manifest change invalidation check
                 if nr.operation_digest and nr.operation_digest != expected_digest:
                     if nr.approval_id:
                         try:
                             self.approval_registry.reject_operation(
-                                nr.approval_id, actor="system", reason="Invalidated: inputs changed"
+                                nr.approval_id,
+                                actor="system:workflow_service",
+                                reason="Invalidated: inputs, target, or protected operation changed",
                             )
                         except Exception:
                             pass
+                    reg_actor = actor or "local_operator"
+                    new_digest = compute_canonical_operation_digest(
+                        tool_name=protected_tool_name,
+                        tool_args=manifest,
+                        capability=capability,
+                        execution_id=workflow_run_id,
+                        actor=reg_actor,
+                        version=OPERATION_DIGEST_VERSION,
+                    )
                     ttl = float(node_def.config.get("ttl_seconds", 3600.0))
+                    deterministic_op_id = (
+                        f"op_gate_{workflow_run_id}_{node_def.id}_{new_digest[:8]}"
+                    )
                     new_op = self.approval_registry.register_operation(
-                        tool_name=tool_name,
-                        tool_args=curr_inputs,
+                        tool_name=protected_tool_name,
+                        tool_args=manifest,
                         risk_level=node_def.config.get("risk_level", "high"),
                         risk_score=float(node_def.config.get("risk_score", 0.9)),
                         session_id=workflow_run_id,
                         execution_id=workflow_run_id,
                         reason=node_def.config.get(
-                            "reason", f"Approval required for gate '{node_def.name}'"
+                            "reason",
+                            f"Approval required for protected operation '{protected_tool_name}' on target '{target_resource}'",
                         ),
                         suggestion=node_def.config.get("suggestion"),
                         diff=node_def.config.get("diff"),
                         ttl_seconds=ttl,
-                        actor=actor,
+                        actor=reg_actor,
                         capability=capability,
+                        operation_id=deterministic_op_id,
                     )
                     gate_invalidated_regs[node_id] = (
                         new_op.operation_id,
-                        expected_digest,
-                        curr_inputs,
+                        new_digest,
+                        manifest,
                     )
                     continue
 
-                # Check approval status
-                if not nr.approval_id:
-                    continue
-                op = self.approval_registry.get_operation(nr.approval_id)
-                if not op:
+                # Check approval status in central R2 registry
+                if not nr.approval_id or not op:
                     continue
                 if op.status == "rejected":
                     gate_failed[node_id] = op.decision_reason or "Gate rejected by operator"
                     any_failed = True
-                elif op.status == "approved":
-                    gate_cas_consume.append(node_id)
+                elif op.status == "approved" and not op.is_expired():
+                    # Central R2 Approval Service owns exact consumption via atomic CAS
+                    try:
+                        consumed_op = self.approval_registry.consume_exact_approval(
+                            approval_id=nr.approval_id,
+                            tool_name=protected_tool_name,
+                            tool_args=manifest,
+                            execution_id=workflow_run_id,
+                            actor=actor,  # only checks actor if gate configured a specific actor
+                            capability=capability,
+                        )
+                        gate_consumed_nodes[node_id] = consumed_op
+                    except (SecurityBoundaryViolation, OperationExpiredError, ValueError) as err:
+                        logger.warning(
+                            "Central R2 approval consumption rejected for gate '%s': %s",
+                            node_id,
+                            err,
+                        )
 
             # Stage 3: Check BLOCKED nodes (without holding DB lock)
             projected_status: Dict[str, NodeRunStatus] = {
@@ -829,7 +986,7 @@ class WorkflowService:
                 projected_status[nid] = NodeRunStatus.CANCELLED
             for nid in gate_failed:
                 projected_status[nid] = NodeRunStatus.FAILED
-            for nid in gate_cas_consume:
+            for nid in gate_consumed_nodes:
                 projected_status[nid] = NodeRunStatus.COMPLETED
 
             blocked_skipped: Dict[str, str] = {}
@@ -879,8 +1036,22 @@ class WorkflowService:
                         self.resolve_node_inputs(node_def, run.inputs, step_outputs)
                     )
                     if node_def.type == WorkflowNodeType.GATE:
+                        (
+                            protected_tool_name,
+                            capability,
+                            manifest,
+                            actor,
+                            target_resource,
+                        ) = self._build_gate_protected_operation_manifest(
+                            node_def,
+                            definition,
+                            workflow_run_id,
+                            run.inputs,
+                            step_outputs,
+                            nr.node_run_id,
+                        )
                         is_denied, reason = self._is_policy_denied(
-                            node_def, resolved_inputs, workflow_run_id
+                            node_def, manifest["arguments"], workflow_run_id, definition.id
                         )
                         if is_denied:
                             blocked_skipped[node_id] = reason or "Policy denied gate execution"
@@ -888,39 +1059,41 @@ class WorkflowService:
                             projected_status[node_id] = NodeRunStatus.FAILED
                             any_failed = True
                         else:
-                            tool_name = f"workflow_gate:{run.workflow_id}:{node_def.id}"
-                            capability = node_def.config.get(
-                                "capability", f"workflow_gate:{node_def.id}"
-                            )
-                            actor = node_def.config.get("actor", "local_operator")
+                            effective_actor = actor or "local_operator"
                             op_digest = compute_canonical_operation_digest(
-                                tool_name=tool_name,
-                                tool_args=resolved_inputs,
+                                tool_name=protected_tool_name,
+                                tool_args=manifest,
                                 capability=capability,
                                 execution_id=workflow_run_id,
-                                actor=actor,
+                                actor=effective_actor,
+                                version=OPERATION_DIGEST_VERSION,
                             )
                             ttl = float(node_def.config.get("ttl_seconds", 3600.0))
+                            deterministic_op_id = (
+                                f"op_gate_{workflow_run_id}_{node_def.id}_{op_digest[:8]}"
+                            )
                             pending_op = self.approval_registry.register_operation(
-                                tool_name=tool_name,
-                                tool_args=resolved_inputs,
+                                tool_name=protected_tool_name,
+                                tool_args=manifest,
                                 risk_level=node_def.config.get("risk_level", "high"),
                                 risk_score=float(node_def.config.get("risk_score", 0.9)),
                                 session_id=workflow_run_id,
                                 execution_id=workflow_run_id,
                                 reason=node_def.config.get(
-                                    "reason", f"Approval required for gate '{node_def.name}'"
+                                    "reason",
+                                    f"Approval required for protected operation '{protected_tool_name}' on target '{target_resource}'",
                                 ),
                                 suggestion=node_def.config.get("suggestion"),
                                 diff=node_def.config.get("diff"),
                                 ttl_seconds=ttl,
-                                actor=actor,
+                                actor=effective_actor,
                                 capability=capability,
+                                operation_id=deterministic_op_id,
                             )
                             blocked_gate_waiting[node_id] = (
                                 pending_op.operation_id,
                                 op_digest,
-                                resolved_inputs,
+                                manifest,
                             )
                             projected_status[node_id] = NodeRunStatus.WAITING_APPROVAL
                     else:
@@ -1030,44 +1203,26 @@ class WorkflowService:
                         ),
                     )
 
-                for nid in gate_cas_consume:
-                    nr = run.node_runs[nid]
+                for nid in gate_consumed_nodes:
                     node_def = node_map.get(nid)
-                    now_time = time.time()
+                    outs = self._derive_node_outputs(node_def, None, step_outputs)
+                    step_outputs[nid] = outs
                     cursor.execute(
                         """
-                        UPDATE approvals
-                        SET status = 'consumed', consumed_at = ?
-                        WHERE approval_id = ? AND status = 'approved' AND expires_at > ?
+                        UPDATE workflow_node_runs
+                        SET status = ?, outputs_json = ?, resolved_at = ?, completed_at = ?, updated_at = ?
+                        WHERE workflow_run_id = ? AND node_id = ?
                         """,
-                        (now_time, nr.approval_id, now_time),
+                        (
+                            NodeRunStatus.COMPLETED.value,
+                            json.dumps(outs),
+                            now_iso,
+                            now_iso,
+                            now_iso,
+                            workflow_run_id,
+                            nid,
+                        ),
                     )
-                    if cursor.rowcount == 1:
-                        if nr.approval_id in self.approval_registry._operations:
-                            self.approval_registry._operations[nr.approval_id].status = "consumed"
-                            self.approval_registry._operations[
-                                nr.approval_id
-                            ].consumed_at = now_time
-                        outs = self._derive_node_outputs(node_def, None, step_outputs)
-                        step_outputs[nid] = outs
-                        cursor.execute(
-                            """
-                            UPDATE workflow_node_runs
-                            SET status = ?, outputs_json = ?, resolved_at = ?, completed_at = ?, updated_at = ?
-                            WHERE workflow_run_id = ? AND node_id = ?
-                            """,
-                            (
-                                NodeRunStatus.COMPLETED.value,
-                                json.dumps(outs),
-                                now_iso,
-                                now_iso,
-                                now_iso,
-                                workflow_run_id,
-                                nid,
-                            ),
-                        )
-                    else:
-                        projected_status[nid] = NodeRunStatus.WAITING_APPROVAL
 
                 for nid, reason in blocked_skipped.items():
                     cursor.execute(
@@ -1371,10 +1526,18 @@ class WorkflowService:
                 raise WorkflowValidationError(f"Definition for node '{node_id}' not found.")
 
             # Policy denial cannot be overridden by human approval!
-            is_denied, reason = self._is_policy_denied(node_def, nr.inputs, workflow_run_id)
+            is_denied, reason = self._is_policy_denied(
+                node_def, nr.inputs, workflow_run_id, definition.id
+            )
             if is_denied:
                 raise WorkflowValidationError(
                     f"Policy denial cannot be overridden by human approval: {reason}"
+                )
+
+            required_actor = node_def.config.get("actor")
+            if required_actor and actor != required_actor:
+                raise WorkflowValidationError(
+                    f"Gate '{node_id}' requires approval by actor '{required_actor}', got '{actor}'."
                 )
 
             if nr.status != NodeRunStatus.WAITING_APPROVAL:
@@ -1386,11 +1549,27 @@ class WorkflowService:
                 raise WorkflowValidationError(f"Gate '{node_id}' has no associated approval_id.")
 
             # Approve via central approval registry
-            self.approval_registry.approve_operation(
+            approved_op, _ = self.approval_registry.approve_operation(
                 operation_id=nr.approval_id,
                 actor=actor,
                 execution_id=workflow_run_id,
             )
+
+            # Keep node_run operation_digest in sync with the approved record's digest
+            conn = self._get_connection()
+            try:
+                with conn:
+                    conn.execute(
+                        """
+                        UPDATE workflow_node_runs
+                        SET operation_digest = ?, updated_at = ?
+                        WHERE workflow_run_id = ? AND node_id = ?
+                        """,
+                        (approved_op.digest, current_timestamp_iso(), workflow_run_id, node_id),
+                    )
+            finally:
+                if not self._is_memory:
+                    conn.close()
 
         # Reconcile workflow run to advance gate and release dependents
         return self.reconcile_run(workflow_run_id)
@@ -1434,6 +1613,123 @@ class WorkflowService:
             )
 
         return self.reconcile_run(workflow_run_id)
+
+    def re_request_gate_approval(
+        self,
+        workflow_run_id: str,
+        node_id: str,
+        actor: str = "local_operator",
+        ttl_seconds: Optional[float] = None,
+    ) -> WorkflowRun:
+        """Explicitly re-request / renew an expired or pending approval for a suspended gate.
+
+        Allows recovery from expiration without auto-release or periodic spam.
+        """
+        with self._lock:
+            run = self.get_run(workflow_run_id)
+            if not run:
+                raise WorkflowRunNotFoundError(f"Workflow run '{workflow_run_id}' not found.")
+            if run.status != WorkflowRunStatus.WAITING_APPROVAL:
+                raise WorkflowValidationError(
+                    f"Workflow run '{workflow_run_id}' is in status '{run.status.value}', cannot renew gate."
+                )
+            nr = run.node_runs.get(node_id)
+            if (
+                not nr
+                or nr.node_type != WorkflowNodeType.GATE
+                or nr.status != NodeRunStatus.WAITING_APPROVAL
+            ):
+                raise WorkflowValidationError(f"Node '{node_id}' is not a waiting approval gate.")
+
+            definition = WorkflowDefinition.model_validate(run.definition_snapshot)
+            node_def = next((n for n in definition.nodes if n.id == node_id), None)
+            if not node_def:
+                raise WorkflowValidationError(f"Node '{node_id}' not found in definition snapshot.")
+
+            step_outputs: Dict[str, Dict[str, Any]] = {
+                nid: r.outputs for nid, r in run.node_runs.items() if r.outputs
+            }
+            (
+                protected_tool_name,
+                capability,
+                manifest,
+                default_actor,
+                target_resource,
+            ) = self._build_gate_protected_operation_manifest(
+                node_def, definition, workflow_run_id, run.inputs, step_outputs, nr.node_run_id
+            )
+
+            is_denied, reason = self._is_policy_denied(
+                node_def, manifest["arguments"], workflow_run_id, definition.id
+            )
+            if is_denied:
+                raise WorkflowValidationError(f"Cannot re-request approval: {reason}")
+
+            digest = compute_canonical_operation_digest(
+                tool_name=protected_tool_name,
+                tool_args=manifest,
+                capability=capability,
+                execution_id=workflow_run_id,
+                actor=actor or default_actor,
+                version=OPERATION_DIGEST_VERSION,
+            )
+
+            ttl = float(ttl_seconds or node_def.config.get("ttl_seconds", 3600.0))
+            now_time = int(time.time())
+            renewed_op_id = f"op_gate_{workflow_run_id}_{node_id}_{digest[:8]}_renew_{now_time}"
+
+            new_op = self.approval_registry.register_operation(
+                tool_name=protected_tool_name,
+                tool_args=manifest,
+                risk_level=node_def.config.get("risk_level", "high"),
+                risk_score=float(node_def.config.get("risk_score", 0.9)),
+                session_id=workflow_run_id,
+                execution_id=workflow_run_id,
+                reason=node_def.config.get(
+                    "reason",
+                    f"Renewed approval for protected operation '{protected_tool_name}' on target '{target_resource}'",
+                ),
+                suggestion=node_def.config.get("suggestion"),
+                diff=node_def.config.get("diff"),
+                ttl_seconds=ttl,
+                actor=actor or default_actor,
+                capability=capability,
+                operation_id=renewed_op_id,
+            )
+
+            now_iso = current_timestamp_iso()
+            conn = self._get_connection()
+            try:
+                with conn:
+                    conn.execute(
+                        """
+                        UPDATE workflow_node_runs
+                        SET approval_id = ?, operation_digest = ?, inputs_json = ?, suspended_at = ?, updated_at = ?
+                        WHERE workflow_run_id = ? AND node_id = ?
+                        """,
+                        (
+                            new_op.operation_id,
+                            digest,
+                            json.dumps(manifest),
+                            now_iso,
+                            now_iso,
+                            workflow_run_id,
+                            node_id,
+                        ),
+                    )
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+            logger.info(
+                "Renewed gate approval for run '%s' node '%s' (new approval: %s)",
+                workflow_run_id,
+                node_id,
+                new_op.operation_id,
+            )
+            return self.get_run(workflow_run_id)
+
+    renew_gate_approval = re_request_gate_approval
 
     def get_run(self, workflow_run_id: str) -> Optional[WorkflowRun]:
         """Retrieve complete state of a workflow run including all node run details."""
