@@ -1031,7 +1031,7 @@ A workflow can execute, pause for approval, survive application restart, resume 
 
 ## Tasks
 
-### [ ] R4.1 — Canonical Job domain
+### [x] R4.1 — Canonical Job domain
 
 - **Migration:** `NEW`
 - **Target release:** `0.5`
@@ -1041,11 +1041,11 @@ A workflow can execute, pause for approval, survive application restart, resume 
 - **Deliverables:**
   - Implement `Job`, `JobAttempt`, `JobEvent`, `JobDependency`, `JobArtifact`, `JobSchedule`.
 - **Acceptance Criteria:**
-  - [ ] Jobs persist independently of UI process.
+  - [x] Jobs persist independently of UI process.
 - **Required Evidence:**
   - Repository/migration tests.
 
-### [ ] R4.2 — Persistent local job queue
+### [x] R4.2 — Persistent local job queue
 
 - **Migration:** `NEW`
 - **Target release:** `0.5`
@@ -1055,11 +1055,11 @@ A workflow can execute, pause for approval, survive application restart, resume 
 - **Deliverables:**
   - SQLite-backed queue with leasing/claiming semantics.
 - **Acceptance Criteria:**
-  - [ ] Restart does not lose queued/running metadata.
+  - [x] Restart does not lose queued/running metadata.
 - **Required Evidence:**
   - Crash/restart integration test.
 
-### [ ] R4.3 — Worker service
+### [x] R4.3 — Worker service
 
 - **Migration:** `NEW`
 - **Target release:** `0.5`
@@ -1071,11 +1071,11 @@ A workflow can execute, pause for approval, survive application restart, resume 
   - Graceful shutdown.
   - Lease heartbeat.
 - **Acceptance Criteria:**
-  - [ ] Worker crash releases/reclaims jobs according to policy.
+  - [x] Worker crash releases/reclaims jobs according to policy.
 - **Required Evidence:**
   - Worker failure tests.
 
-### [ ] R4.4 — Idempotency and retry model
+### [x] R4.4 — Idempotency and retry model
 
 - **Migration:** `NEW`
 - **Target release:** `0.5`
@@ -1087,11 +1087,11 @@ A workflow can execute, pause for approval, survive application restart, resume 
   - Retry/backoff policy.
   - Non-retryable error classification.
 - **Acceptance Criteria:**
-  - [ ] Repeated delivery executes protected side effect once.
+  - [x] Repeated delivery executes protected side effect once.
 - **Required Evidence:**
   - Idempotency E2E fixture.
 
-### [ ] R4.5 — Timeout, pause, resume and cancellation
+### [x] R4.5 — Timeout, pause, resume and cancellation
 
 - **Migration:** `NEW`
 - **Target release:** `0.5`
@@ -1101,14 +1101,14 @@ A workflow can execute, pause for approval, survive application restart, resume 
 - **Deliverables:**
   - Job control API/state transitions.
 - **Acceptance Criteria:**
-  - [ ] Control state persists across restart.
+  - [x] Control state persists across restart.
 - **Required Evidence:**
   - Job-control tests.
 
 ### [ ] R4.6 — Priority and concurrency controls
 
 - **Migration:** `NEW`
-- **Target release:** `0.6`
+- **Target release:** `0.6` (DEFERRED TO 0.6 per canonical roadmap)
 - **Initial maturity:** `S0` unless `docs/STATUS.md` verifies a higher level from legacy work.
 - **Dependencies:** R3.3, R4.3
 - **User Story:** As a user, I want interactive work to remain responsive while background tasks run so automation does not monopolize my machine.
@@ -1121,7 +1121,7 @@ A workflow can execute, pause for approval, survive application restart, resume 
 - **Required Evidence:**
   - Load tests.
 
-### [ ] R4.7 — Timezone-aware scheduler
+### [x] R4.7 — Timezone-aware scheduler
 
 - **Migration:** `REFACTOR`
 - **Target release:** `0.5`
@@ -1133,11 +1133,11 @@ A workflow can execute, pause for approval, survive application restart, resume 
   - IANA timezone support.
   - Missed-run policy.
 - **Acceptance Criteria:**
-  - [ ] DST and restart fixtures produce exactly intended occurrences.
+  - [x] DST and restart fixtures produce exactly intended occurrences.
 - **Required Evidence:**
   - Scheduler time tests.
 
-### [ ] R4.8 — Absorb legacy Phase 7 runtime
+### [x] R4.8 — Absorb legacy Phase 7 runtime
 
 - **Migration:** `INTEGRATE`
 - **Target release:** `0.5`
@@ -1148,11 +1148,11 @@ A workflow can execute, pause for approval, survive application restart, resume 
   - Map legacy workflow schema/nodes/runtime into canonical workflow service.
   - Preserve compatible serialization.
 - **Acceptance Criteria:**
-  - [ ] Legacy workflow can execute through jobs/executions with no shadow telemetry/policy path.
+  - [x] Legacy workflow can execute through jobs/executions with no shadow telemetry/policy path.
 - **Required Evidence:**
   - Workflow compatibility suite.
 
-### [ ] R4.9 — Human-in-the-loop workflow gates
+### [x] R4.9 — Human-in-the-loop workflow gates
 
 - **Migration:** `INTEGRATE`
 - **Target release:** `0.5`
@@ -1163,7 +1163,7 @@ A workflow can execute, pause for approval, survive application restart, resume 
   - Map workflow gate to central approval service.
   - Persist suspended state.
 - **Acceptance Criteria:**
-  - [ ] App restart during approval does not lose gate; changed operation requires new approval.
+  - [x] App restart during approval does not lose gate; changed operation requires new approval.
 - **Required Evidence:**
   - HITL restart E2E.
 

@@ -1,7 +1,7 @@
 # Agent Engine — Canonical Implementation Status & Capability Matrix
 
 > **Status:** Authoritative Implementation Reality  
-> **Updated:** October 9, 2026 (Milestone R3 Model & Resource Hub CLOSED / FROZEN FOR 0.5 AT S1 per CTO Review)  
+> **Updated:** October 10, 2026 (Milestone R4 Durable Founder Workflow Substrate CLOSED / FROZEN FOR 0.5 AT S1 per CTO Review)  
 > **Governing Release:** 0.5 Nadir Founder MVP  
 
 ---
@@ -845,9 +845,180 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
 
 ---
 
-## 8. Active Test Suite & Deprecation Warnings Log
+## 8. Canonical Task Tracking Matrix (Stage R4 — Durable Founder Workflow Substrate)
 
-- **Full Regression Suite:** `1049 passed, 1 skipped, 3 warnings in 122.94s` (`uv run pytest -q`)
+```yaml
+- id: R4.1
+  title: "Canonical Job domain"
+  task_status: done
+  capability_maturity: S1
+  migration: NEW
+  owner: "Durable Execution Architecture"
+  depends_on: ["R1.1"]
+  evidence:
+    - "core/jobs/models.py"
+    - "core/jobs/repository.py"
+    - "core/jobs/migrations.py"
+    - "tests/test_r4_1_job_domain.py"
+  notes: "S1 — Implemented and implementation-tested (commit ec6a7f5). Delivered Job, JobAttempt, JobEvent, JobDependency, JobArtifact, JobSchedule models with SQLite schema migrations (v1-v9) and repository operations."
+
+- id: R4.2
+  title: "Persistent local job queue"
+  task_status: done
+  capability_maturity: S1
+  migration: NEW
+  owner: "Durable Execution Architecture"
+  depends_on: ["R4.1"]
+  evidence:
+    - "core/jobs/queue.py"
+    - "tests/test_r4_2_job_queue.py"
+  notes: "S1 — Implemented and implementation-tested (commit dce1cc3). Persistent SQLite-backed queue with atomic leasing/claiming semantics, heartbeat TTLs, and crash-resilient queue entry states."
+
+- id: R4.3
+  title: "Worker service"
+  task_status: done
+  capability_maturity: S1
+  migration: NEW
+  owner: "Durable Execution Architecture"
+  depends_on: ["R4.2"]
+  evidence:
+    - "core/jobs/worker.py"
+    - "services/python/worker.py"
+    - "tests/test_r4_3_worker_service.py"
+  notes: "S1 — Implemented and implementation-tested (commit 68f83a0). Multi-worker standalone process service with heartbeat lease renewal, crash reclamation, and graceful SIGTERM/SIGINT shutdown."
+
+- id: R4.4
+  title: "Idempotency and retry model"
+  task_status: done
+  capability_maturity: S1
+  migration: NEW
+  owner: "Durable Execution Architecture"
+  depends_on: ["R4.3"]
+  evidence:
+    - "core/jobs/idempotency.py"
+    - "core/jobs/retry.py"
+    - "tests/test_r4_4_idempotency_and_retry.py"
+  notes: "S1 — Implemented and implementation-tested (commit 3a2c45e). Canonical idempotency keys, exponential backoff with jitter, retry policies, and non-retryable error classification preventing duplicate side effects."
+
+- id: R4.5
+  title: "Timeout, pause, resume and cancellation"
+  task_status: done
+  capability_maturity: S1
+  migration: NEW
+  owner: "Durable Execution Architecture"
+  depends_on: ["R4.3", "R1.9"]
+  evidence:
+    - "core/jobs/control.py"
+    - "tests/test_r4_5_job_control.py"
+  notes: "S1 — Implemented and implementation-tested (commit dad6b9c). Cooperative job control state machine supporting timeout budgets, pause, resume, and cancellation persisting across restarts."
+
+- id: R4.6
+  title: "Priority and concurrency controls"
+  task_status: deferred
+  capability_maturity: "Deferred to 0.6"
+  migration: NEW
+  owner: "Durable Execution Architecture"
+  depends_on: ["R3.3", "R4.3"]
+  evidence: []
+  notes: "DEFERRED to 0.6 per canonical roadmap. Advanced priority scheduling and resource concurrency limits deferred to 0.6 release cycle."
+
+- id: R4.7
+  title: "Timezone-aware scheduler"
+  task_status: done
+  capability_maturity: S1
+  migration: REFACTOR
+  owner: "Durable Execution Architecture"
+  depends_on: ["R4.2"]
+  evidence:
+    - "core/jobs/scheduler.py"
+    - "tests/test_r4_7_scheduler.py"
+  notes: "S1 — Implemented and implementation-tested (commit c69b61d). Timezone-aware cron/interval scheduler supporting IANA timezones, daylight saving transitions, catch-up policies, and crash recovery."
+
+- id: R4.8
+  title: "Absorb legacy Phase 7 runtime"
+  task_status: done
+  capability_maturity: S1
+  migration: INTEGRATE
+  owner: "Workflow Architecture"
+  depends_on: ["R0.8", "R4.1", "R1.3"]
+  evidence:
+    - "core/workflows/service.py"
+    - "tests/test_r4_8_workflow_convergence.py"
+  notes: "S1 — Implemented and implementation-tested (commit fec749a). Integrated legacy Phase 7 workflow definitions and DAG execution into canonical WorkflowService backed by durable jobs and ExecutionCoordinator."
+
+- id: R4.9
+  title: "Human-in-the-loop workflow gates"
+  task_status: done
+  capability_maturity: S1
+  migration: INTEGRATE
+  owner: "Security & Workflow Architecture"
+  depends_on: ["R2.4", "R4.8"]
+  evidence:
+    - "core/safety/pending.py"
+    - "core/storage/sqlite.py"
+    - "core/workflows/parser.py"
+    - "core/workflows/service.py"
+    - "tests/test_r4_9_workflow_hitl.py"
+    - "tests/test_r4_hard_exit.py"
+  notes: "S1 — Implemented and implementation-tested. Completed R4.9 exact-operation approval binding and hard-exit suite: (1) Protected operation manifest: canonical manifest capturing downstream operation/tool identity, capability, target resource, resolved payload, artifact digests, and provenance tool (workflow_gate:<workflow_id>:<node_id>). (2) Exact cryptographic digest: computed via canonical R2 compute_operation_digest, eliminating unverified gate approval bypasses. (3) Option A constrained semantics: enforced in WorkflowParser that gate nodes govern at most one downstream edge. (4) 5 exact invalidations: changed arguments, changed target, changed downstream operation, changed artifact inputs, and policy rejection invalidate gate approval. (5) Central R2-owned consumption: consume_exact_approval() in PendingOperationRegistry performs atomic CAS in SQLite approvals table. (6) Cross-process deduplication: deterministic operation IDs prevent duplicate approval rows during multi-coordinator races. (7) Non-deadlocking expiry renewal: expired gates fail closed; re_request_gate_approval() enables operator renewal. (8) End-to-end positive and negative hard-exit test suite proving exact-once execution and failure containment. 20/20 HITL tests passing, 6/6 hard-exit tests passing."
+
+- id: R4.10
+  title: "Workflow versioning and reproducibility"
+  task_status: deferred
+  capability_maturity: "Deferred to 0.6"
+  migration: NEW
+  owner: "Workflow Architecture"
+  depends_on: ["R4.8"]
+  evidence: []
+  notes: "DEFERRED to 0.6 per canonical roadmap. Immutable versioning and reproducibility deferred to 0.6."
+
+- id: R4.11
+  title: "Visual workflow builder as editor only"
+  task_status: deferred
+  capability_maturity: "Deferred to 0.6"
+  migration: REFACTOR
+  owner: "Workflow Architecture"
+  depends_on: ["R4.8", "R4.10"]
+  evidence: []
+  notes: "DEFERRED to 0.6 per canonical roadmap. React Flow visual builder integration deferred to 0.6."
+
+- id: R4.12
+  title: "Programmatic tool-execution sandbox"
+  task_status: deferred
+  capability_maturity: "Deferred to 0.6"
+  migration: NEW
+  owner: "Security & Sandbox Architecture"
+  depends_on: ["R2.8", "R4.3"]
+  evidence: []
+  notes: "DEFERRED to 0.6 per canonical roadmap. Programmatic multi-tool execution scripts deferred to 0.6."
+
+- id: R4.13
+  title: "ExecutionTarget abstraction"
+  task_status: deferred
+  capability_maturity: "Deferred to 0.6"
+  migration: NEW
+  owner: "Runtime Architecture"
+  depends_on: ["R2.8", "R4.3"]
+  evidence: []
+  notes: "DEFERRED to 0.6 per canonical roadmap. Distributed / container / SSH execution targets deferred to 0.6."
+```
+
+---
+
+## 9. Active Test Suite & Deprecation Warnings Log
+
+- **Full Regression Suite:** `1250 passed, 1 skipped, 3 warnings in 257.96s` (`uv run pytest -q`)
+- **Combined R4 Substrate Suites:** `208 passed in 39.5s`
+  - `R4 Hard-Exit E2E Suite:` `6 passed` (`tests/test_r4_hard_exit.py`)
+  - `R4.9 Workflow HITL Suite:` `20 passed` (`tests/test_r4_9_workflow_hitl.py`)
+  - `R4.8 Workflow Convergence Suite:` `30 passed` (`tests/test_r4_8_workflow_convergence.py`)
+  - `R4.7 Timezone Scheduler Suite:` `26 passed` (`tests/test_r4_7_scheduler.py`)
+  - `R4.5 Job Control Suite:` `24 passed` (`tests/test_r4_5_job_control.py`)
+  - `R4.4 Idempotency & Retry Suite:` `20 passed` (`tests/test_r4_4_idempotency_and_retry.py`)
+  - `R4.3 Worker Service Suite:` `22 passed` (`tests/test_r4_3_worker_service.py`)
+  - `R4.2 Job Queue Suite:` `32 passed` (`tests/test_r4_2_job_queue.py`)
+  - `R4.1 Job Domain Suite:` `28 passed` (`tests/test_r4_1_job_domain.py`)
+  - `Legacy Absorbed Workflows Suite:` `25 passed` (`tests/test_workflows.py`)
 - **Combined R3 Model Layer Suites:** `241 passed, 1 skipped in 35.73s` (`uv run pytest tests/test_r3_*.py`)
 - **R3 Hard-Exit E2E Suite:** `5 passed, 1 skipped in 9.22s` (`tests/test_r3_hard_exit_e2e.py`)
 - **R3.11 Provider Connection Verification Suite:** `24 passed in 4.08s` (`uv run pytest tests/test_r3_provider_verification.py`)
@@ -875,7 +1046,6 @@ The legacy roadmap contained planned but unimplemented phases. These were never 
   - `uv run ruff check`: passed (`All checks passed!`)
   - `uv run ruff format --check`: passed on all modified files
 - **Desktop Tauri & Frontend Workspace:**
-
   - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml`: passed (`0.77s`)
   - `pnpm -r build`: passed (`5.58s`)
 - **Documented Upstream Warnings (3 known upstream warnings, 0 new unexplained/project-owned warnings):**
