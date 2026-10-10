@@ -315,13 +315,14 @@ class SQLiteJobRepository(JobRepository):
                     )
                     next_attempt_number = cursor.fetchone()[0]
 
+                    attempt_lease_gen = lease_generation if lease_generation is not None else 0
                     attempt = JobAttempt(
                         job_id=job_id,
                         attempt_number=next_attempt_number,
                         execution_id=execution_id,
                         status=JobAttemptStatus.PENDING,
                         worker_id=worker_id,
-                        lease_generation=lease_generation,
+                        lease_generation=attempt_lease_gen,
                         started_at=current_timestamp_iso(),
                     )
 
@@ -340,7 +341,7 @@ class SQLiteJobRepository(JobRepository):
                             attempt.execution_id,
                             attempt.status.value,
                             attempt.worker_id,
-                            attempt.lease_generation,
+                            attempt_lease_gen,
                             attempt.started_at,
                             attempt.finished_at,
                             attempt.failure_classification,

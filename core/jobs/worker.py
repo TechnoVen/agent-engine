@@ -51,12 +51,15 @@ from core.jobs.exceptions import (
     UnsupportedJobTypeError,
 )
 from core.jobs.models import (
+    EXECUTION_OUTCOME_UNKNOWN,
+    FAILURE_CLASSIFICATION_WORKER_CRASH_OR_LEASE_LOST,
     Job,
     JobAttempt,
     JobAttemptStatus,
     JobEventType,
     JobLease,
     JobStatus,
+    SIDE_EFFECT_STATE_UNKNOWN,
     current_timestamp_iso,
     format_utc_iso,
     parse_utc_iso,
@@ -363,14 +366,16 @@ class JobWorker:
                         UPDATE job_attempts
                         SET status = 'failed',
                             finished_at = ?,
-                            failure_classification = 'worker_crash_or_lease_lost',
+                            failure_classification = ?,
                             failure_message = ?
                         WHERE attempt_id = ?
                         """,
                         (
                             now_iso,
+                            FAILURE_CLASSIFICATION_WORKER_CRASH_OR_LEASE_LOST,
                             f"Prior worker {prior_worker} (lease gen {prior_gen}) lost lease or crashed; "
-                            f"reconciled on reclaim by worker {self.worker_id} (lease gen {lease.lease_generation}).",
+                            f"reconciled on reclaim by worker {self.worker_id} (lease gen {lease.lease_generation}). "
+                            f"Execution outcome and external side-effect state remain UNKNOWN.",
                             prior_id,
                         ),
                     )
@@ -401,6 +406,8 @@ class JobWorker:
                                     "prior_lease_generation": prior_gen,
                                     "reclaiming_worker_id": self.worker_id,
                                     "reclaiming_lease_generation": lease.lease_generation,
+                                    "execution_outcome": EXECUTION_OUTCOME_UNKNOWN,
+                                    "side_effect_state": SIDE_EFFECT_STATE_UNKNOWN,
                                 }
                             ),
                         ),

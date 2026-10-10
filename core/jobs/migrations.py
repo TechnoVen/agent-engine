@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from typing import Callable, List, Tuple
+from typing import Callable, List, Optional, Tuple
 
 from core.jobs.models import current_timestamp_iso
 
@@ -142,9 +142,6 @@ def _migration_002_persistent_job_queue(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_job_queue_job_id ON job_queue(job_id);",
         "ALTER TABLE job_events ADD COLUMN sequence_number INTEGER NOT NULL DEFAULT 0;",
         "CREATE INDEX IF NOT EXISTS idx_events_job_seq ON job_events(job_id, sequence_number);",
-        "ALTER TABLE job_attempts ADD COLUMN worker_id TEXT;",
-        "ALTER TABLE job_attempts ADD COLUMN lease_generation INTEGER;",
-        "CREATE INDEX IF NOT EXISTS idx_attempts_worker_gen ON job_attempts(worker_id, lease_generation);",
     ]
 
     for stmt in ddl_statements:
@@ -160,14 +157,37 @@ def _migration_002_persistent_job_queue(conn: sqlite3.Connection) -> None:
     conn.execute("UPDATE job_events SET sequence_number = rowid WHERE sequence_number = 0;")
 
 
+def _migration_003_worker_attempt_ownership(conn: sqlite3.Connection) -> None:
+    """Migration 003: Worker attempt ownership and lease generation tracking."""
+    ddl_statements = [
+        "ALTER TABLE job_attempts ADD COLUMN worker_id TEXT;",
+        "ALTER TABLE job_attempts ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 0;",
+        "CREATE INDEX IF NOT EXISTS idx_attempts_worker_gen ON job_attempts(worker_id, lease_generation);",
+    ]
+
+    for stmt in ddl_statements:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" in str(e).lower():
+                pass
+            else:
+                raise
+
+
 MIGRATION_REGISTRY: List[Tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
     (1, "001_initial_job_domain", _migration_001_initial_job_domain),
     (2, "002_persistent_job_queue", _migration_002_persistent_job_queue),
+    (3, "003_worker_attempt_ownership", _migration_003_worker_attempt_ownership),
 ]
 
 
-def apply_job_migrations(conn: sqlite3.Connection) -> int:
+def apply_job_migrations(conn: sqlite3.Connection, target_version: Optional[int] = None) -> int:
     """Apply all pending job migrations within transaction boundaries.
+
+    Args:
+        conn: Open SQLite database connection.
+        target_version: Optional maximum migration version to apply. If None, applies all.
 
     Returns:
         int: Number of newly applied migrations.
@@ -179,6 +199,8 @@ def apply_job_migrations(conn: sqlite3.Connection) -> int:
 
     applied_count = 0
     for version, name, migration_func in MIGRATION_REGISTRY:
+        if target_version is not None and version > target_version:
+            continue
         if version not in applied_versions:
             logger.info("Applying job domain migration %d: %s", version, name)
             with conn:

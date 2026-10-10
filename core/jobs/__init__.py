@@ -38,6 +38,9 @@ from core.jobs.migrations import (
     get_current_job_schema_version,
 )
 from core.jobs.models import (
+    EXECUTION_OUTCOME_UNKNOWN,
+    FAILURE_CLASSIFICATION_WORKER_CRASH_OR_LEASE_LOST,
+    SIDE_EFFECT_STATE_UNKNOWN,
     TERMINAL_JOB_STATES,
     VALID_JOB_TRANSITIONS,
     Job,
@@ -95,6 +98,9 @@ __all__ = [
     "JobDependencyType",
     "VALID_JOB_TRANSITIONS",
     "TERMINAL_JOB_STATES",
+    "FAILURE_CLASSIFICATION_WORKER_CRASH_OR_LEASE_LOST",
+    "EXECUTION_OUTCOME_UNKNOWN",
+    "SIDE_EFFECT_STATE_UNKNOWN",
     # Exceptions
     "JobDomainError",
     "JobNotFoundError",

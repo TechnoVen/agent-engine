@@ -210,6 +210,12 @@ class JobAttemptStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+# Canonical Failure Classifications and Outcome Uncertainty Semantics (R4.3 & R4.4)
+FAILURE_CLASSIFICATION_WORKER_CRASH_OR_LEASE_LOST = "worker_crash_or_lease_lost"
+EXECUTION_OUTCOME_UNKNOWN = "UNKNOWN"
+SIDE_EFFECT_STATE_UNKNOWN = "UNKNOWN"
+
+
 class JobEventType(str, Enum):
     """Event types emitted during job lifecycle changes."""
 
@@ -285,7 +291,7 @@ class JobAttempt(BaseModel):
     status: JobAttemptStatus = Field(default=JobAttemptStatus.PENDING)
     worker_id: Optional[str] = Field(None, description="Authoritative worker identifier")
     lease_generation: Optional[int] = Field(
-        None, description="Queue lease generation under which attempt was started"
+        default=0, description="Queue lease generation under which attempt was started"
     )
     started_at: str = Field(default_factory=current_timestamp_iso)
     finished_at: Optional[str] = None

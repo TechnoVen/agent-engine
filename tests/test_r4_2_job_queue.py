@@ -344,9 +344,9 @@ def test_lease_fencing_generation_increment_on_reclaim(
     """Verify that an expired lease can be reclaimed and increments lease_generation."""
     job = repo.create_job(Job(job_type="fencing_job"))
     repo.update_state(job.job_id, JobStatus.READY)
-    queue.enqueue(job.job_id)
-
     t0 = datetime(2026, 10, 10, 10, 0, 0, tzinfo=timezone.utc)
+    queue.enqueue(job.job_id, available_at=t0)
+
     lease_gen1 = queue.claim_next("worker_A", lease_duration_seconds=60, now=t0)
     assert lease_gen1 is not None
     assert lease_gen1.lease_owner == "worker_A"
@@ -387,9 +387,9 @@ def test_lease_extension_contract(repo: SQLiteJobRepository, queue: SQLiteJobQue
     """Verify extend_lease extends unexpired lease and rejects expired leases."""
     job = repo.create_job(Job(job_type="extend_job"))
     repo.update_state(job.job_id, JobStatus.READY)
-    queue.enqueue(job.job_id)
-
     t0 = datetime(2026, 10, 10, 10, 0, 0, tzinfo=timezone.utc)
+    queue.enqueue(job.job_id, available_at=t0)
+
     lease = queue.claim_next("worker_heartbeat", lease_duration_seconds=60, now=t0)
     assert lease is not None
 
@@ -423,9 +423,9 @@ def test_lease_release_returns_to_claimable_state(
     """Verify release_lease clears active lease and makes job claimable immediately."""
     job = repo.create_job(Job(job_type="release_job"))
     repo.update_state(job.job_id, JobStatus.READY)
-    queue.enqueue(job.job_id)
-
     t0 = datetime(2026, 10, 10, 10, 0, 0, tzinfo=timezone.utc)
+    queue.enqueue(job.job_id, available_at=t0)
+
     lease = queue.claim_next("worker_X", lease_duration_seconds=300, now=t0)
     assert lease is not None
 
@@ -472,8 +472,8 @@ def test_restart_persistence_proof_across_queue_instances(file_db_path: str) -> 
 
     t_start = datetime(2026, 10, 10, 8, 0, 0, tzinfo=timezone.utc)
     queue1 = SQLiteJobQueue(db_path=file_db_path)
-    queue1.enqueue(j_a.job_id)
-    queue1.enqueue(j_b.job_id)
+    queue1.enqueue(j_a.job_id, available_at=t_start)
+    queue1.enqueue(j_b.job_id, available_at=t_start)
 
     lease_a = queue1.claim_next("worker_primary", lease_duration_seconds=100, now=t_start)
     assert lease_a is not None
@@ -554,8 +554,8 @@ def test_migration_v1_to_v2_preserves_existing_data(tmp_path: Path) -> None:
 
         assert get_current_job_schema_version(conn) == 1
 
-        # 3. Apply pending migrations (Migration 2)
-        applied = apply_job_migrations(conn)
+        # 3. Apply pending migrations up to Migration 2
+        applied = apply_job_migrations(conn, target_version=2)
         assert applied == 1
         assert get_current_job_schema_version(conn) == 2
 
