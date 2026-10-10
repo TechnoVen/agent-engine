@@ -44,9 +44,11 @@ import pytest
 from core.jobs.control import JobControlService
 from core.jobs.cron import (
     get_next_occurrence,
+    validate_cron_expression,
     validate_iana_timezone,
 )
 from core.jobs.exceptions import (
+    InvalidScheduleExpressionError,
     InvalidTimezoneError,
     StaleScheduleGenerationError,
 )
@@ -144,8 +146,10 @@ def test_daily_local_time_recurrence_and_offset_changes() -> None:
 
 def test_spring_forward_behavior_deterministic() -> None:
     """In Europe/Berlin on 2026-03-29, 02:00 jumps to 03:00.
-    A job scheduled for 02:30 has no physical local occurrence on that day,
-    so it cleanly skips to the next physical calendar day (2026-03-30 02:30).
+    A job scheduled for 02:30 has no physical local occurrence on that day.
+    Canonical 0.5 policy: nonexistent local scheduled time -> SKIP THAT OCCURRENCE.
+    Result: no occurrence on 2026-03-29 (not shifted to 03:00, 03:30, or next valid minute).
+    The next normal occurrence is 2026-03-30 02:30 Europe/Berlin.
     """
     cron_expr = "30 2 * * *"  # 02:30 daily
     tz_name = "Europe/Berlin"
@@ -154,7 +158,8 @@ def test_spring_forward_behavior_deterministic() -> None:
     search_dt = datetime(2026, 3, 28, 23, 0, tzinfo=timezone.utc)
     next_utc, next_local = get_next_occurrence(cron_expr, tz_name, after_dt=search_dt)
 
-    # 2026-03-29 02:30 was skipped! Next is 2026-03-30 02:30 CEST (= 00:30 UTC)
+    # 2026-03-29 02:30 was skipped! Absolutely no occurrence on 2026-03-29.
+    assert next_local.date().isoformat() == "2026-03-30"
     assert next_local.year == 2026
     assert next_local.month == 3
     assert next_local.day == 30
@@ -170,8 +175,10 @@ def test_spring_forward_behavior_deterministic() -> None:
 
 def test_fall_back_creates_one_intended_occurrence() -> None:
     """In Europe/Berlin on 2026-10-25, 02:00 to 03:00 is repeated twice (CEST and CET).
-    A job scheduled for 02:30 must materialize exactly once (at fold=0, 00:30 UTC),
-    not twice.
+    Canonical 0.5 policy: ambiguous repeated local time executes exactly once,
+    choosing the FIRST occurrence (fold=0, UTC offset +02:00).
+    Resulting UTC: 2026-10-25T00:30:00Z.
+    There is NO second materialization at 2026-10-25T01:30:00Z.
     """
     cron_expr = "30 2 * * *"  # 02:30 daily
     tz_name = "Europe/Berlin"
@@ -180,36 +187,47 @@ def test_fall_back_creates_one_intended_occurrence() -> None:
     search_dt = datetime(2026, 10, 24, 22, 0, tzinfo=timezone.utc)
     next_utc, next_local = get_next_occurrence(cron_expr, tz_name, after_dt=search_dt)
 
-    # First occurrence is 02:30 CEST (fold=0), which is 00:30 UTC
+    # First occurrence is 02:30 CEST with fold=0
+    assert next_local.fold == 0
+    assert next_local.utcoffset() == timedelta(hours=2)
     assert next_utc == datetime(2026, 10, 25, 0, 30, tzinfo=timezone.utc)
     assert next_local.hour == 2
     assert next_local.minute == 30
 
     # If we search after 00:30 UTC, the next occurrence must be the next day (2026-10-26 02:30 CET = 01:30 UTC),
-    # NOT the second ambiguous fold of the same day!
-    next_next_utc, _ = get_next_occurrence(cron_expr, tz_name, after_dt=next_utc)
+    # NOT the second ambiguous fold of the same day (2026-10-25 01:30 UTC)!
+    next_next_utc, next_next_local = get_next_occurrence(cron_expr, tz_name, after_dt=next_utc)
+    assert next_next_utc != datetime(2026, 10, 25, 1, 30, tzinfo=timezone.utc)
     assert next_next_utc == datetime(2026, 10, 26, 1, 30, tzinfo=timezone.utc)
+    assert next_next_local.day == 26
 
 
 # ------------------------------------------------------------------------------
-# 7: Non-DST Timezone Semantics
+# 7: Non-DST Timezone Semantics (Asia/Dhaka and Asia/Tokyo)
 # ------------------------------------------------------------------------------
 
 
 def test_non_dst_timezone_correct() -> None:
-    """Asia/Dhaka (+06:00, no DST) consistently evaluates across all seasons."""
+    """Asia/Dhaka (+06:00) and Asia/Tokyo (+09:00) have no DST and evaluate consistently."""
     cron_expr = "0 10 * * *"  # 10:00 local
-    tz_name = "Asia/Dhaka"
 
-    # In January: 10:00 Dhaka = 04:00 UTC
+    # 1. Asia/Dhaka (+06:00, constant)
+    tz_dhaka = "Asia/Dhaka"
     jan_search = datetime(2026, 1, 10, 0, 0, tzinfo=timezone.utc)
-    next_utc_jan, _ = get_next_occurrence(cron_expr, tz_name, after_dt=jan_search)
+    next_utc_jan, _ = get_next_occurrence(cron_expr, tz_dhaka, after_dt=jan_search)
     assert next_utc_jan == datetime(2026, 1, 10, 4, 0, tzinfo=timezone.utc)
 
-    # In July: 10:00 Dhaka = 04:00 UTC (no DST change)
     jul_search = datetime(2026, 7, 10, 0, 0, tzinfo=timezone.utc)
-    next_utc_jul, _ = get_next_occurrence(cron_expr, tz_name, after_dt=jul_search)
+    next_utc_jul, _ = get_next_occurrence(cron_expr, tz_dhaka, after_dt=jul_search)
     assert next_utc_jul == datetime(2026, 7, 10, 4, 0, tzinfo=timezone.utc)
+
+    # 2. Asia/Tokyo (+09:00, constant)
+    tz_tokyo = "Asia/Tokyo"
+    next_utc_tokyo_jan, _ = get_next_occurrence(cron_expr, tz_tokyo, after_dt=jan_search)
+    assert next_utc_tokyo_jan == datetime(2026, 1, 10, 1, 0, tzinfo=timezone.utc)
+
+    next_utc_tokyo_jul, _ = get_next_occurrence(cron_expr, tz_tokyo, after_dt=jul_search)
+    assert next_utc_tokyo_jul == datetime(2026, 7, 10, 1, 0, tzinfo=timezone.utc)
 
 
 # ------------------------------------------------------------------------------
@@ -838,3 +856,215 @@ def test_cli_runner_once_flag(tmp_path: Path) -> None:
     # Occurrence was materialized
     occs = scheduler.list_occurrences(schedule_id=sch.schedule_id)
     assert len(occs) >= 1
+
+
+# ------------------------------------------------------------------------------
+# 28: Unsupported Cron Syntax Rejected at Creation/Update
+# ------------------------------------------------------------------------------
+
+
+def test_cron_unsupported_syntax_rejected_at_validation(tmp_path: Path) -> None:
+    """Unsupported non-standard syntax (@yearly, @daily, L, W, ?, #, seconds) fails immediately."""
+    db_file = tmp_path / "syntax_rejection.db"
+    scheduler = SchedulerService(db_path=str(db_file))
+
+    unsupported_expressions = [
+        "@yearly",
+        "@daily",
+        "@hourly",
+        "0 0 * * ?",
+        "0 0 1W * *",
+        "0 0 15L * *",
+        "0 0 * * 1#2",
+        "* * * * * *",  # 6 fields (seconds)
+        "0 0 0 1 1 2026",  # 6 fields with year
+    ]
+
+    for expr in unsupported_expressions:
+        # Fails at standalone validation
+        with pytest.raises(InvalidScheduleExpressionError):
+            validate_cron_expression(expr)
+
+        # Fails at schedule creation time
+        with pytest.raises(InvalidScheduleExpressionError):
+            scheduler.create_schedule(cron_expression=expr, timezone="UTC")
+
+    # Fails at schedule update time
+    valid_sch = scheduler.create_schedule(cron_expression="0 0 * * *", timezone="UTC")
+    with pytest.raises(InvalidScheduleExpressionError):
+        scheduler.update_schedule(valid_sch.schedule_id, cron_expression="@hourly")
+
+
+# ------------------------------------------------------------------------------
+# 29: Day-of-Month and Day-of-Week Vixie Cron OR Semantics
+# ------------------------------------------------------------------------------
+
+
+def test_vixie_cron_dom_dow_or_semantics() -> None:
+    """Traditional cron semantics: if DOM and DOW are both restricted, match either (OR).
+    Example: 0 9 1 * 1 means 09:00 on the 1st of the month OR 09:00 on Mondays.
+    """
+    cron_expr = "0 9 1 * 1"
+    # 2026-09-01 is Tuesday (1st of month) -> MATCH
+    # 2026-09-07 is Monday (7th of month) -> MATCH
+    # 2026-09-14 is Monday (14th of month) -> MATCH
+    start_dt = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
+
+    # 1st occurrence: 2026-09-01 (1st of month)
+    u1, l1 = get_next_occurrence(cron_expr, "UTC", after_dt=start_dt)
+    assert u1 == datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
+    assert l1.day == 1
+
+    # 2nd occurrence: 2026-09-07 (Monday)
+    u2, l2 = get_next_occurrence(cron_expr, "UTC", after_dt=u1)
+    assert u2 == datetime(2026, 9, 7, 9, 0, tzinfo=timezone.utc)
+    assert l2.weekday() == 0  # Monday
+
+    # 3rd occurrence: 2026-09-14 (Monday)
+    u3, l3 = get_next_occurrence(cron_expr, "UTC", after_dt=u2)
+    assert u3 == datetime(2026, 9, 14, 9, 0, tzinfo=timezone.utc)
+    assert l3.weekday() == 0  # Monday
+
+
+# ------------------------------------------------------------------------------
+# 30: Cron Edge Cases (Sunday 0 & 7, Steps, Ranges, Leap Day, 30-day Months)
+# ------------------------------------------------------------------------------
+
+
+def test_cron_edge_cases() -> None:
+    """Verify Sunday representations, ranges, steps, lists, leap year, and 30-day month."""
+    base_dt = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+
+    # 1. Sunday as 0 and 7 are identical
+    u_sun0, _ = get_next_occurrence("0 0 * * 0", "UTC", after_dt=base_dt)
+    u_sun7, _ = get_next_occurrence("0 0 * * 7", "UTC", after_dt=base_dt)
+    assert u_sun0 == u_sun7 == datetime(2026, 1, 4, 0, 0, tzinfo=timezone.utc)
+
+    # 2. Stepped ranges and lists produce deterministic expected times
+    # */15 -> 0, 15, 30, 45
+    t15_1, _ = get_next_occurrence("*/15 * * * *", "UTC", after_dt=base_dt)
+    assert t15_1 == datetime(2026, 1, 1, 0, 15, tzinfo=timezone.utc)
+    t15_2, _ = get_next_occurrence("*/15 * * * *", "UTC", after_dt=t15_1)
+    assert t15_2 == datetime(2026, 1, 1, 0, 30, tzinfo=timezone.utc)
+
+    # 1-10/2 -> 1, 3, 5, 7, 9
+    t_step_1, _ = get_next_occurrence("1-10/2 * * * *", "UTC", after_dt=base_dt)
+    assert t_step_1 == datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc)
+    t_step_2, _ = get_next_occurrence("1-10/2 * * * *", "UTC", after_dt=t_step_1)
+    assert t_step_2 == datetime(2026, 1, 1, 0, 3, tzinfo=timezone.utc)
+
+    # 1,5,10 -> 1, 5, 10
+    t_list_1, _ = get_next_occurrence("1,5,10 * * * *", "UTC", after_dt=base_dt)
+    assert t_list_1 == datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc)
+    t_list_2, _ = get_next_occurrence("1,5,10 * * * *", "UTC", after_dt=t_list_1)
+    assert t_list_2 == datetime(2026, 1, 1, 0, 5, tzinfo=timezone.utc)
+
+    # 3. Leap day: 2026 is non-leap; next leap year is 2028
+    u_leap, _ = get_next_occurrence("0 0 29 2 *", "UTC", after_dt=base_dt)
+    assert u_leap == datetime(2028, 2, 29, 0, 0, tzinfo=timezone.utc)
+
+    # 4. Month with 30 days: 31st skips 30-day months (e.g. April 31st -> May 31st)
+    apr_dt = datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc)
+    u_31, _ = get_next_occurrence("0 0 31 * *", "UTC", after_dt=apr_dt)
+    assert u_31 == datetime(2026, 5, 31, 0, 0, tzinfo=timezone.utc)
+
+    # 5. Impossible month/day (April 31st exclusively) raises within bounded search
+    with pytest.raises(InvalidScheduleExpressionError):
+        get_next_occurrence("0 0 31 4 *", "UTC", after_dt=apr_dt)
+
+    # 6. Invalid day/month out of bounds rejected at parse time
+    invalid_bounds = ["60 * * * *", "* 24 * * *", "* * 32 * *", "* * * 13 *", "* * * * 8"]
+    for inv in invalid_bounds:
+        with pytest.raises(InvalidScheduleExpressionError):
+            validate_cron_expression(inv)
+
+
+# ------------------------------------------------------------------------------
+# 31: Canonical UTC Timezone Acceptance
+# ------------------------------------------------------------------------------
+
+
+def test_canonical_utc_timezone_accepted(tmp_path: Path) -> None:
+    """Canonical 'UTC' identifier is accepted without requiring geographic prefixes."""
+    tz = validate_iana_timezone("UTC")
+    assert tz.key == "UTC"
+
+    db_file = tmp_path / "utc_test.db"
+    scheduler = SchedulerService(db_path=str(db_file))
+    sch = scheduler.create_schedule(cron_expression="0 12 * * *", timezone="UTC")
+    assert sch.timezone == "UTC"
+
+
+# ------------------------------------------------------------------------------
+# 32: Occurrence Identity and DST Exact-Once Persistence Regression
+# ------------------------------------------------------------------------------
+
+
+def test_occurrence_identity_and_dst_exact_once_regression(tmp_path: Path) -> None:
+    """Comprehensive persistence regression for DST transitions:
+    - Spring-forward skipped occurrence -> 0 occurrence rows for nonexistent 02:30.
+    - Fall-back first fold -> exactly 1 occurrence row for 02:30 (fold=0, 00:30 UTC).
+    - Scheduler restart -> still exactly 1 occurrence row.
+    - Two concurrent scheduler instances racing -> still exactly 1 occurrence row.
+    """
+    # Part 1: Spring-forward skipped occurrence
+    # Europe/Berlin on 2026-03-29: 02:30 does not exist.
+    # Ticking across 2026-03-29 should produce NO occurrence row for 2026-03-29.
+    db_spring = tmp_path / "dst_spring.db"
+    spring_clock = datetime(2026, 3, 29, 0, 0, tzinfo=timezone.utc)
+    sched_spring = SchedulerService(db_path=str(db_spring), clock_fn=lambda: spring_clock)
+    sch_spring = sched_spring.create_schedule(
+        cron_expression="30 2 * * *", timezone="Europe/Berlin"
+    )
+
+    # Initial next run computed is 2026-03-30 00:30:00 UTC (skipped 2026-03-29 entirely!)
+    assert sch_spring.next_run_at.startswith("2026-03-30T00:30:00")
+
+    # Tick at 2026-03-29 02:00, 02:30, 03:00 UTC -> nothing materialized
+    for hr in [2, 3, 4]:
+        spring_clock = datetime(2026, 3, 29, hr, 0, tzinfo=timezone.utc)
+        occs = sched_spring.tick()
+        assert occs == []
+
+    spring_occs = sched_spring.list_occurrences(schedule_id=sch_spring.schedule_id)
+    assert len(spring_occs) == 0  # ZERO occurrence rows for 2026-03-29!
+
+    # Part 2: Fall-back first fold exact-once and restart / multi-process safety
+    # Europe/Berlin on 2026-10-25: 02:30 repeated at 00:30 UTC (fold 0) and 01:30 UTC (fold 1)
+    db_fall = tmp_path / "dst_fall.db"
+    fall_clock = datetime(2026, 10, 24, 22, 0, tzinfo=timezone.utc)
+    sched_fall = SchedulerService(db_path=str(db_fall), clock_fn=lambda: fall_clock)
+    sch_fall = sched_fall.create_schedule(cron_expression="30 2 * * *", timezone="Europe/Berlin")
+
+    assert sch_fall.next_run_at.startswith("2026-10-25T00:30:00")
+
+    # Advance clock to due instant: 2026-10-25 00:30:00 UTC
+    due_instant = datetime(2026, 10, 25, 0, 30, 0, tzinfo=timezone.utc)
+    fall_clock = due_instant
+    occs1 = sched_fall.tick()
+    assert len(occs1) == 1
+    assert occs1[0].scheduled_for_utc.startswith("2026-10-25T00:30:00")
+
+    # Verify next_run_at advanced to next calendar day (2026-10-26 01:30:00 UTC),
+    # NOT the second fold (2026-10-25 01:30:00 UTC)!
+    refreshed_sch = sched_fall.get_schedule(sch_fall.schedule_id)
+    assert refreshed_sch.next_run_at.startswith("2026-10-26T01:30:00")
+
+    # Tick again during the second fold at 2026-10-25 01:30:00 UTC -> ZERO occurrences created
+    fall_clock = datetime(2026, 10, 25, 1, 30, 0, tzinfo=timezone.utc)
+    occs_second_fold = sched_fall.tick()
+    assert occs_second_fold == []
+
+    # Restart scheduler instance at due time -> still exactly 1 occurrence
+    restart_sched = SchedulerService(db_path=str(db_fall), clock_fn=lambda: due_instant)
+    restart_occs = restart_sched.tick()
+    assert restart_occs == []
+    all_fall_occs = restart_sched.list_occurrences(schedule_id=sch_fall.schedule_id)
+    assert len(all_fall_occs) == 1
+
+    # Two concurrent scheduler instances ticking simultaneously -> still exactly 1 occurrence
+    sched_a = SchedulerService(db_path=str(db_fall), clock_fn=lambda: due_instant)
+    sched_b = SchedulerService(db_path=str(db_fall), clock_fn=lambda: due_instant)
+    assert sched_a.tick() == []
+    assert sched_b.tick() == []
+    assert len(sched_a.list_occurrences(schedule_id=sch_fall.schedule_id)) == 1

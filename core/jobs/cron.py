@@ -3,14 +3,23 @@
 Timezone-Aware Cron and Wall-Clock Evaluation Engine (Task R4.7).
 Part of Milestone R4 (Task R4.7 - Timezone-Aware Scheduler).
 
+Supported Cron Dialect:
+- Exactly 5 fields: minute (0-59), hour (0-23), day-of-month (1-31), month (1-12), day-of-week (0-7, where 0 and 7 are Sunday).
+- Supported syntax: '*' (wildcard), integers, comma-separated lists ('1,5,10'), ranges ('1-5'), step values ('*/15', '1-10/2').
+- Unsupported extensions: '@yearly', '@daily', 'L', 'W', '?', '#', and 6-field second syntax are rejected at validation time.
+- Day-of-Month / Day-of-Week Semantics: Traditional / Vixie cron behavior. If both day-of-month and
+  day-of-week are restricted (neither is '*'), an occurrence matches when EITHER field matches (logical OR).
+
 Governing Principles:
-- IANA Timezones Only: Validates and enforces canonical IANA identifiers (e.g. Europe/Berlin,
-  America/New_York, Asia/Dhaka) using zoneinfo.ZoneInfo. Rejects ambiguous offsets and abbreviations.
+- Canonical IANA Timezones: Validates and enforces canonical IANA identifiers (e.g. Europe/Berlin,
+  America/New_York, Asia/Dhaka) and 'UTC' using zoneinfo.ZoneInfo. Rejects ambiguous offsets and legacy abbreviations.
 - Wall-Clock Recurrence: Evaluates recurring schedules in local wall-clock calendar time.
   Never steps by fixed 24-hour UTC timedelta across DST boundary transitions.
 - Explicit DST Semantics:
-  * Nonexistent local time (spring-forward gap): skipped deterministically.
-  * Ambiguous local time (fall-back fold): materialized exactly once using fold=0 (first valid occurrence).
+  * Nonexistent local time (spring-forward gap): The nonexistent occurrence is SKIPPED ENTIRELY
+    (zero materializations on that day; no shift to 03:00 or next valid minute; next occurrence on next valid day).
+  * Ambiguous local time (fall-back fold): Materializes exactly once choosing the FIRST occurrence (fold=0,
+    e.g. UTC offset +02:00 in Europe/Berlin, resulting UTC 00:30:00Z; no second occurrence at 01:30:00Z).
 - Bounded Missed-Run Calculation: Accurately identifies missed occurrence instants between
   downtime bounds without unbounded execution storms.
 """
