@@ -139,6 +139,97 @@ def test_idempotency_key_distinct_arguments_produce_distinct_keys() -> None:
     assert key_a.argument_digest != key_b.argument_digest
 
 
+def test_idempotency_key_cross_job_isolation_and_scope_behavior() -> None:
+    """Distinct jobs never share an idempotency key; cross-job deduplication is intentionally unsupported."""
+    args = {"recipient": "user@example.com", "template": "welcome"}
+
+    # 1. Unscoped operations across distinct jobs produce different keys
+    key_job_1 = compute_idempotency_key("job_111", "send_email", args)
+    key_job_2 = compute_idempotency_key("job_222", "send_email", args)
+
+    assert key_job_1.key != key_job_2.key
+    assert key_job_1.job_id == "job_111"
+    assert key_job_2.job_id == "job_222"
+    assert key_job_1.argument_digest == key_job_2.argument_digest
+
+    # 2. Even with an identical explicit scope string, keys remain distinct across jobs
+    key_scoped_1 = compute_idempotency_key("job_111", "send_email", args, scope="onboarding_v1")
+    key_scoped_2 = compute_idempotency_key("job_222", "send_email", args, scope="onboarding_v1")
+
+    assert key_scoped_1.key != key_scoped_2.key
+    assert key_scoped_1.job_id == "job_111"
+    assert key_scoped_2.job_id == "job_222"
+    assert key_scoped_1.argument_digest == key_scoped_2.argument_digest
+
+
+def test_idempotency_key_intra_job_sub_scoping() -> None:
+    """Within the same job, scope discriminates distinct execution steps for identical args."""
+    args = {"action": "poll_status", "service": "indexer"}
+
+    key_unscoped = compute_idempotency_key("job_single", "poll", args)
+    key_step_1 = compute_idempotency_key("job_single", "poll", args, scope="step_1")
+    key_step_2 = compute_idempotency_key("job_single", "poll", args, scope="step_2")
+
+    # All three keys within the same job must be mutually distinct
+    assert key_unscoped.key != key_step_1.key
+    assert key_step_1.key != key_step_2.key
+    assert key_unscoped.key != key_step_2.key
+
+    # But redelivery of the same step within the job yields the exact same key
+    key_step_1_redelivery = compute_idempotency_key("job_single", "poll", args, scope="step_1")
+    assert key_step_1.key == key_step_1_redelivery.key
+
+
+def test_idempotency_store_cross_job_isolation_and_no_unintended_reuse(
+    repo: SQLiteJobRepository, idem_store: SQLiteIdempotencyStore
+) -> None:
+    """Two distinct jobs with identical operation, args, and scope execute independently without cross-job cache bleed."""
+    job1 = repo.create_job(Job(job_type="agent_task", payload_summary={"task": "job1"}))
+    job2 = repo.create_job(Job(job_type="agent_task", payload_summary={"task": "job2"}))
+    args = {"target": "cluster_east"}
+    shared_scope = "provisioning_phase"
+
+    # Job 1 reserves and completes
+    should_exec_1, rec_1 = idem_store.reserve_operation(
+        job_id=job1.job_id,
+        operation_kind="provision",
+        args=args,
+        capability=OperationIdempotencyCapability.AE_GUARDED,
+        attempt_id="att_job1_1",
+        scope=shared_scope,
+    )
+    assert should_exec_1 is True
+    idem_store.record_in_progress(rec_1.idempotency_key, attempt_id="att_job1_1")
+    idem_store.record_success(
+        rec_1.idempotency_key,
+        attempt_id="att_job1_1",
+        result_payload={"cluster_id": "c_east_01"},
+    )
+
+    # Job 2 reserves the same operation with same args and same scope.
+    # It must NOT reuse Job 1's cached result; it must reserve independently for Job 2!
+    should_exec_2, rec_2 = idem_store.reserve_operation(
+        job_id=job2.job_id,
+        operation_kind="provision",
+        args=args,
+        capability=OperationIdempotencyCapability.AE_GUARDED,
+        attempt_id="att_job2_1",
+        scope=shared_scope,
+    )
+    assert should_exec_2 is True
+    assert rec_1.idempotency_key != rec_2.idempotency_key
+    assert rec_2.job_id == job2.job_id
+    assert rec_2.claimed_by_attempt == "att_job2_1"
+
+    # Verify both jobs have independent records in the store
+    records_job1 = idem_store.list_records_for_job(job1.job_id)
+    records_job2 = idem_store.list_records_for_job(job2.job_id)
+    assert len(records_job1) == 1
+    assert len(records_job2) == 1
+    assert records_job1[0].idempotency_key == rec_1.idempotency_key
+    assert records_job2[0].idempotency_key == rec_2.idempotency_key
+
+
 # ==============================================================================
 # 2. Single-Winner Concurrency Tests
 # ==============================================================================

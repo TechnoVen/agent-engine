@@ -339,11 +339,18 @@ def compute_idempotency_key(
 ) -> IdempotencyKey:
     """Derive deterministic idempotency key for a logical consequential operation.
 
-    Scope Guarantee:
-    - Retries and redelivery of the same logical operation within the same Job share
-      an idempotency identity (the key binds to `job_id`).
-    - Cross-Job deduplication is not claimed unless `scope` explicitly provides a stable
-      cross-Job logical-operation identity.
+    Scope & Identity Guarantees:
+    - Job-Scoped Identity: Idempotency keys are strictly bound to a single Job (`job_id`).
+      Retries, reclaims, and redeliveries of the same logical operation across attempts
+      within the same Job share an idempotency identity and reuse cached results.
+    - Intra-Job Sub-Scoping: The optional `scope` parameter acts as an intra-job namespace
+      or step discriminator (e.g. `step_1`, `iteration_2`). It distinguishes multiple
+      intentional executions of the same operation with identical arguments within a single Job.
+    - Cross-Job Deduplication is Intentionally Unsupported: Different jobs never share an
+      idempotency identity; each job maintains an isolated idempotency and attempt lifecycle.
+      Even if two distinct jobs specify identical `operation_kind`, `args`, and `scope`,
+      their computed keys will differ because `job_id` is always incorporated into the
+      key material. Global cross-job deduplication is not supported in the Job runtime.
     """
     arg_digest = compute_argument_digest(args)
     scope_str = f":{scope}" if scope else ""
