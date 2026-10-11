@@ -43,8 +43,17 @@ class AppServices:
     artifact_service: Optional[ArtifactService] = None
     ledger_service: Optional[ExecutionLedgerService] = None
     workflow_storage: Optional[WorkflowStorage] = None
+    workflow_service: Optional[Any] = None
     swarm_coordinator: Optional[SwarmCoordinator] = None
     writing_service: Optional[Any] = None
+
+    def get_workflow_service(self) -> Any:
+        if self.workflow_service is None:
+            from core.workflows.service import WorkflowService
+
+            db_path = getattr(self.storage, "db_path", None)
+            self.workflow_service = WorkflowService(storage=self.storage, db_path=db_path)
+        return self.workflow_service
 
     def get_writing_workflow_service(self) -> Any:
         if self.writing_service is None:
@@ -53,6 +62,7 @@ class AppServices:
             self.writing_service = ArticleWorkflowService(
                 coordinator=self.get_coordinator(),
                 artifact_service=self.get_artifact_service(),
+                workflow_service=self.get_workflow_service(),
                 storage=self.storage,
             )
         return self.writing_service
@@ -221,6 +231,14 @@ def get_workflow_storage() -> WorkflowStorage:
 
 def set_workflow_storage(storage: WorkflowStorage) -> None:
     get_services().workflow_storage = storage
+
+
+def get_workflow_service() -> Any:
+    return get_services().get_workflow_service()
+
+
+def set_workflow_service(service: Any) -> None:
+    get_services().workflow_service = service
 
 
 def get_swarm_coordinator() -> SwarmCoordinator:

@@ -41,12 +41,15 @@ from core.execution.models import (
     ExecutionStatus,
     RoutingTier,
 )
+from core.jobs.models import JobStatus
 from core.packs.service import (
     CANONICAL_BINDING_ALLOWLIST,
     PACK_PERMISSION_VOCABULARY,
     CapabilityPackService,
 )
 from core.storage.sqlite import SQLiteBackend
+from core.workflows.models import WorkflowRunStatus
+from core.workflows.service import WorkflowService
 from core.writing.models import (
     ArticleOutline,
     ArticleWorkflowStage,
@@ -659,17 +662,18 @@ def test_writing_pack_rest_endpoints(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# 6. Founder Acceptance (MVP-J2): Two Real Articles Dogfood Verification
+# 6. Writing Pipeline Article Fixture Verification (MVP-J2)
 # ---------------------------------------------------------------------------
 
 
-def test_founder_acceptance_mvp_j2_two_real_articles(tmp_path: Path):
-    """Dogfood founder acceptance on TWO real articles:
+def test_writing_pipeline_two_article_fixtures(tmp_path: Path):
+    """Verify writing pipeline mechanics on two article fixtures:
 
     Article 1: Agent Engine Architecture & Kernel Guarantees
     Article 2: THE DEN Concept & Collaborative Engineering Environment
 
     Verifies full lifecycle, factual classification, and persistent document artifacts.
+    (Human founder acceptance remains evaluated separately).
     """
 
     async def _run():
@@ -762,5 +766,125 @@ def test_founder_acceptance_mvp_j2_two_real_articles(tmp_path: Path):
 
         # Both articles completed successfully with full provenance!
         assert art1_final.final_artifact_id != art2_final.final_artifact_id
+
+    asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# 7. Canonical R4 Workflow & Job Convergence Verification (Phase A)
+# ---------------------------------------------------------------------------
+
+
+def test_writing_pack_multi_stage_runs_via_canonical_workflow_and_job_service(tmp_path: Path):
+    """Verify production Writing Pack executes multi-stage runs through canonical WorkflowService & JobService."""
+
+    async def _run():
+        db_path = str(tmp_path / "test_convergence.db")
+        storage = SQLiteBackend(db_path=db_path)
+        storage.create_project(
+            {
+                "id": "proj_conv_01",
+                "name": "Convergence Project",
+                "root_path": str(tmp_path / "proj_conv_01"),
+            }
+        )
+        artifact_service = ArtifactService(
+            storage=storage, base_artifacts_dir=str(tmp_path / "artifacts")
+        )
+        workflow_service = WorkflowService(db_path=db_path, storage=storage)
+        coordinator = MockExecutionCoordinator(storage=storage)
+        service = ArticleWorkflowService(
+            coordinator=coordinator,
+            artifact_service=artifact_service,
+            workflow_service=workflow_service,
+            storage=storage,
+        )
+
+        state = ArticleWorkflowState(
+            project_id="proj_conv_01",
+            title="Canonical R4 Workflow Convergence",
+            source_notes="Architectural verification notes on canonical workflow engine.",
+            audience="Engineers",
+            objective="Prove zero shadow workflow runtimes.",
+        )
+
+        final_state = await service.run_full_workflow(state)
+        assert final_state.current_stage == ArticleWorkflowStage.FINALIZED
+        assert final_state.final_artifact_id is not None
+        assert final_state.canonical_workflow_id == "wf_writing_article_pipeline"
+        assert len(final_state.canonical_job_ids) == 6
+
+        # Canonical WorkflowDefinition must exist in WorkflowService
+        wf_def = workflow_service.get_definition("wf_writing_article_pipeline")
+        assert wf_def is not None
+        assert len(wf_def.nodes) == 6
+        assert len(wf_def.edges) == 5
+
+        # Canonical WorkflowRun must exist and be COMPLETED in WorkflowService
+        wf_run = workflow_service.get_run(final_state.workflow_run_id)
+        assert wf_run is not None
+        assert wf_run.status == WorkflowRunStatus.COMPLETED
+        assert len(wf_run.node_runs) == 6
+
+        # Canonical Jobs must exist in SQLiteJobRepository
+        for node_id, job_id in final_state.canonical_job_ids.items():
+            job = workflow_service.repo.get_job(job_id)
+            assert job is not None
+            assert job.status == JobStatus.COMPLETED
+            assert job.job_type == "workflow_step"
+
+        # Canonical Document artifact persisted in ArtifactService
+        doc_artifact = artifact_service.get_artifact(
+            final_state.final_artifact_id, project_id="proj_conv_01"
+        )
+        assert doc_artifact.type == ArtifactType.DOCUMENT
+
+    asyncio.run(_run())
+
+
+def test_single_stage_interactive_execution_distinct_from_durable_workflow(tmp_path: Path):
+    """Verify interactive execution of single requested stage calls coordinator directly without spawning durable workflow run."""
+
+    async def _run():
+        db_path = str(tmp_path / "test_single_stage.db")
+        storage = SQLiteBackend(db_path=db_path)
+        storage.create_project(
+            {
+                "id": "proj_single_01",
+                "name": "Single Stage Project",
+                "root_path": str(tmp_path / "proj_single_01"),
+            }
+        )
+        artifact_service = ArtifactService(
+            storage=storage, base_artifacts_dir=str(tmp_path / "artifacts")
+        )
+        workflow_service = WorkflowService(db_path=db_path, storage=storage)
+        coordinator = MockExecutionCoordinator(storage=storage)
+        service = ArticleWorkflowService(
+            coordinator=coordinator,
+            artifact_service=artifact_service,
+            workflow_service=workflow_service,
+            storage=storage,
+        )
+
+        state = ArticleWorkflowState(
+            project_id="proj_single_01",
+            title="Single Interactive Step",
+            source_notes="Single stage interactive test notes.",
+        )
+
+        # Single interactive stage: outline only
+        state = await service.generate_outline(state)
+        assert state.current_stage == ArticleWorkflowStage.OUTLINE
+        assert state.outline is not None
+        assert state.outline.artifact_id is not None
+
+        # Coordinator received exactly 1 call
+        assert len(coordinator.call_history) == 1
+        assert coordinator.call_history[0].inputs.get("stage") == "outline"
+
+        # No full WorkflowRun was spawned for this single interactive request!
+        assert state.canonical_workflow_id is None
+        assert workflow_service.get_run(state.workflow_run_id) is None
 
     asyncio.run(_run())

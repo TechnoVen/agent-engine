@@ -553,6 +553,9 @@ class ArticleWorkflowState(BaseModel):
     final_artifact_id: Optional[str] = None
     final_content: Optional[str] = None
 
+    canonical_workflow_id: Optional[str] = None
+    canonical_job_ids: Dict[str, str] = Field(default_factory=dict)
+
     execution_history: List[Dict[str, Any]] = Field(default_factory=list)
     manual_edits: Dict[str, bool] = Field(default_factory=dict)
 

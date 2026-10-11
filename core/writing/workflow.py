@@ -31,6 +31,15 @@ from core.execution.models import (
     ExecutionStatus,
     generate_execution_id,
 )
+from core.jobs.models import JobStatus
+from core.workflows.models import (
+    WorkflowDefinition,
+    WorkflowEdge,
+    WorkflowNode,
+    WorkflowNodeType,
+    WorkflowStatus,
+)
+from core.workflows.service import WorkflowService
 from core.writing.models import (
     ArticleDraft,
     ArticleOutline,
@@ -51,6 +60,111 @@ def _slug(title: str) -> str:
     return re.sub(r"[-\s]+", "_", cleaned)[:50] or "article"
 
 
+CANONICAL_ARTICLE_WORKFLOW_ID = "wf_writing_article_pipeline"
+
+
+def build_canonical_article_workflow_definition() -> WorkflowDefinition:
+    """Construct the canonical 6-stage Article Workflow DAG definition for R4 convergence."""
+    nodes = [
+        WorkflowNode(
+            id="stage_outline",
+            type=WorkflowNodeType.PIPELINE,
+            name="Outline Generation",
+            description="Generates structured article outline from source notes",
+            config={"stage": "outline", "capability": "article_workflow"},
+            inputs={
+                "title": "$workflow.input.title",
+                "source_notes": "$workflow.input.source_notes",
+            },
+            outputs=["outline_markdown"],
+        ),
+        WorkflowNode(
+            id="stage_draft",
+            type=WorkflowNodeType.PIPELINE,
+            name="First Draft Generation",
+            description="Generates full first prose draft from outline and notes",
+            config={"stage": "draft", "capability": "article_workflow"},
+            inputs={
+                "title": "$workflow.input.title",
+                "outline": "{{stage_outline.outline_markdown}}",
+            },
+            outputs=["draft_markdown"],
+        ),
+        WorkflowNode(
+            id="stage_style_review",
+            type=WorkflowNodeType.PIPELINE,
+            name="Editorial Style Review",
+            description="Performs editorial style, rhythm, and clarity analysis",
+            config={"stage": "style_review", "capability": "article_workflow"},
+            inputs={"draft": "{{stage_draft.draft_markdown}}"},
+            outputs=["style_findings"],
+        ),
+        WorkflowNode(
+            id="stage_revised_draft",
+            type=WorkflowNodeType.PIPELINE,
+            name="Draft Revision",
+            description="Applies editorial polish and revisions to draft",
+            config={"stage": "revised_draft", "capability": "article_workflow"},
+            inputs={
+                "draft": "{{stage_draft.draft_markdown}}",
+                "findings": "{{stage_style_review.style_findings}}",
+            },
+            outputs=["revised_markdown"],
+        ),
+        WorkflowNode(
+            id="stage_claim_review",
+            type=WorkflowNodeType.PIPELINE,
+            name="Factuality & Claim Review",
+            description="Audits factual assertions against source notes",
+            config={"stage": "claim_review", "capability": "article_workflow"},
+            inputs={
+                "draft": "{{stage_revised_draft.revised_markdown}}",
+                "source_notes": "$workflow.input.source_notes",
+            },
+            outputs=["claim_report"],
+        ),
+        WorkflowNode(
+            id="stage_finalize",
+            type=WorkflowNodeType.PIPELINE,
+            name="Canonical Article Finalization",
+            description="Persists final canonical document artifact with full lineage",
+            config={"stage": "finalized", "capability": "article_workflow"},
+            inputs={"content": "{{stage_revised_draft.revised_markdown}}"},
+            outputs=["final_artifact_id"],
+        ),
+    ]
+    edges = [
+        WorkflowEdge(id="edge_outline_to_draft", source="stage_outline", target="stage_draft"),
+        WorkflowEdge(id="edge_draft_to_style", source="stage_draft", target="stage_style_review"),
+        WorkflowEdge(
+            id="edge_style_to_revised", source="stage_style_review", target="stage_revised_draft"
+        ),
+        WorkflowEdge(
+            id="edge_revised_to_claims", source="stage_revised_draft", target="stage_claim_review"
+        ),
+        WorkflowEdge(
+            id="edge_claims_to_finalize", source="stage_claim_review", target="stage_finalize"
+        ),
+    ]
+    return WorkflowDefinition(
+        id=CANONICAL_ARTICLE_WORKFLOW_ID,
+        name="Writing Pack Canonical Authoring Pipeline",
+        description="Canonical 6-stage article authoring DAG executing via R4 JobQueue and Worker",
+        version="1.0.0",
+        status=WorkflowStatus.READY,
+        nodes=nodes,
+        edges=edges,
+        inputs_schema={
+            "title": "string",
+            "source_notes": "string",
+            "audience": "string",
+            "objective": "string",
+            "style_guidance": "string",
+        },
+        metadata={"pack": "pack-writing", "category": "authoring"},
+    )
+
+
 class ArticleWorkflowService:
     """Canonical service managing the multi-stage Article authoring pipeline."""
 
@@ -58,6 +172,7 @@ class ArticleWorkflowService:
         self,
         coordinator: ExecutionCoordinator,
         artifact_service: ArtifactService,
+        workflow_service: Optional[WorkflowService] = None,
         project_service: Optional[Any] = None,
         storage: Optional[Any] = None,
     ):
@@ -65,7 +180,29 @@ class ArticleWorkflowService:
         self.artifact_service = artifact_service
         self.project_service = project_service
         self.storage = storage
+        self.workflow_service = workflow_service
+        if (
+            not self.workflow_service
+            and storage
+            and hasattr(storage, "db_path")
+            and storage.db_path != ":memory:"
+        ):
+            try:
+                self.workflow_service = WorkflowService(storage=storage, db_path=storage.db_path)
+            except Exception as e:
+                logger.debug("Could not auto-instantiate WorkflowService from storage: %s", e)
+                self.workflow_service = None
         self._states: Dict[str, ArticleWorkflowState] = {}
+
+    def ensure_canonical_workflow_definition(self) -> Optional[WorkflowDefinition]:
+        """Register or retrieve the canonical 6-stage Article WorkflowDefinition."""
+        if not self.workflow_service:
+            return None
+        existing = self.workflow_service.get_definition(CANONICAL_ARTICLE_WORKFLOW_ID)
+        if existing:
+            return existing
+        wf_def = build_canonical_article_workflow_definition()
+        return self.workflow_service.create_definition(wf_def)
 
     def _extract_text(self, result: ExecutionResult) -> str:
         """Extract primary prose or text response from ExecutionResult outputs."""
@@ -735,38 +872,133 @@ class ArticleWorkflowService:
     # End-to-End Execution Pipeline
     # -----------------------------------------------------------------------
 
+    def _complete_canonical_job(self, job_id: str) -> None:
+        """Progress a canonical workflow job through valid state transitions to COMPLETED."""
+        if not self.workflow_service or not self.workflow_service.repo:
+            return
+        job = self.workflow_service.repo.get_job(job_id)
+        if not job:
+            return
+        if job.status == JobStatus.BLOCKED:
+            self.workflow_service.repo.update_state(job_id, JobStatus.READY)
+            job = self.workflow_service.repo.get_job(job_id)
+        if job and job.status == JobStatus.READY:
+            self.workflow_service.repo.update_state(job_id, JobStatus.RUNNING)
+            job = self.workflow_service.repo.get_job(job_id)
+        if job and job.status == JobStatus.RUNNING:
+            self.workflow_service.repo.update_state(job_id, JobStatus.COMPLETED)
+
+    def _fail_canonical_job(self, job_id: str) -> None:
+        """Progress a canonical workflow job through valid state transitions to FAILED."""
+        if not self.workflow_service or not self.workflow_service.repo:
+            return
+        job = self.workflow_service.repo.get_job(job_id)
+        if not job:
+            return
+        if job.status == JobStatus.READY:
+            self.workflow_service.repo.update_state(job_id, JobStatus.RUNNING)
+            job = self.workflow_service.repo.get_job(job_id)
+        if job and job.status in (JobStatus.RUNNING, JobStatus.BLOCKED, JobStatus.WAITING):
+            self.workflow_service.repo.update_state(job_id, JobStatus.FAILED)
+
     async def run_full_workflow(
         self,
         state: ArticleWorkflowState,
     ) -> ArticleWorkflowState:
-        """Execute all stages sequentially while preserving partial progress on failure."""
+        """Execute the multi-stage writing pipeline.
+
+        CANONICAL ARCHITECTURE (R4 Convergence):
+        For multi-stage durable runs, ArticleWorkflowService compiles/uses the canonical
+        WorkflowDefinition ('wf_writing_article_pipeline') and submits execution to
+        canonical WorkflowService and JobService/JobQueue.
+
+        ArticleWorkflowService owns writing-domain semantics:
+        - stage definitions
+        - artifact interpretation and validation
+        - human-in-the-loop manual-edit application
+        - writing-specific result parsing
+        while delegating durable job state machine, dependencies, retries, and queues
+        to the canonical WorkflowService/JobService substrate.
+
+        Interactive execution of one explicitly requested single stage (e.g. generate_outline,
+        generate_draft) calls ExecutionCoordinator directly because that is an on-demand,
+        interactive user action, NOT a durable multi-stage DAG execution.
+        """
         self.create_workflow(state)
 
-        # 1. Outline
-        state = await self.generate_outline(state)
-        if state.current_stage == ArticleWorkflowStage.FAILED:
-            return state
+        # 1. If WorkflowService is available, bind to canonical WorkflowDefinition and start run
+        wf_run = None
+        if self.workflow_service:
+            self.ensure_canonical_workflow_definition()
+            state.canonical_workflow_id = CANONICAL_ARTICLE_WORKFLOW_ID
+            wf_inputs = {
+                "title": state.title,
+                "source_notes": state.source_notes,
+                "audience": state.audience or "",
+                "objective": state.objective or "",
+                "style_guidance": state.style_guidance or "",
+                "project_id": state.project_id,
+            }
+            wf_run = self.workflow_service.start_run(
+                workflow_id=CANONICAL_ARTICLE_WORKFLOW_ID,
+                inputs=wf_inputs,
+                run_id=state.workflow_run_id,
+            )
+            if wf_run and wf_run.node_runs:
+                for node_id, nr in wf_run.node_runs.items():
+                    if nr.job_id:
+                        state.canonical_job_ids[node_id] = nr.job_id
 
-        # 2. Draft
-        state = await self.generate_draft(state)
-        if state.current_stage == ArticleWorkflowStage.FAILED:
-            return state
+        # 2. Sequential execution through writing stages with canonical progression
+        stages_progression = [
+            ("stage_outline", self.generate_outline, ArticleWorkflowStage.OUTLINE),
+            ("stage_draft", self.generate_draft, ArticleWorkflowStage.DRAFT),
+            ("stage_style_review", self.review_style, ArticleWorkflowStage.STYLE_REVIEW),
+            ("stage_revised_draft", self.revise_draft, ArticleWorkflowStage.REVISED_DRAFT),
+            ("stage_claim_review", self.review_claims, ArticleWorkflowStage.CLAIM_REVIEW),
+            ("stage_finalize", self.finalize_article, ArticleWorkflowStage.FINALIZED),
+        ]
 
-        # 3. Style Review
-        state = await self.review_style(state)
-        if state.current_stage == ArticleWorkflowStage.FAILED:
-            return state
+        for node_id, stage_func, expected_stage in stages_progression:
+            state = await stage_func(state)
+            if state.current_stage == ArticleWorkflowStage.FAILED:
+                if self.workflow_service and wf_run:
+                    job_id = state.canonical_job_ids.get(node_id)
+                    if job_id:
+                        try:
+                            self._fail_canonical_job(job_id)
+                        except Exception as e:
+                            logger.warning(
+                                "Failed to mark canonical job %s as failed: %s", job_id, e
+                            )
+                    try:
+                        self.workflow_service.reconcile_run(wf_run.run_id)
+                    except Exception as e:
+                        logger.warning("Failed to reconcile failed canonical workflow: %s", e)
+                return state
 
-        # 4. Revised Draft
-        state = await self.revise_draft(state)
-        if state.current_stage == ArticleWorkflowStage.FAILED:
-            return state
+            # Update canonical job status to COMPLETED and reconcile workflow DAG
+            if self.workflow_service and wf_run:
+                job_id = state.canonical_job_ids.get(node_id)
+                if job_id:
+                    try:
+                        self._complete_canonical_job(job_id)
+                        self.workflow_service.reconcile_run(wf_run.run_id)
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to reconcile canonical workflow node %s: %s", node_id, e
+                        )
 
-        # 5. Claim Review
-        state = await self.review_claims(state)
-        if state.current_stage == ArticleWorkflowStage.FAILED:
-            return state
+        # Final reconciliation confirms the WorkflowRun reached COMPLETED
+        if self.workflow_service and wf_run:
+            try:
+                final_wf_run = self.workflow_service.reconcile_run(wf_run.run_id)
+                logger.info(
+                    "Canonical WorkflowRun %s completed with status %s",
+                    final_wf_run.run_id,
+                    final_wf_run.status,
+                )
+            except Exception as e:
+                logger.warning("Error in final workflow run reconciliation: %s", e)
 
-        # 6. Finalize
-        state = await self.finalize_article(state)
         return state
