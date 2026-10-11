@@ -1211,12 +1211,50 @@ class JobWorker:
                 pass
             return False
 
-        # 3. Validate job type and construct ExecutionRequest before starting attempt
+        # 3. Validate job type and construct ExecutionRequest before starting execution
         try:
             exec_request = self.request_factory.create_execution_request(job)
-        except Exception as e:
+        except UnsupportedJobTypeError as e:
             logger.error(
-                "Failed to construct ExecutionRequest for job %s: %s; releasing lease",
+                "Unrecoverable unsupported job type for job %s: %s; failing attempt and job permanently",
+                lease.job_id,
+                e,
+            )
+            # Establish durable attempt required by canonical lifecycle
+            attempt = self.begin_claimed_attempt(lease, now=now)
+            self.finalize_claimed_attempt(
+                job.job_id,
+                attempt.attempt_id,
+                lease,
+                JobStatus.FAILED,
+                failure_classification="unsupported_job_type",
+                failure_message=str(e)[:1024],
+                expected_control_generation=job.control_generation,
+                now=now,
+            )
+            return True
+        except (ValueError, TypeError, KeyError) as e:
+            logger.error(
+                "Unrecoverable permanent job payload error for job %s: %s; failing attempt and job permanently",
+                lease.job_id,
+                e,
+            )
+            attempt = self.begin_claimed_attempt(lease, now=now)
+            self.finalize_claimed_attempt(
+                job.job_id,
+                attempt.attempt_id,
+                lease,
+                JobStatus.FAILED,
+                failure_classification="invalid_payload",
+                failure_message=str(e)[:1024],
+                expected_control_generation=job.control_generation,
+                now=now,
+            )
+            return True
+        except Exception as e:
+            # Preserve transient/retryable failure semantics separately
+            logger.warning(
+                "Transient setup failure before execution for job %s: %s; releasing lease",
                 lease.job_id,
                 e,
             )

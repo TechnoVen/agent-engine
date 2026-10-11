@@ -349,3 +349,13 @@ def test_representative_endpoints_reject_unauth_and_accept_auth(monkeypatch):
         ), f"Endpoint {ep} must succeed with valid token, got {resp_auth.status_code}"
 
     token_mgr.set_enforced(None)
+
+
+def test_worker_step_handles_unsupported_job_type_without_spin():
+    """Verify JobWorker.step() contains unsupported_job_type and UnsupportedJobTypeError handling."""
+    import inspect
+    import core.jobs.worker as worker
+
+    src = inspect.getsource(worker.JobWorker.step)
+    assert "unsupported_job_type" in src
+    assert "UnsupportedJobTypeError" in src

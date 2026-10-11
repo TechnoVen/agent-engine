@@ -230,20 +230,29 @@ def test_job_execution_request_factory_validation_and_safety() -> None:
 
 
 def test_setup_failure_before_execution_safely_releases_lease(
-    repo: SQLiteJobRepository, queue: SQLiteJobQueue, file_db_path: str
+    repo: SQLiteJobRepository,
+    queue: SQLiteJobQueue,
+    file_db_path: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Verify pre-execution setup failure safely releases lease back to claimable state."""
-    job = repo.create_job(Job(job_type="unsupported_custom_type"))
+    """Verify pre-execution transient setup failure safely releases lease back to claimable state."""
+    job = repo.create_job(Job(job_type="agent_task"))
     repo.update_state(job.job_id, JobStatus.READY)
     queue.enqueue(job.job_id)
 
     worker = JobWorker(db_path=file_db_path, lease_ttl_seconds=30.0)
 
-    # Step encounters unsupported type during setup
+    # Simulate a transient operational failure during pre-execution setup
+    def transient_factory_error(_job):
+        raise ConnectionError("Transient coordinator connection timeout")
+
+    monkeypatch.setattr(worker.request_factory, "create_execution_request", transient_factory_error)
+
+    # Step encounters transient error during setup
     processed = worker.step()
     assert processed is True
 
-    # Job remains READY, lease is released, 0 attempts created
+    # Job remains READY, lease is released
     j_after = repo.get_job(job.job_id)
     assert j_after is not None
     assert j_after.status == JobStatus.READY
@@ -255,6 +264,58 @@ def test_setup_failure_before_execution_safely_releases_lease(
     assert entry.lease_owner is None
 
     worker.close()
+
+
+def test_unsupported_job_type_fails_permanently_without_lease_spin(
+    repo: SQLiteJobRepository, queue: SQLiteJobQueue, file_db_path: str
+) -> None:
+    """CTO Regression Test: Unsupported job types must permanently fail attempt and job,
+    remove queue entry, and never spin or churn leases on repeated step() calls.
+    """
+    job = repo.create_job(Job(job_type="scheduled_task"))
+    repo.update_state(job.job_id, JobStatus.READY)
+    queue.enqueue(job.job_id)
+
+    worker = JobWorker(db_path=file_db_path, lease_ttl_seconds=30.0)
+
+    # Step claims and permanently fails unsupported job
+    processed = worker.step()
+    assert processed is True
+
+    # 1. Assert exactly one claim/attempt was established
+    attempts = repo.list_attempts(job.job_id)
+    assert len(attempts) == 1
+
+    # 2. Assert attempt is terminal with failure_classification="unsupported_job_type"
+    att = attempts[0]
+    assert att.status == JobAttemptStatus.FAILED
+    assert att.finished_at is not None
+    assert att.failure_classification == "unsupported_job_type"
+
+    # 3. Assert job is terminal
+    j_after = repo.get_job(job.job_id)
+    assert j_after is not None
+    assert j_after.status == JobStatus.FAILED
+    assert j_after.completed_at is not None
+
+    # 4. Assert queue entry is removed and no longer claimable
+    assert queue.get_entry(job.job_id) is None
+    assert queue.claim_next(worker.worker_id) is None
+
+    # 5. Call worker.step() repeatedly: assert no additional attempt and no lease churn
+    for _ in range(5):
+        assert worker.step() is False
+
+    assert len(repo.list_attempts(job.job_id)) == 1
+
+    # 6. Verify restart behavior against file-backed SQLite database
+    worker.close()
+    worker_restarted = JobWorker(db_path=file_db_path, lease_ttl_seconds=30.0)
+    for _ in range(3):
+        assert worker_restarted.step() is False
+
+    assert len(repo.list_attempts(job.job_id)) == 1
+    worker_restarted.close()
 
 
 # ==============================================================================
