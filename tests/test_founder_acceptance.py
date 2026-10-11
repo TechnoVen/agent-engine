@@ -678,67 +678,70 @@ async def test_mvp_j12_truthful_execution_history(clean_storage, managed_local_r
         ledger_service=ledger_svc,
     )
     set_services(app_services)
-    app = create_app()
-    client = TestClient(app)
+    try:
+        app = create_app()
+        client = TestClient(app)
 
-    # 3. GET /v1/executions/{id}
-    res_exec = client.get(f"/v1/executions/{exec_id}")
-    assert res_exec.status_code == 200
-    exec_data = res_exec.json()
-    assert exec_data["id"] == exec_id
-    assert exec_data["status"] == "completed"
-    assert exec_data["provider"] == res.provider_used
-    assert exec_data["model"] == res.model_used
-    assert exec_data["started_at"] is not None
-    assert exec_data["completed_at"] is not None
+        # 3. GET /v1/executions/{id}
+        res_exec = client.get(f"/v1/executions/{exec_id}")
+        assert res_exec.status_code == 200
+        exec_data = res_exec.json()
+        assert exec_data["id"] == exec_id
+        assert exec_data["status"] == "completed"
+        assert exec_data["provider"] == res.provider_used
+        assert exec_data["model"] == res.model_used
+        assert exec_data["started_at"] is not None
+        assert exec_data["completed_at"] is not None
 
-    # 4. GET /v1/executions/{id}/trace
-    res_trace = client.get(f"/v1/executions/{exec_id}/trace")
-    assert res_trace.status_code == 200
-    trace_data = res_trace.json()
-    assert trace_data["execution_id"] == exec_id
-    assert trace_data["status"] == "completed"
+        # 4. GET /v1/executions/{id}/trace
+        res_trace = client.get(f"/v1/executions/{exec_id}/trace")
+        assert res_trace.status_code == 200
+        trace_data = res_trace.json()
+        assert trace_data["execution_id"] == exec_id
+        assert trace_data["status"] == "completed"
 
-    # Routing truth
-    routing = trace_data["routing"]
-    assert routing["actual_provider"] == res.provider_used
-    assert routing["effective_privacy_class"] == "local_only"
+        # Routing truth
+        routing = trace_data["routing"]
+        assert routing["actual_provider"] == res.provider_used
+        assert routing["effective_privacy_class"] == "local_only"
 
-    # Timing truth
-    assert trace_data["started_at"] is not None
-    assert trace_data["completed_at"] is not None
-    assert trace_data["started_at"] <= trace_data["completed_at"]
-    assert trace_data["duration_ms"] > 0.0
+        # Timing truth
+        assert trace_data["started_at"] is not None
+        assert trace_data["completed_at"] is not None
+        assert trace_data["started_at"] <= trace_data["completed_at"]
+        assert trace_data["duration_ms"] > 0.0
 
-    # Usage and cost truth (local execution is free hardware compute; cost is 0.0 with CALCULATED provenance)
-    usage = trace_data["usage"]
-    assert usage["input_tokens"] > 0
-    assert usage["output_tokens"] > 0
-    assert usage["total_tokens"] == usage["input_tokens"] + usage["output_tokens"]
-    assert usage["total_cost_usd"] == 0.0
-    assert usage["cost_provenance"] in (
-        CostProvenance.CALCULATED.value,
-        CostProvenance.PROVIDER_REPORTED.value,
-    )
+        # Usage and cost truth (local execution is free hardware compute; cost is 0.0 with CALCULATED provenance)
+        usage = trace_data["usage"]
+        assert usage["input_tokens"] > 0
+        assert usage["output_tokens"] > 0
+        assert usage["total_tokens"] == usage["input_tokens"] + usage["output_tokens"]
+        assert usage["total_cost_usd"] == 0.0
+        assert usage["cost_provenance"] in (
+            CostProvenance.CALCULATED.value,
+            CostProvenance.PROVIDER_REPORTED.value,
+        )
 
-    # 5. GET /v1/projects/{project_id}/executions
-    res_proj = client.get(f"/v1/projects/{project_id}/executions")
-    assert res_proj.status_code == 200
-    proj_execs = res_proj.json()
-    assert any(e["execution_id"] == exec_id for e in proj_execs)
+        # 5. GET /v1/projects/{project_id}/executions
+        res_proj = client.get(f"/v1/projects/{project_id}/executions")
+        assert res_proj.status_code == 200
+        proj_execs = res_proj.json()
+        assert any(e["execution_id"] == exec_id for e in proj_execs)
 
-    # 6. Truthful representation of unrecorded metrics:
-    # An execution that has unrecorded cost MUST report cost_provenance == UNAVAILABLE
-    clean_storage.create_execution(
-        {
-            "id": "exec_unrecorded_test",
-            "project_id": project_id,
-            "status": "created",
-            "created_at": "2026-10-11T00:00:00Z",
-            "cost_provenance": CostProvenance.UNAVAILABLE.value,
-        }
-    )
-    trace_unrecorded = ledger_svc.get_execution_trace("exec_unrecorded_test")
-    assert trace_unrecorded is not None
-    assert trace_unrecorded.usage.cost_provenance == CostProvenance.UNAVAILABLE
-    assert trace_unrecorded.duration_ms == 0.0
+        # 6. Truthful representation of unrecorded metrics:
+        # An execution that has unrecorded cost MUST report cost_provenance == UNAVAILABLE
+        clean_storage.create_execution(
+            {
+                "id": "exec_unrecorded_test",
+                "project_id": project_id,
+                "status": "created",
+                "created_at": "2026-10-11T00:00:00Z",
+                "cost_provenance": CostProvenance.UNAVAILABLE.value,
+            }
+        )
+        trace_unrecorded = ledger_svc.get_execution_trace("exec_unrecorded_test")
+        assert trace_unrecorded is not None
+        assert trace_unrecorded.usage.cost_provenance == CostProvenance.UNAVAILABLE
+        assert trace_unrecorded.duration_ms == 0.0
+    finally:
+        set_services(None)

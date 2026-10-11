@@ -23,6 +23,7 @@ interface LayoutProps {
   health: SidecarHealth;
   isBusy?: boolean;
   projectName?: string;
+  onOpenDiagnostics?: () => void;
   children: React.ReactNode;
 }
 
@@ -45,6 +46,7 @@ export const Layout: React.FC<LayoutProps> = ({
   health,
   isBusy,
   projectName,
+  onOpenDiagnostics,
   children,
 }) => {
   return (
@@ -76,6 +78,7 @@ export const Layout: React.FC<LayoutProps> = ({
           health={health}
           isBusy={isBusy}
           projectName={projectName}
+          onOpenDiagnostics={onOpenDiagnostics}
         />
         <main className="flex-1 overflow-hidden bg-bg-base relative">
           {children}

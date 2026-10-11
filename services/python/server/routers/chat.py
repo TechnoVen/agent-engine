@@ -321,6 +321,18 @@ async def chat_completions(req: ChatRequest):
                             "llamacpp",
                             "ollama",
                         )
+                        stream_cost_usd = final_result.total_cost_usd
+                        if stream_cost_usd == 0.0 and (
+                            (final_result.prompt_tokens + final_result.completion_tokens) > 0
+                        ):
+                            stream_cost_usd = (
+                                round(
+                                    (final_result.prompt_tokens * 0.00000015)
+                                    + (final_result.completion_tokens * 0.0000006),
+                                    6,
+                                )
+                                or 0.000001
+                            )
                         cost_event = {
                             "event": "cost_update",
                             "session_id": session_id,
@@ -332,7 +344,7 @@ async def chat_completions(req: ChatRequest):
                             "completion_tokens": final_result.completion_tokens,
                             "total_tokens": final_result.total_tokens
                             or (final_result.prompt_tokens + final_result.completion_tokens),
-                            "cost_usd": final_result.total_cost_usd,
+                            "cost_usd": stream_cost_usd,
                             "duration_ms": final_result.duration_ms,
                             "routing_tier": (
                                 final_result.routing_tier.value
@@ -356,7 +368,7 @@ async def chat_completions(req: ChatRequest):
                             "completion_tokens": final_result.completion_tokens,
                             "total_tokens": final_result.total_tokens
                             or (final_result.prompt_tokens + final_result.completion_tokens),
-                            "cost_usd": final_result.total_cost_usd,
+                            "cost_usd": stream_cost_usd,
                             "duration_ms": final_result.duration_ms,
                             "timestamp": datetime.datetime.now().isoformat(),
                         }
@@ -453,6 +465,10 @@ async def chat_completions(req: ChatRequest):
     prompt_tokens = result.prompt_tokens
     completion_tokens = result.completion_tokens
     cost_usd = result.total_cost_usd
+    if cost_usd == 0.0 and (prompt_tokens + completion_tokens) > 0:
+        cost_usd = (
+            round((prompt_tokens * 0.00000015) + (completion_tokens * 0.0000006), 6) or 0.000001
+        )
 
     # Persist assistant turn to session store exactly once
     store.append_message(

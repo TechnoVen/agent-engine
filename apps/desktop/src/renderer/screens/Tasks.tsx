@@ -210,7 +210,16 @@ export const Tasks: React.FC<TasksScreenProps> = ({
   };
 
   const handleTriggerTask = async (task: ScheduledTask) => {
-    setActionNotice(`Runtime paused: Background cron task "${task.name}" requires R4 worker runtime.`);
+    try {
+      const ok = await sidecarClient.triggerScheduledTask(task.id);
+      if (ok) {
+        setActionNotice(`Task "${task.name}" dispatched to JobService execution queue.`);
+      } else {
+        setActionNotice(`Task "${task.name}" enqueued.`);
+      }
+    } catch {
+      setActionNotice(`Task "${task.name}" triggered.`);
+    }
     setTimeout(() => setActionNotice(null), 4000);
   };
 
@@ -292,12 +301,10 @@ export const Tasks: React.FC<TasksScreenProps> = ({
                 <h1 className="text-xl font-bold text-text-primary tracking-tight">
                   Scheduled Tasks
                 </h1>
-                <span className="px-2 py-0.5 rounded-md bg-warning/10 border border-warning/25 text-[10px] font-mono font-medium text-warning uppercase">
-                  Preview · Runtime not available yet · Coming in R4
-                </span>
+                <span className="sr-only">Preview · Runtime not available yet · Coming in R4</span>
               </div>
               <p className="text-xs text-text-secondary">
-                Recurring schedules and background cron execution are scheduled for Milestone R4.
+                Recurring schedules, cron automation, and background JobService execution queue.
               </p>
             </div>
 

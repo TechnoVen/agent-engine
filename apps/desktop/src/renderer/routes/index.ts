@@ -56,9 +56,9 @@ export const CANONICAL_ROUTES: AppRoute[] = [
     label: 'Tasks',
     section: 'work',
     breadcrumb: ['Agent Engine', 'Tasks'],
-    availability: 'preview',
+    availability: 'available',
     iconName: 'Clock',
-    description: 'Preview · Runtime not available yet · Coming in R4',
+    description: 'Scheduled background jobs, triggers, and execution queue',
   },
   {
     id: 'automations',
@@ -66,10 +66,10 @@ export const CANONICAL_ROUTES: AppRoute[] = [
     label: 'Automations',
     section: 'work',
     breadcrumb: ['Agent Engine', 'Automations'],
-    availability: 'preview',
+    availability: 'available',
     aliases: ['#workflows', '#swarm'],
     iconName: 'GitBranch',
-    description: 'Preview · Runtime not available yet · Coming in R4',
+    description: 'Multi-agent workflows, DAG pipelines, and automated execution',
   },
 
   // ── TOOLS SECTION ───────────────────────────────────────────────────────

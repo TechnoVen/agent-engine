@@ -75,11 +75,22 @@ class SidecarClient {
 
   async checkHealth(): Promise<SidecarHealth> {
     try {
-      const res = await fetch(`${this.base}/v1/health`, {
+      let res = await fetch(`${this.base}/v1/health`, {
         method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
+        headers: this.getHeaders(),
       });
       if (!res.ok) {
+        const fallback = await fetch(`${this.base}/healthz`).catch(() => null);
+        if (fallback && fallback.ok) {
+          const fb = await fallback.json();
+          return {
+            status: 'healthy',
+            version: fb.version || '0.1.0',
+            engine: fb.engine || 'Agent Engine',
+            uptime_seconds: fb.uptime_seconds || 0,
+            timestamp: new Date().toISOString(),
+          };
+        }
         return {
           status: 'degraded',
           error: `HTTP ${res.status}: ${res.statusText}`,
@@ -87,7 +98,7 @@ class SidecarClient {
       }
       const data = await res.json();
       return {
-        status: data.status === 'healthy' ? 'healthy' : 'degraded',
+        status: data.status === 'healthy' || data.status === 'ok' ? 'healthy' : 'degraded',
         version: data.version || '0.1.0',
         engine: data.engine || 'Agent Engine',
         uptime_seconds: data.uptime_seconds || 0,
@@ -1655,8 +1666,13 @@ class SidecarClient {
 
   async triggerScheduledTask(id: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.base}/v1/tasks/${id}/run`, {
+      const headers = await this.getHeaders();
+      const res = await fetch(`${this.base}/v1/tasks/${id}/run?canonical=true`, {
         method: 'POST',
+        headers: {
+          ...headers,
+          'X-Canonical-Runtime': 'true',
+        },
       });
       return res.ok;
     } catch {
@@ -1977,9 +1993,9 @@ class SidecarClient {
   }
 
   async runWorkflow(id: string, inputs: Record<string, any> = {}): Promise<WorkflowRun> {
-    const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}/run`, {
+    const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}/run?canonical=true`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...this.getHeaders(), 'X-Canonical-Runtime': 'true' },
       body: JSON.stringify({ inputs, dry_run: false }),
     });
     if (!res.ok) {
@@ -2252,6 +2268,22 @@ class SidecarClient {
         details: {},
       };
     }
+    return await res.json();
+  }
+
+  async listProviders(includeDisabled = false): Promise<any[]> {
+    const res = await fetch(`${this.base}/v1/providers?include_disabled=${includeDisabled}`, {
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  }
+
+  async listAdapters(includeHealth = false): Promise<any[]> {
+    const res = await fetch(`${this.base}/v1/adapters?include_health=${includeHealth}`, {
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return await res.json();
   }
 
@@ -2630,80 +2662,7 @@ export const DEFAULT_PERSONAS: AgentPersona[] = [
   },
 ];
 
-export const DEFAULT_SCHEDULED_TASKS: ScheduledTask[] = [
-  {
-    id: 'task-1',
-    name: 'Daily Inbox Digest',
-    description: 'Summarizes critical emails, mentions, and urgent unread threads at 8 AM.',
-    cron: '0 8 * * *',
-    cron_human: 'Every day at 8:00 AM',
-    agent_persona: 'Executive Drafter',
-    model: 'instant',
-    status: 'active',
-    last_run: 'Today, 08:00 AM',
-    next_run: 'Tomorrow, 08:00 AM',
-    cost_per_run: 0.0008,
-    monthly_estimate: 0.024,
-    is_off_peak: false,
-    notification_channel: 'slack',
-    prompt: 'Summarize all high-priority unread emails and draft responses for urgent items.',
-    created_at: '2026-03-01',
-  },
-  {
-    id: 'task-2',
-    name: 'Weekly Expense & Spend Audit',
-    description: 'Generates weekly financial reconciliation and token budget usage Sunday at 6 PM.',
-    cron: '0 18 * * 0',
-    cron_human: 'Every Sunday at 6:00 PM',
-    agent_persona: 'Deep Researcher',
-    model: 'instant',
-    status: 'active',
-    last_run: 'Sun, Mar 8, 06:00 PM',
-    next_run: 'Sun, Mar 15, 06:00 PM',
-    cost_per_run: 0.0025,
-    monthly_estimate: 0.010,
-    is_off_peak: false,
-    notification_channel: 'slack',
-    prompt: 'Compile weekly expenditure report and verify zero 90/9/1 budget breaches.',
-    created_at: '2026-03-02',
-  },
-  {
-    id: 'task-3',
-    name: 'Off-Peak Security & AST Audit',
-    description: 'Runs zero-trust safety checks, AST sanitization, and dependency vulnerabilities overnight.',
-    cron: '0 2 * * *',
-    cron_human: 'Every day at 2:00 AM (Off-peak)',
-    agent_persona: 'Security Auditor',
-    model: 'reasoning',
-    status: 'active',
-    last_run: 'Today, 02:00 AM',
-    next_run: 'Tomorrow, 02:00 AM (Off-peak)',
-    cost_per_run: 0.0064,
-    monthly_estimate: 0.192,
-    is_off_peak: true,
-    notification_channel: 'webhook',
-    prompt: 'Inspect AST diffs, detect dangerous shell patterns, and review staged patches.',
-    created_at: '2026-03-05',
-  },
-  {
-    id: 'task-4',
-    name: 'Monthly Book Progress Summary',
-    description: 'Synthesizes chapter drafts, word counts, and character arcs on the 1st of each month.',
-    cron: '0 3 1 * *',
-    cron_human: 'Monthly on day 1 at 3:00 AM (Off-peak)',
-    agent_persona: 'Technical Writer',
-    model: 'swarm',
-    status: 'paused',
-    last_run: 'Mar 1, 03:00 AM',
-    next_run: 'Apr 1, 03:00 AM (Off-peak)',
-    cost_per_run: 0.0042,
-    monthly_estimate: 0.0042,
-    is_off_peak: true,
-    notification_channel: 'telegram',
-    prompt: 'Aggregate all chapter outlines and generate word count trajectory charts.',
-    created_at: '2026-02-15',
-  },
-];
+export const DEFAULT_SCHEDULED_TASKS: ScheduledTask[] = [];
 
 export const sidecarClient = new SidecarClient();
 

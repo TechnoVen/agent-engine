@@ -2,12 +2,14 @@
 
 **Milestone:** R5 (Founder Dogfood & Capability Packs) — Task R5.2 (Writing Pack MVP)  
 **Date:** 2026-10-11  
-**Status:** COMPLETE / FOUNDER ACCEPTANCE MVP-J2 PASSED  
+**Status:** IMPLEMENTED (S1) / INTEGRATED (S2) / FOUNDER ACCEPTANCE OPEN (NOT YET S3)  
 **Authority Ledger & Frozen Checkpoints:**
 - **R4 Substrate Freeze:** `35d78ac` (CLOSED / FROZEN; sealed migrations 001–009; zero migration 010)
 - **GUI Founder MVP Baseline:** `b1f8350` (S3 Verified in Dev/E2E)
 - **R5.1 Core Pack Baseline:** `c2ea15f` (OPEN AT S2; Truthfully BLOCKED BY TEST ENVIRONMENT for J7 Cloud)
-- **R5.2 Writing Pack:** MVP IMPLEMENTATION & DOGFOOD VERIFICATION COMPLETE
+- **R5.2 Implementation Freeze:** `d1c9732` (S1 Implemented)
+- **R5.2 Canonical Convergence:** `3552328` (S2 Integrated with WorkflowService & JobService; zero shadow workflow runtimes)
+- **R5.2 Founder Acceptance:** OPEN / NOT YET S3 (Automated fixture verification completed; genuine human founder review pending)
 - **R5.3 Research Pack / Developer Pack:** STRICTLY DO NOT START
 
 ---
@@ -21,7 +23,9 @@
 | R4 0.5 Workflow Substrate          | CLOSED / FROZEN          | 35d78ac               |
 | GUI Founder MVP Baseline           | S3 (Dev/E2E Verified)    | b1f8350               |
 | R5.1 Core Pack MVP                 | OPEN AT S2 (Cloud Block) | c2ea15f               |
-| R5.2 Writing Pack MVP              | COMPLETE (MVP-J2 Passed) | Current Working Tree  |
+| R5.2 Implementation (S1)           | ACCEPTED                 | d1c9732               |
+| R5.2 Integration & Convergence (S2)| ACCEPTED                 | 3552328               |
+| R5.2 Founder Acceptance (S3)       | OPEN (Pending Founder)   | Automated tests only  |
 | R5.3 Research Pack                 | STRICTLY NOT STARTED     | N/A                   |
 +------------------------------------+--------------------------+-----------------------+
 ```
@@ -198,5 +202,5 @@ Founder journey **MVP-J2** requires end-to-end execution of the Writing Pack on 
 1. **R4 Substrate:** Remains CLOSED and FROZEN at `35d78ac`. Zero migration 010.
 2. **GUI Maturity Baseline:** Maintained at **S3** at `b1f8350`.
 3. **R5.1 Status:** Remains OPEN AT S2 (truthfully blocked by missing host live cloud credentials).
-4. **R5.2 Status:** **COMPLETE & ACCEPTED**.
+4. **R5.2 Status:** Implementation (S1) and Integration (S2) **ACCEPTED** at `3552328`. Founder Acceptance (S3) remains **OPEN** pending genuine human founder evaluation.
 5. **R5.3 (Research Pack) / Developer Pack:** STRICTLY DO NOT START until directed.

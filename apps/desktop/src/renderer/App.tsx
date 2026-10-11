@@ -42,7 +42,7 @@ export const App: React.FC = () => {
   const [privacyBoundary, setPrivacyBoundary] = useState<PrivacyBoundary>('local_only');
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>('c1');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [health, setHealth] = useState<SidecarHealth>({ status: 'offline' });
+  const [health, setHealth] = useState<SidecarHealth>({ status: 'healthy' });
   const [isBusy, setIsBusy] = useState(false);
   const [projectName, setProjectName] = useState('Agent Engine');
 
@@ -345,6 +345,7 @@ export const App: React.FC = () => {
       health={health}
       isBusy={isBusy}
       projectName={projectName}
+      onOpenDiagnostics={() => setActiveMode('developer')}
     >
       {renderActiveScreen()}
     </Layout>

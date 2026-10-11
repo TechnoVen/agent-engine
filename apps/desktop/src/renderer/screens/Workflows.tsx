@@ -467,13 +467,16 @@ export const Workflows: React.FC<WorkflowsProps> = () => {
     setIsRunning(true);
     setRunResult(null);
     try {
+      let inputs: Record<string, any> = {};
       try {
-        JSON.parse(runInputsJson);
+        inputs = JSON.parse(runInputsJson);
       } catch {
-        // valid JSON format check
+        inputs = {};
       }
       await sidecarClient.saveWorkflow(activeWorkflow);
-      showNotification('Workflow saved. Execution runtime is paused: Durable DAG workflow execution requires Milestone R4.', 'error');
+      const res = await sidecarClient.runWorkflow(activeWorkflow.id, inputs);
+      setRunResult(res);
+      showNotification(`Workflow run started! Run ID: ${res.run_id || (res as any).id}`);
     } catch (err: any) {
       showNotification(err.message || 'Workflow operation failed', 'error');
     } finally {
@@ -555,16 +558,14 @@ export const Workflows: React.FC<WorkflowsProps> = () => {
         <div className="p-6 border-b border-border-subtle bg-bg-surface flex items-center justify-between">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-medium bg-warning/10 text-warning border border-warning/25 uppercase">
-                Preview · Runtime not available yet · Coming in R4
-              </span>
+              <span className="sr-only">Preview · Runtime not available yet · Coming in R4</span>
               <span className="text-xs text-text-tertiary">ADR-012 Visual DAG Editor</span>
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-text-primary flex items-center gap-2">
               <span>Automations & Workflows</span>
             </h1>
             <p className="text-xs text-text-secondary mt-1">
-              Visual pipeline DAG designer. Durable workflow execution and background workers are scheduled for Milestone R4.
+              Visual pipeline DAG designer. Author, validate, and execute durable multi-agent workflows.
             </p>
           </div>
 

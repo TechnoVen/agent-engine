@@ -41,67 +41,12 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
   const [instructionsText, setInstructionsText] = useState(project.instructions || '');
   const [saveToast, setSaveToast] = useState(false);
   const [searchThreadQuery, setSearchThreadQuery] = useState('');
-  const [threads, setThreads] = useState<ProjectThread[]>(
-    project.threads || [
-      {
-        id: `th-${project.id}-1`,
-        title: `${project.name} Architecture Spec`,
-        updatedAt: '12m ago',
-        messageCount: 8,
-        snippet: 'Refactored backend routers to eliminate synchronous blocking operations.',
-        status: 'active',
-      },
-      {
-        id: `th-${project.id}-2`,
-        title: 'Zero-Trust AST Guardrails',
-        updatedAt: '2h ago',
-        messageCount: 14,
-        snippet: 'Policy inspection verified against Law 3 safety boundary.',
-        status: 'active',
-      },
-      {
-        id: `th-${project.id}-3`,
-        title: 'Dependency and Lockfile Audit',
-        updatedAt: 'Yesterday',
-        messageCount: 5,
-        snippet: 'Validated lockfile reproducibility across Ubuntu and macOS.',
-        status: 'archived',
-      },
-    ]
-  );
-
-  const [files, setFiles] = useState<ProjectFile[]>(
-    project.files || [
-      {
-        id: 'f-1',
-        name: 'architecture-spec.md',
-        size: '14.2 KB',
-        type: 'markdown',
-        uploadedAt: 'Today, 10:30 AM',
-      },
-      {
-        id: 'f-2',
-        name: 'schema-v1.json',
-        size: '38.6 KB',
-        type: 'json',
-        uploadedAt: 'Yesterday, 04:15 PM',
-      },
-      {
-        id: 'f-3',
-        name: 'security-policies.yaml',
-        size: '6.1 KB',
-        type: 'yaml',
-        uploadedAt: 'Sep 12, 2026',
-      },
-    ]
-  );
-
-  const [activeAgents, setActiveAgents] = useState<string[]>(
-    project.activeAgents || ['Senior Architect', 'Security Auditor', 'Code Specialist']
-  );
+  const [threads, setThreads] = useState<ProjectThread[]>(project.threads || []);
+  const [files, setFiles] = useState<ProjectFile[]>(project.files || []);
+  const [activeAgents, setActiveAgents] = useState<string[]>(project.activeAgents || []);
 
   const [scopedPolicy, setScopedPolicy] = useState<string>(
-    project.scopedPolicy || 'Strict Zero-Trust (Law 3)'
+    project.scopedPolicy || 'Strict Zero-Trust'
   );
 
   const [budgetCeiling, setBudgetCeiling] = useState<number>(project.budgetCeilingUsd || 15.0);
@@ -514,7 +459,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
                 <div className="space-y-2">
                   {[
                     {
-                      name: 'Strict Zero-Trust (Law 3)',
+                      name: 'Strict Zero-Trust',
                       desc: 'Requires inline operator approval on all shell, filesystem modifications, and SQL drops.',
                     },
                     {

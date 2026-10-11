@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Table2,
   Upload,
@@ -15,13 +15,7 @@ interface DataRow {
 
 const DEFAULT_COLUMNS = ['model', 'provider', 'prompt_tokens', 'completion_tokens', 'cost_usd', 'latency_ms'];
 
-const DEFAULT_ROWS: DataRow[] = [
-  { model: 'qwen2.5:7b-instruct-q4_K_M', provider: 'ollama (local)', prompt_tokens: 142, completion_tokens: 280, cost_usd: 0.0, latency_ms: 610 },
-  { model: 'llama-3.2-3b-instruct', provider: 'llama.cpp (local)', prompt_tokens: 95, completion_tokens: 154, cost_usd: 0.0, latency_ms: 320 },
-  { model: 'gpt-4o-mini', provider: 'openai (cloud)', prompt_tokens: 210, completion_tokens: 390, cost_usd: 0.0001, latency_ms: 840 },
-  { model: 'claude-3-5-sonnet', provider: 'anthropic (cloud)', prompt_tokens: 312, completion_tokens: 520, cost_usd: 0.0031, latency_ms: 1240 },
-  { model: 'gemini-1.5-flash', provider: 'gemini (cloud)', prompt_tokens: 180, completion_tokens: 310, cost_usd: 0.00008, latency_ms: 590 },
-];
+const DEFAULT_ROWS: DataRow[] = [];
 
 export const Data: React.FC = () => {
   const [columns, setColumns] = useState<string[]>(DEFAULT_COLUMNS);
@@ -30,9 +24,39 @@ export const Data: React.FC = () => {
   const [analysisPrompt, setAnalysisPrompt] = useState('');
   const [analysisResult, setAnalysisResult] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [datasetName, setDatasetName] = useState('Execution Economics Sample');
+  const [datasetName, setDatasetName] = useState('Dataset');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    const loadTelemetryData = async () => {
+      try {
+        const metrics = await sidecarClient.getCostMetrics('day');
+        if (mounted && metrics && Array.isArray((metrics as any).breakdown) && (metrics as any).breakdown.length > 0) {
+          const telemetryRows = (metrics as any).breakdown.map((b: any) => ({
+            group: b.group || 'day',
+            calls: b.calls ?? 0,
+            prompt_tokens: b.prompt_tokens ?? 0,
+            completion_tokens: b.completion_tokens ?? 0,
+            total_tokens: b.total_tokens ?? 0,
+            cost_usd: b.cost_usd ?? 0.0,
+          }));
+          if (telemetryRows.length > 0) {
+            setColumns(['group', 'calls', 'prompt_tokens', 'completion_tokens', 'total_tokens', 'cost_usd']);
+            setRows(telemetryRows);
+            setDatasetName('Execution Economics Telemetry');
+          }
+        }
+      } catch {
+        // start empty
+      }
+    };
+    loadTelemetryData();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -189,36 +213,54 @@ export const Data: React.FC = () => {
       <div className="flex-1 flex overflow-hidden">
         {/* Table View */}
         <div className="flex-1 overflow-auto p-4">
-          <div className="border border-border-subtle rounded-lg overflow-hidden bg-bg-elevated/40">
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className="bg-bg-elevated border-b border-border-subtle">
-                  {columns.map((col) => (
-                    <th
-                      key={col}
-                      className="px-3 py-2 font-mono text-[11px] font-semibold text-text-secondary uppercase tracking-wider border-r border-border-subtle/50 last:border-r-0"
-                    >
-                      {col}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border-subtle/50 font-mono text-[11px]">
-                {filteredRows.map((row, rIdx) => (
-                  <tr key={rIdx} className="hover:bg-bg-hover transition-colors">
+          {filteredRows.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center border border-border-subtle rounded-lg bg-bg-elevated/20 p-8 text-center text-text-tertiary">
+              <Table2 className="w-8 h-8 mb-3 opacity-40 text-accent" />
+              <p className="text-sm font-semibold text-text-primary">No execution records or dataset loaded</p>
+              <p className="text-xs text-text-tertiary mt-1 max-w-sm">
+                Upload a CSV dataset or execute agent runs to inspect structured tabular telemetry here.
+              </p>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="mt-4 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium hover:bg-accent-hover transition-colors"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>Open CSV File</span>
+              </button>
+            </div>
+          ) : (
+            <div className="border border-border-subtle rounded-lg overflow-hidden bg-bg-elevated/40">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-bg-elevated border-b border-border-subtle">
                     {columns.map((col) => (
-                      <td
+                      <th
                         key={col}
-                        className="px-3 py-2 text-text-primary border-r border-border-subtle/30 last:border-r-0 whitespace-nowrap"
+                        className="px-3 py-2 font-mono text-[11px] font-semibold text-text-secondary uppercase tracking-wider border-r border-border-subtle/50 last:border-r-0"
                       >
-                        {String(row[col] ?? '')}
-                      </td>
+                        {col}
+                      </th>
                     ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-border-subtle/50 font-mono text-[11px]">
+                  {filteredRows.map((row, rIdx) => (
+                    <tr key={rIdx} className="hover:bg-bg-hover transition-colors">
+                      {columns.map((col) => (
+                        <td
+                          key={col}
+                          className="px-3 py-2 text-text-primary border-r border-border-subtle/30 last:border-r-0 whitespace-nowrap"
+                        >
+                          {String(row[col] ?? '')}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
         {/* Analysis & Summary Panel */}
@@ -268,10 +310,10 @@ export const Data: React.FC = () => {
           <div className="p-3 rounded-lg bg-bg-elevated border border-border-subtle space-y-1 text-xs">
             <div className="font-medium text-text-primary text-[11px]">Spreadsheet Formula Engine</div>
             <p className="text-[11px] text-text-tertiary leading-relaxed">
-              CSV data viewing and natural-language analysis are active. Dynamic spreadsheet formulas (=SUM, =VLOOKUP) runtime is planned for R5.
+              CSV data viewing and natural-language analysis are active. Dynamic spreadsheet formulas (=SUM, =VLOOKUP) runtime is in active development.
             </p>
-            <span className="inline-block px-1.5 py-0.5 rounded bg-bg-base border border-border-subtle text-[10px] font-mono text-warning">
-              Formula Runtime: R5
+            <span className="inline-block px-1.5 py-0.5 rounded bg-bg-base border border-border-subtle text-[10px] font-mono text-text-tertiary">
+              Formula Runtime: Planned
             </span>
           </div>
         </div>

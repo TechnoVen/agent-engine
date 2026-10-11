@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   FileText,
   Plus,
@@ -25,25 +25,46 @@ import {
 } from '../types';
 
 export const Writing: React.FC = () => {
-  const [docTitle, setDocTitle] = useState('Agent Engine Architecture: Production-Grade Multi-Model Systems');
+  const [docTitle, setDocTitle] = useState('Untitled Article');
   const [content, setContent] = useState('');
   const [selectedText, setSelectedText] = useState('');
   const [activeInspectorTab, setActiveInspectorTab] = useState<'workflow' | 'outline' | 'style' | 'claims' | 'notes' | 'assistant'>('workflow');
   const [inspectorOpen, setInspectorOpen] = useState(true);
-  const [notes, setNotes] = useState(
-    '### Core Facts & Source Notes\n' +
-    '- Architecture: Deterministic router, zero-trust policy engine, execution coordinator kernel (ADR-016).\n' +
-    '- Performance: Local models run with zero remote egress under LOCAL_ONLY boundary.\n' +
-    '- Security: Strict HITL approval required for consequential operations (file deletion, network egress, shell commands).\n' +
-    '- Verification: Multi-axis test suite, AST defense guards, cryptographic exact-operation digests.\n' +
-    '- Deployment: Tauri desktop container with embedded Python sidecar communicated via Unix domain socket / localhost IPC token.'
-  );
+  const [notes, setNotes] = useState('');
   const [newMenuOpen, setNewMenuOpen] = useState(false);
 
   // Workflow state
   const [workflowState, setWorkflowState] = useState<ArticleWorkflowState | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [workflowError, setWorkflowError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    const loadExisting = async () => {
+      try {
+        const workflows = await sidecarClient.listWritingWorkflows();
+        if (mounted && Array.isArray(workflows) && workflows.length > 0) {
+          const latest = workflows[0];
+          setWorkflowState(latest);
+          if (latest.title) setDocTitle(latest.title);
+          if (latest.source_notes) setNotes(latest.source_notes);
+          if (latest.revised_draft?.content) {
+            setContent(latest.revised_draft.content);
+          } else if (latest.draft?.content) {
+            setContent(latest.draft.content);
+          } else if (latest.outline?.thesis) {
+            setContent(`# ${latest.title}\n\n**Thesis:** ${latest.outline.thesis}\n\n`);
+          }
+        }
+      } catch {
+        // clean blank state on error or offline
+      }
+    };
+    loadExisting();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   // Assistant state
   const [assistantPrompt, setAssistantPrompt] = useState('');

@@ -19,20 +19,26 @@ export const Developer: React.FC = () => {
   const [telemetry, setTelemetry] = useState<HardwareTelemetry | null>(null);
   const [pipelines, setPipelines] = useState<any[]>([]);
   const [sessions, setSessions] = useState<any[]>([]);
+  const [adapters, setAdapters] = useState<any[]>([]);
+  const [providers, setProviders] = useState<any[]>([]);
   const [selectedTrace, setSelectedTrace] = useState<any | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   const loadData = async () => {
     setIsLoading(true);
     try {
-      const [telem, pipes, sess] = await Promise.all([
+      const [telem, pipes, sess, adaps, provs] = await Promise.all([
         sidecarClient.getHardwareTelemetry().catch(() => null),
         sidecarClient.getPipelines().catch(() => []),
         sidecarClient.getSessions(20).catch(() => []),
+        sidecarClient.listAdapters(true).catch(() => []),
+        sidecarClient.listProviders(true).catch(() => []),
       ]);
       setTelemetry(telem);
       setPipelines(pipes);
       setSessions(sess);
+      setAdapters(adaps || []);
+      setProviders(provs || []);
       if (sess.length > 0 && !selectedTrace) {
         setSelectedTrace(sess[0]);
       }
@@ -219,28 +225,34 @@ export const Developer: React.FC = () => {
           <div className="h-full overflow-y-auto space-y-4 max-w-4xl">
             <div className="p-4 rounded-lg bg-bg-elevated border border-border-subtle space-y-3">
               <div className="flex items-center justify-between">
-                <div className="text-xs font-semibold text-text-primary">Active Model Context Protocol (MCP) Servers</div>
+                <div className="text-xs font-semibold text-text-primary">Active Model Context Protocol (MCP) & Adapters</div>
                 <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-bg-base border border-border-subtle text-emerald-400">
-                  Transport: stdio / JSON-RPC 2.0
+                  Transport: in-process / stdio
                 </span>
               </div>
               <div className="space-y-2 text-xs">
-                {[
-                  { name: 'sqlite-audit-ledger', transport: 'in-process stdio', status: 'Connected', tools: 'query_audit, log_event' },
-                  { name: 'fs-workspace-sandbox', transport: 'local AST sandbox', status: 'Connected', tools: 'read_file, safe_edit, list_dir' },
-                  { name: 'python-code-runner', transport: 'isolated process', status: 'Standby', tools: 'exec_code_ast' },
-                ].map((s, idx) => (
-                  <div key={idx} className="p-3 rounded bg-bg-base border border-border-subtle flex items-center justify-between">
-                    <div>
-                      <div className="font-semibold text-text-primary font-mono">{s.name}</div>
-                      <div className="text-[11px] text-text-tertiary mt-0.5">Tools: {s.tools}</div>
-                    </div>
-                    <div className="text-right font-mono text-[11px]">
-                      <span className="text-emerald-400">{s.status}</span>
-                      <div className="text-text-tertiary">{s.transport}</div>
-                    </div>
+                {adapters.length === 0 ? (
+                  <div className="py-8 text-center text-text-tertiary">
+                    No custom external MCP adapters connected. Core AST sandboxes active.
                   </div>
-                ))}
+                ) : (
+                  adapters.map((s, idx) => (
+                    <div key={idx} className="p-3 rounded bg-bg-base border border-border-subtle flex items-center justify-between">
+                      <div>
+                        <div className="font-semibold text-text-primary font-mono">{s.name || s.id}</div>
+                        <div className="text-[11px] text-text-tertiary mt-0.5">
+                          Capabilities: {Array.isArray(s.capabilities) ? s.capabilities.join(', ') : (s.tools || 'general')}
+                        </div>
+                      </div>
+                      <div className="text-right font-mono text-[11px]">
+                        <span className={s.enabled ? 'text-emerald-400' : 'text-text-tertiary'}>
+                          {s.enabled ? 'Connected' : 'Disabled'}
+                        </span>
+                        <div className="text-text-tertiary">{s.transport || 'in-process'}</div>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           </div>
@@ -274,23 +286,33 @@ export const Developer: React.FC = () => {
         {activeTab === 'providers' && (
           <div className="h-full overflow-y-auto space-y-4 max-w-4xl">
             <div className="p-4 rounded-lg bg-bg-elevated border border-border-subtle space-y-3">
-              <div className="text-xs font-semibold text-text-primary">Provider Registry & Endpoints</div>
+              <div className="flex items-center justify-between">
+                <div className="text-xs font-semibold text-text-primary">Provider Registry & Verification Status</div>
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-bg-base border border-border-subtle text-text-tertiary">
+                  {providers.length} registered
+                </span>
+              </div>
               <div className="space-y-2 text-xs">
-                {[
-                  { id: 'ollama', name: 'Ollama Local Daemon', endpoint: 'http://127.0.0.1:11434', protocol: 'OpenAI REST compatible' },
-                  { id: 'llama.cpp', name: 'llama-server Local', endpoint: 'http://127.0.0.1:8080', protocol: 'Native llama.cpp' },
-                  { id: 'openai', name: 'OpenAI Cloud API', endpoint: 'https://api.openai.com/v1', protocol: 'Bearer Key' },
-                  { id: 'anthropic', name: 'Anthropic Messages API', endpoint: 'https://api.anthropic.com/v1', protocol: 'x-api-key' },
-                  { id: 'gemini', name: 'Google Gemini API', endpoint: 'https://generativelanguage.googleapis.com', protocol: 'API Key' },
-                ].map((prov) => (
-                  <div key={prov.id} className="p-3 rounded bg-bg-base border border-border-subtle flex items-center justify-between font-mono">
-                    <div>
-                      <div className="font-semibold text-text-primary">{prov.name}</div>
-                      <div className="text-[11px] text-text-tertiary">{prov.endpoint}</div>
-                    </div>
-                    <span className="text-[11px] text-text-secondary">{prov.protocol}</span>
+                {providers.length === 0 ? (
+                  <div className="py-8 text-center text-text-tertiary">
+                    No model providers currently registered in kernel registry.
                   </div>
-                ))}
+                ) : (
+                  providers.map((prov) => (
+                    <div key={prov.provider_id || prov.id} className="p-3 rounded bg-bg-base border border-border-subtle flex items-center justify-between font-mono">
+                      <div>
+                        <div className="font-semibold text-text-primary">{prov.name || prov.provider_id}</div>
+                        <div className="text-[11px] text-text-tertiary">{prov.base_url || prov.endpoint || 'Local / Built-in'}</div>
+                      </div>
+                      <div className="text-right font-mono text-[11px]">
+                        <span className={prov.verification?.status === 'VERIFIED' ? 'text-emerald-400 font-semibold' : 'text-text-secondary'}>
+                          {prov.verification?.display_state || (prov.enabled ? 'Ready' : 'Standby')}
+                        </span>
+                        <div className="text-text-tertiary">{prov.protocol || (prov.is_local ? 'Local Daemon' : 'Cloud Endpoint')}</div>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           </div>

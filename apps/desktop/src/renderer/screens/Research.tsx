@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Search,
   Globe,
@@ -15,11 +15,31 @@ export const Research: React.FC = () => {
   const [reportContent, setReportContent] = useState('');
   const [isResearching, setIsResearching] = useState(false);
   const [notes, setNotes] = useState('');
+  const [sources, setSources] = useState<{ title: string; origin: string; verified: boolean }[]>([]);
 
-  const sampleSources = [
-    { title: 'Project Architecture & Local Kernel Spec', origin: 'Local Document', verified: true },
-    { title: 'Deterministic Tool Execution Ledger (ADR-016)', origin: 'Observational Memory', verified: true },
-  ];
+  useEffect(() => {
+    let mounted = true;
+    const loadRealSources = async () => {
+      try {
+        const obs = await sidecarClient.queryObservations('research', 10);
+        if (mounted && Array.isArray(obs) && obs.length > 0) {
+          setSources(
+            obs.map((o: any) => ({
+              title: o.metadata?.filename || o.content.slice(0, 40) + '...',
+              origin: o.category === 'rag_document' ? 'Local Document' : 'Observational Memory',
+              verified: true,
+            }))
+          );
+        }
+      } catch {
+        // empty fallback
+      }
+    };
+    loadRealSources();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const handleStartResearch = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -64,7 +84,7 @@ export const Research: React.FC = () => {
               <ShieldCheck className="w-3.5 h-3.5" /> Local Synthesis Active
             </span>
             <span>•</span>
-            <span className="text-warning">Web Deep Crawler: R4 Preview</span>
+            <span className="text-text-secondary">Research Pack: Not installed</span>
           </div>
         </div>
 
@@ -110,18 +130,24 @@ export const Research: React.FC = () => {
               Grounding Sources & Provenance
             </div>
             <div className="space-y-1.5">
-              {sampleSources.map((s, idx) => (
-                <div
-                  key={idx}
-                  className="p-2.5 rounded-md bg-bg-elevated border border-border-subtle text-xs space-y-1"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium text-text-primary truncate mr-1">{s.title}</span>
-                    <CheckCircle2 className="w-3 h-3 text-emerald-400 flex-shrink-0" />
-                  </div>
-                  <div className="text-[10px] font-mono text-text-tertiary">{s.origin}</div>
+              {sources.length === 0 ? (
+                <div className="p-3 rounded-md bg-bg-elevated border border-border-subtle text-xs text-text-tertiary text-center">
+                  No indexed sources in current workspace. Add documents in Knowledge.
                 </div>
-              ))}
+              ) : (
+                sources.map((s, idx) => (
+                  <div
+                    key={idx}
+                    className="p-2.5 rounded-md bg-bg-elevated border border-border-subtle text-xs space-y-1"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium text-text-primary truncate mr-1">{s.title}</span>
+                      <CheckCircle2 className="w-3 h-3 text-emerald-400 flex-shrink-0" />
+                    </div>
+                    <div className="text-[10px] font-mono text-text-tertiary">{s.origin}</div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
 
@@ -129,14 +155,11 @@ export const Research: React.FC = () => {
           <div className="p-3 rounded-lg bg-bg-elevated border border-border-subtle space-y-1.5 text-xs">
             <div className="flex items-center gap-1.5 font-medium text-text-primary text-[11px]">
               <Globe className="w-3.5 h-3.5 text-text-secondary" />
-              <span>Multi-Source Crawler Status</span>
+              <span>Research Pack Boundary</span>
             </div>
             <p className="text-[11px] text-text-tertiary leading-relaxed">
-              Real-time local synthesis is functional. Deep headless browser web-crawling is an R4 subsystem.
+              Research Pack is not installed (deferred to Milestone R5.3). Local synthesis and workspace retrieval are active.
             </p>
-            <span className="inline-block px-1.5 py-0.5 rounded bg-bg-base border border-border-subtle text-[10px] font-mono text-warning">
-              Preview · Coming in R4
-            </span>
           </div>
 
           {/* Scratchpad Notes */}

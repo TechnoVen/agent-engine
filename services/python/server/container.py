@@ -138,8 +138,8 @@ def get_services() -> AppServices:
     return _services_instance
 
 
-def set_services(services: AppServices) -> None:
-    """Explicitly inject an AppServices container (primarily for tests)."""
+def set_services(services: Optional[AppServices]) -> None:
+    """Explicitly inject an AppServices container (primarily for tests). Pass None to reset."""
     global _services_instance
     _services_instance = services
 

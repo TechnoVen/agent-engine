@@ -54,7 +54,7 @@ const COLOR_SWATCHES = [
 const POLICY_OPTIONS = [
   {
     id: 'strict',
-    name: 'Strict Zero-Trust (Law 3)',
+    name: 'Strict Zero-Trust',
     description: 'Deny-by-default AST sandbox; high-risk tool calls require explicit approval token.',
   },
   {
@@ -107,14 +107,14 @@ export const Projects: React.FC<ProjectsProps> = ({
             threadCount: bp.sessions_count || 0,
             lastActivity: bp.updated_at ? new Date(bp.updated_at).toLocaleTimeString() : 'Recent',
             instructions: bp.instructions || '',
-            scopedPolicy: 'Strict Zero-Trust (Law 3)',
+            scopedPolicy: 'Strict Zero-Trust',
             monthlySpendUsd: 0.0,
             budgetCeilingUsd: bp.settings?.budget_ceiling_usd || 50.0,
             activeAgents: ['Senior Architect'],
             files: [],
             threads: [],
           }));
-          setProjects((prev) => (prev.length > 0 ? prev : mapped));
+          setProjects(mapped);
         }
       } catch {
         // offline
@@ -136,7 +136,7 @@ export const Projects: React.FC<ProjectsProps> = ({
   const [newProjectInstructions, setNewProjectInstructions] = useState('');
   const [newProjectIcon, setNewProjectIcon] = useState('folder');
   const [newProjectColor, setNewProjectColor] = useState('#3b82f6');
-  const [newProjectPolicy, setNewProjectPolicy] = useState('Strict Zero-Trust (Law 3)');
+  const [newProjectPolicy, setNewProjectPolicy] = useState('Strict Zero-Trust');
   const [newProjectBudget, setNewProjectBudget] = useState('25.00');
 
   useEffect(() => {
@@ -196,7 +196,7 @@ export const Projects: React.FC<ProjectsProps> = ({
     setNewProjectInstructions('');
     setNewProjectIcon('folder');
     setNewProjectColor('#3b82f6');
-    setNewProjectPolicy('Strict Zero-Trust (Law 3)');
+    setNewProjectPolicy('Strict Zero-Trust');
     setNewProjectBudget('25.00');
   };
 
@@ -304,7 +304,7 @@ export const Projects: React.FC<ProjectsProps> = ({
                 <ShieldCheck className="w-5 h-5" />
               </div>
               <div>
-                <div className="text-lg font-bold text-text-primary">Law 3 Protected</div>
+                <div className="text-lg font-bold text-text-primary">Zero-Trust Protected</div>
                 <div className="text-xs text-text-tertiary">Zero-Trust Boundaries</div>
               </div>
             </div>

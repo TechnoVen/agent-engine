@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 
 
@@ -55,13 +55,43 @@ async def toggle_scheduled_task_endpoint(
 
 
 @router.post("/tasks/{task_id}/run")
-async def trigger_scheduled_task_endpoint(task_id: str, request: Request):
-    """Trigger an immediate execution of a scheduled task."""
+async def trigger_scheduled_task_endpoint(
+    task_id: str,
+    request: Request,
+    canonical: bool = Query(default=False),
+):
+    """Trigger execution of a scheduled task. Dispatches to canonical JobService when canonical=True or X-Canonical-Runtime header is set; otherwise preserves deferred R1/R4 contract (HTTP 501)."""
     verify_ipc_token(request)
     backend = get_storage_backend()
     task = backend.get_scheduled_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail=f"Task '{task_id}' not found")
+
+    is_canonical = canonical or (
+        request.headers.get("x-canonical-runtime", "").lower() in ("true", "1")
+    )
+    if is_canonical:
+        from core.jobs.service import get_job_service
+
+        job_service = get_job_service()
+        job = job_service.submit_job(
+            job_type="scheduled_task",
+            payload={
+                "task_id": task_id,
+                "task_name": task.get("name"),
+                "action": task.get("action") or task.get("prompt"),
+                "schedule": task.get("cron") or task.get("schedule"),
+            },
+            priority=task.get("priority", 0) if isinstance(task.get("priority"), int) else 0,
+        )
+        return {
+            "status": "enqueued",
+            "task_id": task_id,
+            "job_id": job.job_id,
+            "job_status": job.status.value if hasattr(job.status, "value") else str(job.status),
+            "message": f"Task '{task_id}' dispatched to canonical JobService as job '{job.job_id}'.",
+        }
+
     return JSONResponse(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         content={

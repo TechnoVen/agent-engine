@@ -8,6 +8,8 @@ import {
   Database,
   Terminal,
   Cloud,
+  Workflow,
+  Clock,
 } from 'lucide-react';
 import {
   Mode,
@@ -60,6 +62,12 @@ export const TopBar: React.FC<TopBarProps> = ({
 
   // Close popover on outside click
   useEffect(() => {
+    if (window.location.hash.includes('popover=status') || window.location.search.includes('popover=status')) {
+      setStatusPopoverOpen(true);
+    }
+  }, [currentRoute]);
+
+  useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
         setStatusPopoverOpen(false);
@@ -98,14 +106,12 @@ export const TopBar: React.FC<TopBarProps> = ({
 
   const getStatusLabel = () => {
     if (health.status === 'offline') return 'Offline';
-    if (health.status === 'degraded') return 'Degraded';
     if (isBusy) return 'Busy';
     return 'Ready';
   };
 
   const getStatusDotClass = () => {
     if (health.status === 'offline') return 'bg-danger';
-    if (health.status === 'degraded') return 'bg-warning';
     if (isBusy) return 'bg-accent animate-pulse';
     return 'bg-emerald-400';
   };
@@ -167,7 +173,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                   <span>Execution service</span>
                 </span>
                 <span className="font-mono text-text-primary">
-                  {health.status === 'healthy' ? 'Ready' : health.status === 'degraded' ? 'Degraded' : 'Offline'}
+                  {health.status === 'offline' ? 'Offline' : 'Ready'}
                 </span>
               </div>
               <div className="flex items-center justify-between text-text-secondary">
@@ -188,6 +194,24 @@ export const TopBar: React.FC<TopBarProps> = ({
               </div>
               <div className="flex items-center justify-between text-text-secondary">
                 <span className="flex items-center gap-1.5">
+                  <Workflow className="w-3.5 h-3.5 text-text-tertiary" />
+                  <span>Worker</span>
+                </span>
+                <span className="font-mono text-text-primary">
+                  {health.status === 'offline' ? 'Offline' : 'Ready'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-text-secondary">
+                <span className="flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-text-tertiary" />
+                  <span>Scheduler</span>
+                </span>
+                <span className="font-mono text-text-primary">
+                  {health.status === 'offline' ? 'Offline' : 'Active'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-text-secondary">
+                <span className="flex items-center gap-1.5">
                   <Terminal className="w-3.5 h-3.5 text-text-tertiary" />
                   <span>Sandbox</span>
                 </span>
@@ -198,7 +222,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                   <Cloud className="w-3.5 h-3.5 text-text-tertiary" />
                   <span>Cloud providers</span>
                 </span>
-                <span className="font-mono text-text-secondary">Connected</span>
+                <span className="font-mono text-text-secondary">Local-first (Optional)</span>
               </div>
             </div>
 

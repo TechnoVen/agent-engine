@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 
 # Core domain imports
@@ -206,9 +206,40 @@ async def dry_run_workflow_endpoint(
 @router.post("/workflows/{workflow_id}/run")
 async def run_workflow_endpoint(
     workflow_id: str,
+    request: Request,
     req: Optional[WorkflowRunRequest] = None,
+    canonical: bool = Query(default=False),
 ):
-    """Execute a workflow instance."""
+    """Execute a workflow instance. Dispatches to canonical WorkflowService if canonical=True or X-Canonical-Runtime header is set."""
+    is_canonical = canonical or (
+        request.headers.get("x-canonical-runtime", "").lower() in ("true", "1")
+    )
+    if is_canonical:
+        from services.python.server.container import get_workflow_service
+
+        wf_service = get_workflow_service()
+        inputs = req.inputs if req else {}
+        try:
+            run = wf_service.start_run(workflow_id=workflow_id, inputs=inputs)
+            return run.to_dict()
+        except Exception:
+            storage = get_workflow_storage()
+            wf = storage.get_workflow(workflow_id)
+            if not wf:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Workflow '{workflow_id}' not found",
+                )
+            try:
+                wf_service.create_definition(wf)
+                run = wf_service.start_run(workflow_id=workflow_id, inputs=inputs)
+                return run.to_dict()
+            except Exception as inner_err:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Failed to start canonical workflow run: {inner_err}",
+                )
+
     storage = get_workflow_storage()
     wf = storage.get_workflow(workflow_id)
     if not wf:

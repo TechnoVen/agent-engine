@@ -109,9 +109,9 @@ const MODE_PLACEHOLDERS: Record<string, string> = {
   websites: "Describe the site to build, landing page sections, or brand specs...",
   design: "Describe UI components, layout mockups, or visual design tokens...",
   diagrams: "Describe system architecture, microservices, or data pipeline flow...",
-  swarm: "Preview · Runtime not available yet · Coming in R4",
-  workflows: "Preview · Runtime not available yet · Coming in R4",
-  automations: "Preview · Runtime not available yet · Coming in R4",
+  swarm: "Describe multi-agent coordination goal, worker roles, and synthesis plan...",
+  workflows: "Describe the workflow DAG to execute, input parameters, or orchestration steps...",
+  automations: "Describe the automation pipeline to run, triggers, and scheduled operations...",
 };
 
 const DEFAULT_PLUGINS: PluginItem[] = [

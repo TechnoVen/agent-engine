@@ -216,6 +216,39 @@ class WorkflowStorage:
                         now,
                     ),
                 )
+                cursor.execute("PRAGMA table_info(workflow_definitions)")
+                if cursor.fetchall():
+                    def_hash = (
+                        workflow.compute_definition_hash()
+                        if hasattr(workflow, "compute_definition_hash")
+                        else ""
+                    )
+                    cursor.execute(
+                        """
+                        INSERT INTO workflow_definitions (
+                            workflow_id, name, description, version, status, definition_json, definition_hash, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(workflow_id) DO UPDATE SET
+                            name = excluded.name,
+                            description = excluded.description,
+                            version = excluded.version,
+                            status = excluded.status,
+                            definition_json = excluded.definition_json,
+                            definition_hash = excluded.definition_hash,
+                            updated_at = excluded.updated_at
+                        """,
+                        (
+                            workflow.id,
+                            workflow.name,
+                            workflow.description,
+                            workflow.version,
+                            workflow.status.value,
+                            definition_json,
+                            def_hash,
+                            workflow.created_at or now,
+                            now,
+                        ),
+                    )
                 conn.commit()
             finally:
                 if not self._is_memory:
@@ -300,36 +333,75 @@ class WorkflowStorage:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    INSERT INTO workflow_runs (
-                        run_id, workflow_id, status, inputs, outputs, step_results,
-                        current_node_id, pending_gate, total_cost_usd, created_at, completed_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(run_id) DO UPDATE SET
-                        status = excluded.status,
-                        inputs = excluded.inputs,
-                        outputs = excluded.outputs,
-                        step_results = excluded.step_results,
-                        current_node_id = excluded.current_node_id,
-                        pending_gate = excluded.pending_gate,
-                        total_cost_usd = excluded.total_cost_usd,
-                        completed_at = excluded.completed_at
-                    """,
-                    (
-                        run.run_id,
-                        run.workflow_id,
-                        run.status.value,
-                        inputs_json,
-                        outputs_json,
-                        step_results_json,
-                        run.current_node_id,
-                        pending_gate_json,
-                        run.total_cost_usd,
-                        run.created_at,
-                        run.completed_at,
-                    ),
-                )
+                cursor.execute("PRAGMA table_info(workflow_runs)")
+                cols = {r["name"] for r in cursor.fetchall()}
+                if "workflow_run_id" in cols:
+                    outputs_payload = dict(run.outputs)
+                    if run.step_results:
+                        outputs_payload["_step_results"] = run_dict.get("step_results", {})
+                    if run.total_cost_usd:
+                        outputs_payload["_total_cost_usd"] = run.total_cost_usd
+                    if run.pending_gate:
+                        outputs_payload["_pending_gate"] = run.pending_gate
+                    cursor.execute(
+                        """
+                        INSERT INTO workflow_runs (
+                            workflow_run_id, workflow_id, definition_hash, definition_snapshot_json,
+                            status, inputs_json, outputs_json, created_at, completed_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(workflow_run_id) DO UPDATE SET
+                            status = excluded.status,
+                            inputs_json = excluded.inputs_json,
+                            outputs_json = excluded.outputs_json,
+                            completed_at = excluded.completed_at,
+                            updated_at = excluded.updated_at
+                        """,
+                        (
+                            run.run_id,
+                            run.workflow_id,
+                            run.definition_hash or "",
+                            json.dumps(run.definition_snapshot.to_dict())
+                            if run.definition_snapshot
+                            else "{}",
+                            run.status.value,
+                            inputs_json,
+                            json.dumps(outputs_payload),
+                            run.created_at,
+                            run.completed_at,
+                            run.created_at,
+                        ),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        INSERT INTO workflow_runs (
+                            run_id, workflow_id, status, inputs, outputs, step_results,
+                            current_node_id, pending_gate, total_cost_usd, created_at, completed_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(run_id) DO UPDATE SET
+                            status = excluded.status,
+                            inputs = excluded.inputs,
+                            outputs = excluded.outputs,
+                            step_results = excluded.step_results,
+                            current_node_id = excluded.current_node_id,
+                            pending_gate = excluded.pending_gate,
+                            total_cost_usd = excluded.total_cost_usd,
+                            completed_at = excluded.completed_at
+                        """,
+                        (
+                            run.run_id,
+                            run.workflow_id,
+                            run.status.value,
+                            inputs_json,
+                            outputs_json,
+                            step_results_json,
+                            run.current_node_id,
+                            pending_gate_json,
+                            run.total_cost_usd,
+                            run.created_at,
+                            run.completed_at,
+                        ),
+                    )
                 conn.commit()
             finally:
                 if not self._is_memory:
@@ -343,12 +415,11 @@ class WorkflowStorage:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
+                cursor.execute("PRAGMA table_info(workflow_runs)")
+                cols = {r["name"] for r in cursor.fetchall()}
+                id_col = "workflow_run_id" if "workflow_run_id" in cols else "run_id"
                 cursor.execute(
-                    """
-                    SELECT run_id, workflow_id, status, inputs, outputs, step_results,
-                           current_node_id, pending_gate, total_cost_usd, created_at, completed_at
-                    FROM workflow_runs WHERE run_id = ?
-                    """,
+                    f"SELECT * FROM workflow_runs WHERE {id_col} = ?",
                     (run_id,),
                 )
                 row = cursor.fetchone()
@@ -390,7 +461,10 @@ class WorkflowStorage:
             conn = self._get_connection()
             try:
                 cursor = conn.cursor()
-                cursor.execute("DELETE FROM workflow_runs WHERE run_id = ?", (run_id,))
+                cursor.execute("PRAGMA table_info(workflow_runs)")
+                cols = {r["name"] for r in cursor.fetchall()}
+                id_col = "workflow_run_id" if "workflow_run_id" in cols else "run_id"
+                cursor.execute(f"DELETE FROM workflow_runs WHERE {id_col} = ?", (run_id,))
                 conn.commit()
                 return cursor.rowcount > 0
             finally:
@@ -416,12 +490,20 @@ class WorkflowStorage:
         pending_gate_val = row["pending_gate"] if "pending_gate" in keys else None
         total_cost_val = row["total_cost_usd"] if "total_cost_usd" in keys else 0.0
 
+        outputs_dict = json.loads(outputs_val or "{}")
+        if "_step_results" in outputs_dict and step_results_val == "{}":
+            step_results_val = json.dumps(outputs_dict.pop("_step_results"))
+        if "_total_cost_usd" in outputs_dict and total_cost_val == 0.0:
+            total_cost_val = outputs_dict.pop("_total_cost_usd")
+        if "_pending_gate" in outputs_dict and pending_gate_val is None:
+            pending_gate_val = json.dumps(outputs_dict.pop("_pending_gate"))
+
         data: Dict[str, Any] = {
             "run_id": run_id,
             "workflow_id": row["workflow_id"],
             "status": WorkflowRunStatus(row["status"]),
             "inputs": json.loads(inputs_val or "{}"),
-            "outputs": json.loads(outputs_val or "{}"),
+            "outputs": outputs_dict,
             "step_results": json.loads(step_results_val or "{}"),
             "current_node_id": current_node_id_val,
             "pending_gate": json.loads(pending_gate_val) if pending_gate_val else None,
