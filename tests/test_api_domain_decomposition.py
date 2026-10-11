@@ -6,8 +6,8 @@ References: docs/ROADMAP.md (R1.14), docs/ARCHITECTURE.md
 
 Validates that:
 1. Application factory creates valid FastAPI instance.
-2. All 13 domain routers are created and mounted under /v1.
-3. All 161 route handlers are present and operational.
+2. Canonical domain routers are created and mounted under /v1 with semantic identity checks.
+3. Unique route ownership, zero duplicate canonical paths, and required operations are mounted and verified.
 4. Backwards-compatible facade in api.py preserves all symbols and test hooks.
 5. Error mapping translates domain exceptions to canonical HTTP status codes.
 6. Execution coordinator dependency injection functions uniformly across routers.

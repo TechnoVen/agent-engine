@@ -40,45 +40,44 @@ CANONICAL_BINDING_ALLOWLIST: Set[str] = {
 
 # Authoritative Pack Permission Vocabulary & Mapping to Zero-Trust Policy Engine (R5.1)
 # Capability packs declare scopes, but zero execution authority is granted without PolicyEngine evaluation.
+# Directional contract: pack scope -> canonical security capability/permission -> PolicyEngine.
 PACK_PERMISSION_VOCABULARY: Dict[str, Dict[str, Any]] = {
     "fs:read": {
         "description": "Read project workspace files, architecture documents, and instructions",
-        "canonical_permission": "workspace:read",
+        "canonical_permission": "read",
+        "canonical_capability": "fs:read",
         "policy_governed": True,
         "consequential": False,
         "requires_hitl_approval": False,
     },
     "storage:sqlite": {
         "description": "Local SQLite persistence for sessions, jobs, executions, and approvals",
-        "canonical_permission": "storage:read_write",
-        "policy_governed": True,
-        "consequential": False,
-        "requires_hitl_approval": False,
-    },
-    "workspace:read": {
-        "description": "Read files and directories within bounded project root",
-        "canonical_permission": "fs:read",
+        "canonical_permission": "write_local",
+        "canonical_capability": "storage:sqlite",
         "policy_governed": True,
         "consequential": False,
         "requires_hitl_approval": False,
     },
     "execution:run": {
         "description": "Execute model inferences and safe queries via ExecutionCoordinator",
-        "canonical_permission": "execution:run",
+        "canonical_permission": "execute",
+        "canonical_capability": "execution:run",
         "policy_governed": True,
         "consequential": False,
         "requires_hitl_approval": False,
     },
     "jobs:manage": {
         "description": "Submit, pause, resume, and cancel durable jobs via JobService",
-        "canonical_permission": "jobs:manage",
+        "canonical_permission": "execute",
+        "canonical_capability": "jobs:manage",
         "policy_governed": True,
         "consequential": False,
         "requires_hitl_approval": False,
     },
     "approvals:manage": {
         "description": "Cryptographic exact-operation authorization verification and atomic CAS consumption",
-        "canonical_permission": "safety:approvals",
+        "canonical_permission": "admin",
+        "canonical_capability": "approvals:manage",
         "policy_governed": True,
         "consequential": True,
         "requires_hitl_approval": True,
@@ -334,6 +333,8 @@ class CapabilityPackService:
         pack_id: str,
         operation: str,
         is_consequential: bool = False,
+        policy_engine: Optional[Any] = None,
+        tool_args: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Verify that enabling a capability pack does NOT grant operational execution authority.
 
@@ -345,6 +346,13 @@ class CapabilityPackService:
         pack = self.get_pack(pack_id)
         if not pack or not self.is_pack_enabled(pack_id):
             return False
+
+        # If a policy engine is provided, evaluate zero-trust guardrails
+        if policy_engine is not None:
+            decision = policy_engine.evaluate(operation, tool_args or {})
+            if decision.is_denied:
+                return False
+
         # Pack enablement alone never authorizes consequential execution
         if is_consequential:
             return False

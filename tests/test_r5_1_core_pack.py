@@ -319,38 +319,74 @@ def test_core_pack_satisfies_founder_mvp_mappings(pack_service: CapabilityPackSe
 def test_core_pack_permission_vocabulary_and_zero_trust_boundary(
     pack_service: CapabilityPackService,
 ):
-    """Verify pack permission vocabulary correctly maps to zero-trust permissions and enforces boundary."""
+    """Verify pack permission vocabulary correctly maps to zero-trust permissions and enforces boundary.
+
+    Proves:
+    1. Directional contract: pack scope -> canonical security capability/permission -> PolicyEngine.
+    2. Elimination of circular aliases (e.g. workspace:read -> fs:read).
+    3. Undeclared pack scope cannot be used.
+    4. Enabled pack + declared consequential scope + policy denial -> operation denied.
+    """
+    from core.safety.policy import PolicyEngine
+
     vocab = pack_service.get_permission_vocabulary()
     assert "fs:read" in vocab
     assert "storage:sqlite" in vocab
-    assert "workspace:read" in vocab
     assert "execution:run" in vocab
     assert "jobs:manage" in vocab
     assert "approvals:manage" in vocab
+    # Invariant: No contradictory circular aliases
+    assert "workspace:read" not in vocab
 
-    # Verify zero-trust properties: approvals require HITL approval and are consequential
+    # Verify directional mapping to standard permission strings
+    fs_map = pack_service.map_permission_to_canonical("fs:read")
+    assert fs_map is not None
+    assert fs_map["canonical_permission"] == "read"
+    assert fs_map["canonical_capability"] == "fs:read"
+
     appr_map = pack_service.map_permission_to_canonical("approvals:manage")
     assert appr_map is not None
+    assert appr_map["canonical_permission"] == "admin"
     assert appr_map["consequential"] is True
     assert appr_map["requires_hitl_approval"] is True
     assert appr_map["policy_governed"] is True
 
-    # Load Core Pack and verify zero-trust execution authority boundary
+    # 1. Load Core Pack and verify enabled status
     pack = pack_service.load_manifest("packs/core/manifest.yaml")
     assert pack_service.is_pack_enabled(pack.id) is True
 
-    # Safe operation verification
-    assert (
-        pack_service.verify_zero_trust_authority_boundary(
-            pack.id, "read_workspace", is_consequential=False
-        )
-        is True
-    )
+    # 2. Undeclared pack scope cannot be used
+    assert pack_service.validate_permission(pack, "net:outbound") is False
+    assert pack_service.validate_permission(pack, "shell:execute") is False
+    assert pack_service.validate_permission(pack, "db:drop") is False
+    assert pack_service.validate_permission(pack, "fs:read") is True
 
-    # Consequential operation CANNOT be executed merely because Core Pack is enabled
+    # 3. Enabled pack + declared consequential scope + policy denial -> operation denied
+    policy = PolicyEngine()
+    # A dangerous command is blocked by policy guardrails
     assert (
         pack_service.verify_zero_trust_authority_boundary(
-            pack.id, "delete_database", is_consequential=True
+            pack.id,
+            operation="bash",
+            is_consequential=False,
+            policy_engine=policy,
+            tool_args={"command": "rm -rf /"},
         )
         is False
+    )
+
+    # Consequential operation CANNOT execute merely because Core Pack is enabled
+    assert (
+        pack_service.verify_zero_trust_authority_boundary(
+            pack.id, "delete_database", is_consequential=True, policy_engine=policy
+        )
+        is False
+    )
+
+    # Safe operation permitted under policy
+    assert (
+        pack_service.verify_zero_trust_authority_boundary(
+            pack.id, "read_workspace", is_consequential=False, policy_engine=policy
+        )
+        is True
     )

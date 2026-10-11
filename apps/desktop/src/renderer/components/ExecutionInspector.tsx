@@ -4,19 +4,26 @@ import {
   ChevronUp,
   Copy,
   Check,
+  Wrench,
+  Shield,
+  FileText,
 } from 'lucide-react';
 import { ExecutionProvenance } from '../types';
 
 export interface ExecutionInspectorProps {
   provenance: ExecutionProvenance;
+  trace?: any;
   className?: string;
+  defaultExpanded?: boolean;
 }
 
 export const ExecutionInspector: React.FC<ExecutionInspectorProps> = ({
   provenance,
+  trace,
   className = '',
+  defaultExpanded = false,
 }) => {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const [copiedId, setCopiedId] = useState(false);
 
   const isLocal = provenance.isLocal ?? true;
@@ -25,8 +32,32 @@ export const ExecutionInspector: React.FC<ExecutionInspectorProps> = ({
   const model = provenance.model || (isLocal ? 'qwen2.5-coder:7b' : 'frontier-model');
   const latencyStr = provenance.latencyMs !== undefined ? `${provenance.latencyMs}ms` : '342ms';
   const totalTokens = provenance.totalTokens ?? (provenance.completionTokens ? (provenance.promptTokens || 0) + provenance.completionTokens : 185);
-  const cost = provenance.costUsd ?? 0.0;
-  const costDisplay = cost > 0 ? `Provider charge: $${cost.toFixed(4)}` : 'Provider charge: $0.00';
+  const cost = provenance.costUsd;
+  const costProv = (provenance.costProvenance || trace?.usage?.cost_provenance)?.toLowerCase();
+
+  let costDisplay = 'Provider charge: Unavailable';
+  let localComputeCostNote: string | null = null;
+
+  if (isLocal) {
+    costDisplay = 'Provider charge: $0.00';
+    localComputeCostNote = 'Local compute cost: Unavailable (hardware/electricity unmeasured)';
+  } else if (cost !== undefined && cost !== null && !isNaN(cost)) {
+    if (costProv === 'provider_reported' || costProv === 'actual') {
+      costDisplay = `Provider charge: $${cost.toFixed(4)} (Actual)`;
+    } else if (costProv === 'estimated' || costProv === 'calculated') {
+      costDisplay = `Provider charge: $${cost.toFixed(4)} (Estimated)`;
+    } else if (costProv === 'unavailable') {
+      costDisplay = 'Provider charge: Unavailable';
+    } else {
+      costDisplay = `Provider charge: $${cost.toFixed(4)} (Estimated)`;
+    }
+  } else {
+    costDisplay = 'Provider charge: Unavailable';
+  }
+
+  const tools = provenance.tools || trace?.tools || [];
+  const approvals = provenance.approvals || trace?.approvals || [];
+  const artifacts = provenance.artifacts || trace?.artifacts || [];
 
   // Locality label
   const localityLabel = isLocal ? 'Local model' : 'Cloud model';
@@ -101,12 +132,8 @@ export const ExecutionInspector: React.FC<ExecutionInspectorProps> = ({
           <span>{localityLabel}</span>
           <span>·</span>
           <span>{latencyStr}</span>
-          {cost > 0 && (
-            <>
-              <span>·</span>
-              <span className="text-text-secondary font-medium">{costDisplay}</span>
-            </>
-          )}
+          <span>·</span>
+          <span className="text-text-secondary font-medium">{costDisplay}</span>
         </div>
 
         <div className="flex items-center gap-1 text-[11px] hover:text-text-primary transition-colors">
@@ -188,6 +215,11 @@ export const ExecutionInspector: React.FC<ExecutionInspectorProps> = ({
               <div className="text-text-primary font-medium mt-0.5">
                 {costDisplay}
               </div>
+              {localComputeCostNote && (
+                <div className="text-text-tertiary text-[9px] mt-0.5 font-sans leading-tight">
+                  {localComputeCostNote}
+                </div>
+              )}
             </div>
           </div>
 
@@ -206,6 +238,85 @@ export const ExecutionInspector: React.FC<ExecutionInspectorProps> = ({
                   <span className="text-emerald-400 font-medium">{provenance.tokensPerSec} tok/s</span>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Tool Calls Section (if present) */}
+          {tools.length > 0 && (
+            <div className="p-2.5 rounded bg-bg-elevated/70 border border-border-subtle/50 space-y-1.5 font-sans text-[11px]">
+              <div className="flex items-center gap-1.5 text-[10px] uppercase font-semibold text-text-tertiary font-mono tracking-wider">
+                <Wrench className="w-3 h-3 text-accent" />
+                <span>Tool Invocations ({tools.length})</span>
+              </div>
+              <div className="space-y-1 divide-y divide-border-subtle/30 font-mono text-[10px]">
+                {tools.map((t: any, idx: number) => (
+                  <div key={t.invocation_id || idx} className="pt-1 first:pt-0 flex items-center justify-between text-text-secondary">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-text-primary">{t.tool_id || t.tool_name}</span>
+                      <span className={`px-1 py-0.2 rounded text-[9px] ${t.status === 'completed' ? 'text-emerald-400 bg-emerald-500/10' : 'text-amber-400 bg-amber-500/10'}`}>
+                        {t.status || 'completed'}
+                      </span>
+                      {t.duration_ms !== undefined && (
+                        <span className="text-text-tertiary">{t.duration_ms}ms</span>
+                      )}
+                    </div>
+                    {t.result_summary && (
+                      <span className="text-text-tertiary truncate max-w-[200px]" title={t.result_summary}>
+                        {t.result_summary}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Approvals & Policy Gates (if present) */}
+          {approvals.length > 0 && (
+            <div className="p-2.5 rounded bg-bg-elevated/70 border border-border-subtle/50 space-y-1.5 font-sans text-[11px]">
+              <div className="flex items-center gap-1.5 text-[10px] uppercase font-semibold text-text-tertiary font-mono tracking-wider">
+                <Shield className="w-3 h-3 text-emerald-400" />
+                <span>Approvals & Policy Gates ({approvals.length})</span>
+              </div>
+              <div className="space-y-1 divide-y divide-border-subtle/30 font-mono text-[10px]">
+                {approvals.map((a: any, idx: number) => (
+                  <div key={a.approval_id || idx} className="pt-1 first:pt-0 flex items-center justify-between text-text-secondary">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-text-primary">{a.tool_name || a.approval_id}</span>
+                      <span className={`px-1 py-0.2 rounded text-[9px] ${a.status === 'approved' ? 'text-emerald-400 bg-emerald-500/10' : a.status === 'rejected' ? 'text-red-400 bg-red-500/10' : 'text-amber-400 bg-amber-500/10'}`}>
+                        {a.status}
+                      </span>
+                    </div>
+                    <span className="text-text-tertiary truncate max-w-[200px]" title={a.reason}>
+                      {a.reason || (a.decided_by ? `Decided by: ${a.decided_by}` : 'Policy Gate')}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Artifacts Produced (if present) */}
+          {artifacts.length > 0 && (
+            <div className="p-2.5 rounded bg-bg-elevated/70 border border-border-subtle/50 space-y-1.5 font-sans text-[11px]">
+              <div className="flex items-center gap-1.5 text-[10px] uppercase font-semibold text-text-tertiary font-mono tracking-wider">
+                <FileText className="w-3 h-3 text-cyan-400" />
+                <span>Produced Artifacts ({artifacts.length})</span>
+              </div>
+              <div className="space-y-1 divide-y divide-border-subtle/30 font-mono text-[10px]">
+                {artifacts.map((art: any, idx: number) => (
+                  <div key={art.id || idx} className="pt-1 first:pt-0 flex items-center justify-between text-text-secondary">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-text-primary">{art.name}</span>
+                      <span className="text-text-tertiary">({art.type || 'file'})</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-text-tertiary">
+                      {art.size_bytes !== undefined && <span>{art.size_bytes} B</span>}
+                      {art.sha256_hash && <span className="font-mono text-[9px]">sha256:{art.sha256_hash.slice(0, 8)}...</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

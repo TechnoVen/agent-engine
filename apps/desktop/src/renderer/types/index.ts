@@ -208,6 +208,7 @@ export interface ExecutionProvenance {
   completionTokens?: number;
   totalTokens?: number;
   costUsd?: number;
+  costProvenance?: string;
   estCost?: string;
   tokensPerSec?: number;
   policyStatus?: string;
@@ -215,6 +216,9 @@ export interface ExecutionProvenance {
   costEvidenceSource?: string;
   latencyEvidence?: string;
   candidateRejections?: Array<{ candidate: string; provider?: string; stage?: string; reason: string }>;
+  tools?: any[];
+  approvals?: any[];
+  artifacts?: any[];
 }
 
 export interface MessageMetadata {

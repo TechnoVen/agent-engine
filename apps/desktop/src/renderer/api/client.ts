@@ -319,9 +319,39 @@ class SidecarClient {
     }
   }
 
+  async listExecutions(limit = 50, projectId?: string): Promise<any[]> {
+    try {
+      const url = projectId
+        ? `${this.base}/v1/executions?limit=${limit}&project_id=${encodeURIComponent(projectId)}`
+        : `${this.base}/v1/executions?limit=${limit}`;
+      const res = await fetch(url, {
+        headers: this.getHeaders(),
+      });
+      if (!res.ok) return [];
+      return await res.json();
+    } catch {
+      return [];
+    }
+  }
+
   async getExecution(executionId: string): Promise<any | null> {
     try {
       const res = await fetch(`${this.base}/v1/executions/${encodeURIComponent(executionId)}`, {
+        headers: this.getHeaders(),
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  async getExecutionTrace(executionId: string, projectId?: string): Promise<any | null> {
+    try {
+      const url = projectId
+        ? `${this.base}/v1/executions/${encodeURIComponent(executionId)}/trace?project_id=${encodeURIComponent(projectId)}`
+        : `${this.base}/v1/executions/${encodeURIComponent(executionId)}/trace`;
+      const res = await fetch(url, {
         headers: this.getHeaders(),
       });
       if (!res.ok) return null;

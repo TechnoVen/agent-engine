@@ -102,6 +102,21 @@ async def cancel_execution_endpoint(
     )
 
 
+@router.get("/executions")
+async def list_recent_executions_endpoint(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    project_id: Optional[str] = Query(None),
+    coordinator: ExecutionCoordinator = Depends(get_execution_coordinator),
+):
+    """List recent executions across projects with factual provenance."""
+    backend = coordinator.storage
+    if hasattr(backend, "list_executions"):
+        records = backend.list_executions(project_id=project_id, limit=limit, offset=offset)
+        return JSONResponse(content=records)
+    return JSONResponse(content=[])
+
+
 @router.get("/executions/{execution_id}")
 async def get_execution_endpoint(
     execution_id: str,
