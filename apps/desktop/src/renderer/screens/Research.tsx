@@ -158,7 +158,7 @@ export const Research: React.FC = () => {
               <span>Research Pack Boundary</span>
             </div>
             <p className="text-[11px] text-text-tertiary leading-relaxed">
-              Research Pack is not installed (deferred to Milestone R5.3). Local synthesis and workspace retrieval are active.
+              Research Pack not installed. Web research is not available yet; local synthesis and workspace retrieval are active.
             </p>
           </div>
 

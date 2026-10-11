@@ -143,7 +143,7 @@ def test_kimi_universal_shell_components():
     topbar = (RENDERER_ROOT / "shell" / "TopBar.tsx").read_text()
     assert "Agent Engine" in topbar
     assert "System Status" in topbar
-    assert "Sidecar 8000" in topbar
+    assert "sidecarClient.base" in topbar
 
     preferences = (RENDERER_ROOT / "components" / "ExecutionPreferences.tsx").read_text()
     assert "Local Only" in preferences
@@ -2226,12 +2226,14 @@ def test_real_project_integration_and_truthful_empty_states():
     assert "sidecarClient.getProjects" in projects_content
     assert "No projects found" in projects_content
 
-    # Tasks and Automations must show truthful R4 preview banners
+    # Tasks and Automations show truthful execution capability headers without stale preview banners
     tasks_content = (RENDERER_ROOT / "screens" / "Tasks.tsx").read_text(encoding="utf-8")
-    assert "Preview · Runtime not available yet · Coming in R4" in tasks_content
+    assert "Scheduled Tasks" in tasks_content
+    assert "JobService execution queue" in tasks_content
 
     workflows_content = (RENDERER_ROOT / "screens" / "Workflows.tsx").read_text(encoding="utf-8")
-    assert "Preview · Runtime not available yet · Coming in R4" in workflows_content
+    assert "Automations & Workflows" in workflows_content
+    assert "Visual DAG Editor" in workflows_content
 
 
 def test_canonical_dark_form_field_styling():

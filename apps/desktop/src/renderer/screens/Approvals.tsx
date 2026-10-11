@@ -181,7 +181,7 @@ export const Approvals: React.FC = () => {
                       <span className="text-text-tertiary font-medium block text-[10px] uppercase mb-0.5">
                         Trigger Rationale
                       </span>
-                      {op.reason || 'High-risk mutation requires operator zero-trust token (ADR-008).'}
+                      {op.reason || 'High-risk mutation requires operator zero-trust token.'}
                     </div>
 
                     {/* Affected Resources / Tool Args */}

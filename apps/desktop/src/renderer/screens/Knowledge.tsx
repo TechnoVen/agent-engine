@@ -207,12 +207,12 @@ export const Knowledge: React.FC = () => {
                 {activeTab} Management
               </h3>
               <p className="text-[11px] text-text-tertiary max-w-sm mx-auto mb-3">
-                {activeTab === 'procedures' && 'Procedures & runbooks execution runtime is scheduled for R6.'}
-                {activeTab === 'sources' && 'Connected data sources & connectors runtime is scheduled for R6.'}
+                {activeTab === 'procedures' && 'Procedures & runbooks execution runtime is not available yet.'}
+                {activeTab === 'sources' && 'Connected data sources & connectors runtime is not available yet.'}
                 {activeTab === 'project' && 'Project-specific workspace context is linked via active project settings.'}
               </p>
               <span className="inline-block px-2 py-0.5 rounded bg-bg-elevated border border-border-subtle text-[10px] font-mono text-warning">
-                Runtime not available yet · Planned for R6
+                Runtime not available yet
               </span>
             </div>
           ) : filteredItems.length === 0 ? (

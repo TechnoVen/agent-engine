@@ -162,7 +162,9 @@ export const TopBar: React.FC<TopBarProps> = ({
             {/* Header */}
             <div className="flex items-center justify-between pb-2 border-b border-border-subtle/80">
               <span className="font-semibold text-text-primary">System Status</span>
-              <span className="text-[10px] font-mono text-text-tertiary uppercase">Sidecar 8000</span>
+              <span className="text-[10px] font-mono text-text-tertiary uppercase">
+                {sidecarClient.base ? sidecarClient.base.replace(/^https?:\/\//, '') : 'Local / Connected'}
+              </span>
             </div>
 
             {/* Core Services State */}
@@ -190,7 +192,9 @@ export const TopBar: React.FC<TopBarProps> = ({
                   <Database className="w-3.5 h-3.5 text-text-tertiary" />
                   <span>Database</span>
                 </span>
-                <span className="font-mono text-text-primary">Ready</span>
+                <span className="font-mono text-text-primary">
+                  {health.status === 'offline' ? 'Offline' : 'Ready'}
+                </span>
               </div>
               <div className="flex items-center justify-between text-text-secondary">
                 <span className="flex items-center gap-1.5">
@@ -198,7 +202,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                   <span>Worker</span>
                 </span>
                 <span className="font-mono text-text-primary">
-                  {health.status === 'offline' ? 'Offline' : 'Ready'}
+                  Offline
                 </span>
               </div>
               <div className="flex items-center justify-between text-text-secondary">
@@ -207,7 +211,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                   <span>Scheduler</span>
                 </span>
                 <span className="font-mono text-text-primary">
-                  {health.status === 'offline' ? 'Offline' : 'Active'}
+                  Stopped
                 </span>
               </div>
               <div className="flex items-center justify-between text-text-secondary">
@@ -222,7 +226,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                   <Cloud className="w-3.5 h-3.5 text-text-tertiary" />
                   <span>Cloud providers</span>
                 </span>
-                <span className="font-mono text-text-secondary">Local-first (Optional)</span>
+                <span className="font-mono text-text-secondary">Not configured</span>
               </div>
             </div>
 

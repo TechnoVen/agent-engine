@@ -132,18 +132,38 @@ def test_stale_r4_preview_labels_absent_from_user_facing_headings():
     """Verify user-facing screen headings do not claim runtime is unavailable."""
     tasks_screen = (RENDERER_ROOT / "screens" / "Tasks.tsx").read_text(encoding="utf-8")
     workflows_screen = (RENDERER_ROOT / "screens" / "Workflows.tsx").read_text(encoding="utf-8")
+    research_screen = (RENDERER_ROOT / "screens" / "Research.tsx").read_text(encoding="utf-8")
+    skills_screen = (RENDERER_ROOT / "screens" / "Skills.tsx").read_text(encoding="utf-8")
+    knowledge_screen = (RENDERER_ROOT / "screens" / "Knowledge.tsx").read_text(encoding="utf-8")
 
     # Tasks header description should reflect current execution capability
     assert (
         "Recurring schedules, cron automation, and background JobService execution queue"
         in tasks_screen
     )
+    assert "Coming in R4" not in tasks_screen
 
     # Workflows header description should reflect current DAG execution capability
     assert (
         "Visual pipeline DAG designer. Author, validate, and execute durable multi-agent workflows"
         in workflows_screen
     )
+    assert "Coming in R4" not in workflows_screen
+    assert "ADR-012" not in workflows_screen
+
+    # Research screen uses product language, zero internal milestone numbers
+    assert "R5.3" not in research_screen
+    assert "Research Pack not installed" in research_screen
+    assert "Web research is not available yet" in research_screen
+
+    # Skills screen uses Local-First, empty state supported, no ADR-013
+    assert "ADR-013" not in skills_screen
+    assert "Local-First" in skills_screen
+    assert "No skills installed" in skills_screen
+
+    # Knowledge screen has no internal milestone R6
+    assert "Planned for R6" not in knowledge_screen
+    assert "scheduled for R6" not in knowledge_screen
 
 
 def test_persisted_workflows_and_canonical_execution(api_client: TestClient):
@@ -220,11 +240,14 @@ def test_optional_unconfigured_cloud_does_not_force_global_degraded(api_client: 
     # TopBar System Status Popover implementation checks
     topbar_file = RENDERER_ROOT / "shell" / "TopBar.tsx"
     topbar_content = topbar_file.read_text(encoding="utf-8")
-    assert "Local-first (Optional)" in topbar_content
+    assert "Not configured" in topbar_content
     assert "Execution service" in topbar_content
     assert "Worker" in topbar_content
     assert "Scheduler" in topbar_content
     assert "Database" in topbar_content
+    assert "Offline" in topbar_content
+    assert "Stopped" in topbar_content
+    assert "Sidecar 8000" not in topbar_content
 
 
 def test_button_truth_and_no_synthetic_success():

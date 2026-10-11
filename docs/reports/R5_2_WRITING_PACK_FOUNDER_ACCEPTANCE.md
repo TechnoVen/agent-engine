@@ -151,35 +151,50 @@ The `ClaimReviewResult` computes:
 
 ## 5. Founder Acceptance (MVP-J2) Evidence: Two Real Articles
 
-Founder journey **MVP-J2** requires end-to-end execution of the Writing Pack on **TWO real, substantive articles**:
+Founder journey **MVP-J2** requires end-to-end execution of the Writing Pack on **TWO real, substantive articles** during the founder's interactive manual dogfooding session.
 
-### 5.1 Article 1: Agent Engine 0.5 Architecture
-- **Title:** *Agent Engine 0.5 Architecture: Deterministic Multi-Model Foundations*
-- **Audience:** Founders, Principal Engineers, AI Systems Researchers
-- **Objective:** Demonstrate high-assurance multi-model software architecture without shadow runtimes.
-- **Source Notes:** ADR-016 single kernel invariant, `ExecutionCoordinator` dispatch, `PolicyEngine` local boundary, sealed SQLite migrations 001–009, authenticated desktop IPC token, exact cryptographic digests.
-- **Lifecycle Provenance:**
-  - `Outline Artifact`: `high_assurance_agentic_architecture_outline.md` (Stage 1 OK)
-  - `Draft Artifact`: `high_assurance_agentic_architecture_draft.md` (Stage 2 OK, 48 words)
-  - `Style Review Artifact`: `high_assurance_agentic_architecture_style_review.md` (Stage 3 OK, 1 finding)
-  - `Revised Draft Artifact`: `high_assurance_agentic_architecture_revised_draft.md` (Stage 4 OK, active voice integrated)
-  - `Claim Review Artifact`: `high_assurance_agentic_architecture_claim_review.md` (Stage 5 OK, 2 supported claims verified against ADR-016)
-  - `Final Article Artifact`: `high_assurance_agentic_architecture_final_article.md` (Stage 6 OK, complete 6-stage lineage)
-- **Verdict:** **PASS**
+> [!IMPORTANT]
+> Product Truth Invariant: Zero synthetic passes or pre-filled scores. Both test slots below are reserved for genuine founder interactive execution in Desktop Shell dogfood mode. Automated tests verify pipeline substrate capability only; human founder acceptance remains **OPEN / NOT YET S3**.
 
-### 5.2 Article 2: THE DEN Concept & Engineering
-- **Title:** *THE DEN: Physical and Digital Sanctuary for High-Agency Builders*
-- **Audience:** Technical Founders, Deep Work Practitioners, Systems Designers
-- **Objective:** Articulate the ethos, architectural stack, and community design of THE DEN.
-- **Source Notes:** Sovereign engineering retreat, deep uninterrupted work, local-first computing clusters with zero SaaS dependency, ergonomic pods and analog whiteboard lounges, invite-only founder cohort.
-- **Lifecycle Provenance:**
-  - `Outline Artifact`: `the_den_outline.md` (Stage 1 OK)
-  - `Draft Artifact`: `the_den_draft.md` (Stage 2 OK)
-  - `Style Review Artifact`: `the_den_style_review.md` (Stage 3 OK)
-  - `Revised Draft Artifact`: `the_den_revised_draft.md` (Stage 4 OK)
-  - `Claim Review Artifact`: `the_den_claim_review.md` (Stage 5 OK, sovereignty claims audited)
-  - `Final Article Artifact`: `the_den_final_article.md` (Stage 6 OK, distinct artifact ID, complete 6-stage lineage)
-- **Verdict:** **PASS**
+### 5.1 ARTICLE 1 — NOT YET TESTED
+
+- **Target Topic:** *Agent Engine 0.5 Architecture: Deterministic Multi-Model Foundations*
+- **Target Audience:** Founders, Principal Engineers, AI Systems Researchers
+- **Input Source Notes:** ADR-016 single kernel invariant, `ExecutionCoordinator` dispatch, `PolicyEngine` local boundary, sealed SQLite migrations 001–009, authenticated desktop IPC token, exact cryptographic digests.
+- **Interactive Dogfood Execution Checklist:**
+  - [ ] Stage 1 (Outline Generation) — Inspected outline artifact in desktop UI
+  - [ ] Stage 2 (First Draft) — Verified word count, voice, and topic focus
+  - [ ] Stage 3 (Style Review) — Audited passive voice, jargon, and flow findings
+  - [ ] Stage 4 (Manual Override / Revision) — Tested manual text edit injection
+  - [ ] Stage 5 (Claim & Factuality Review) — Audited supported vs unsupported claims
+  - [ ] Stage 6 (Final Article) — Verified final markdown export and cryptographic lineage
+- **Founder Evaluation:**
+  - Prose Quality Score: `___ / 10`
+  - Factual Integrity Score: `___ / 10`
+  - Ergonomics & UI Flow: `___ / 10`
+  - Founder Verdict: `[ ] PASS   [ ] FAIL`
+  - Reviewer Notes: `[Pending Founder Dogfood Session]`
+- **Status:** **NOT YET TESTED**
+
+### 5.2 ARTICLE 2 — NOT YET TESTED
+
+- **Target Topic:** *THE DEN: Physical and Digital Sanctuary for High-Agency Builders*
+- **Target Audience:** Technical Founders, Deep Work Practitioners, Systems Designers
+- **Input Source Notes:** Sovereign engineering retreat, deep uninterrupted work, local-first computing clusters with zero SaaS dependency, ergonomic pods and analog whiteboard lounges, invite-only founder cohort.
+- **Interactive Dogfood Execution Checklist:**
+  - [ ] Stage 1 (Outline Generation) — Inspected outline artifact in desktop UI
+  - [ ] Stage 2 (First Draft) — Verified vision clarity and structural flow
+  - [ ] Stage 3 (Style Review) — Audited tone consistency and punchiness
+  - [ ] Stage 4 (Manual Override / Revision) — Tested editorial intervention
+  - [ ] Stage 5 (Claim & Factuality Review) — Checked assertions against notes
+  - [ ] Stage 6 (Final Article) — Verified independent document artifact ID
+- **Founder Evaluation:**
+  - Prose Quality Score: `___ / 10`
+  - Factual Integrity Score: `___ / 10`
+  - Ergonomics & UI Flow: `___ / 10`
+  - Founder Verdict: `[ ] PASS   [ ] FAIL`
+  - Reviewer Notes: `[Pending Founder Dogfood Session]`
+- **Status:** **NOT YET TESTED**
 
 ---
 

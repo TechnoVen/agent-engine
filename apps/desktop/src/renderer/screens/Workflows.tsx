@@ -558,8 +558,7 @@ export const Workflows: React.FC<WorkflowsProps> = () => {
         <div className="p-6 border-b border-border-subtle bg-bg-surface flex items-center justify-between">
           <div>
             <div className="flex items-center gap-2 mb-1">
-              <span className="sr-only">Preview · Runtime not available yet · Coming in R4</span>
-              <span className="text-xs text-text-tertiary">ADR-012 Visual DAG Editor</span>
+              <span className="text-xs text-text-tertiary">Visual DAG Editor</span>
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-text-primary flex items-center gap-2">
               <span>Automations & Workflows</span>

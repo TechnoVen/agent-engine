@@ -301,7 +301,6 @@ export const Tasks: React.FC<TasksScreenProps> = ({
                 <h1 className="text-xl font-bold text-text-primary tracking-tight">
                   Scheduled Tasks
                 </h1>
-                <span className="sr-only">Preview · Runtime not available yet · Coming in R4</span>
               </div>
               <p className="text-xs text-text-secondary">
                 Recurring schedules, cron automation, and background JobService execution queue.
@@ -548,6 +547,7 @@ export const Tasks: React.FC<TasksScreenProps> = ({
 
                         <span>Next: {task.next_run || 'Pending'}</span>
                         <span>Last: {task.last_run || 'Never'}</span>
+                        <span className="font-mono text-[10px]">TZ: {Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local'}</span>
                       </div>
                     </div>
 

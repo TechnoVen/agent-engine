@@ -481,49 +481,58 @@ export const Skills: React.FC<SkillsScreenProps> = () => {
             <div className="w-[380px] border-r border-border-subtle flex flex-col bg-bg-base shrink-0 overflow-y-auto">
               <div className="p-3 text-xs text-text-tertiary border-b border-border-subtle flex items-center justify-between">
                 <span>{skills.length} Skills Discovered</span>
-                <span className="text-[10px]">ADR-013 Local First</span>
+                <span className="text-[10px]">Local-First</span>
               </div>
-              <div className="divide-y divide-border-subtle">
-                {skills.map((skill) => {
-                  const isSelected = selectedSkill?.id === skill.id;
-                  return (
-                    <div
-                      key={skill.id}
-                      onClick={() => handleSelectSkill(skill)}
-                      className={`p-3.5 cursor-pointer transition-all ${
-                        isSelected
-                          ? 'bg-accent/10 border-l-4 border-accent'
-                          : 'hover:bg-bg-hover'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 truncate">
-                          <span className="text-xs font-medium text-text-primary truncate">
-                            {skill.name}
+              {skills.length === 0 ? (
+                <div className="py-16 text-center text-xs text-text-tertiary" data-testid="skills-empty-state">
+                  <div className="font-medium text-text-secondary">No skills installed</div>
+                  <div className="text-[11px] mt-1 max-w-xs mx-auto text-text-tertiary">
+                    No custom or procedural skills found in the local repository.
+                  </div>
+                </div>
+              ) : (
+                <div className="divide-y divide-border-subtle">
+                  {skills.map((skill) => {
+                    const isSelected = selectedSkill?.id === skill.id;
+                    return (
+                      <div
+                        key={skill.id}
+                        onClick={() => handleSelectSkill(skill)}
+                        className={`p-3.5 cursor-pointer transition-all ${
+                          isSelected
+                            ? 'bg-accent/10 border-l-4 border-accent'
+                            : 'hover:bg-bg-hover'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 truncate">
+                            <span className="text-xs font-medium text-text-primary truncate">
+                              {skill.name}
+                            </span>
+                          </div>
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-bg-elevated border border-border-subtle text-text-secondary uppercase">
+                            {skill.source_tool}
                           </span>
                         </div>
-                        <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-bg-elevated border border-border-subtle text-text-secondary uppercase">
-                          {skill.source_tool}
-                        </span>
+                        <p className="text-[11px] text-text-secondary line-clamp-2 mt-1 leading-relaxed">
+                          {skill.description || 'No description provided.'}
+                        </p>
+                        <div className="flex items-center gap-2 mt-2 text-[10px] text-text-tertiary">
+                          <span>v{skill.version || '1.0.0'}</span>
+                          <span>•</span>
+                          <span>{skill.category || 'General'}</span>
+                          {skill.is_readonly && (
+                            <>
+                              <span>•</span>
+                              <span className="text-amber-500 font-medium">Built-in</span>
+                            </>
+                          )}
+                        </div>
                       </div>
-                      <p className="text-[11px] text-text-secondary line-clamp-2 mt-1 leading-relaxed">
-                        {skill.description || 'No description provided.'}
-                      </p>
-                      <div className="flex items-center gap-2 mt-2 text-[10px] text-text-tertiary">
-                        <span>v{skill.version || '1.0.0'}</span>
-                        <span>•</span>
-                        <span>{skill.category || 'General'}</span>
-                        {skill.is_readonly && (
-                          <>
-                            <span>•</span>
-                            <span className="text-amber-500 font-medium">Built-in</span>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             {/* Right Editor & Inspector Panel */}

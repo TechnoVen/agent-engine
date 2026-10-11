@@ -2178,7 +2178,7 @@ export const Settings: React.FC<SettingsProps> = () => {
               <div className="p-4 rounded-lg bg-bg-surface border border-border-subtle space-y-2 text-xs">
                 <h3 className="font-bold text-text-primary">Keychain & Cryptographic Credential Vault</h3>
                 <p className="text-text-secondary leading-relaxed">
-                  Agent Engine implements ADR-008 for Zero-Trust Local Encryption. Sensitive keys are stored directly in your operating system&apos;s cryptographic credential vault:
+                  Agent Engine implements Zero-Trust Local Encryption. Sensitive keys are stored directly in your operating system&apos;s cryptographic credential vault:
                 </p>
                 <ul className="list-disc pl-5 text-text-secondary space-y-1">
                   <li><strong className="text-text-primary">macOS:</strong> Apple Keychain Services framework via native security APIs.</li>
@@ -2438,7 +2438,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                     </div>
                     <div>
                       <div className="text-xs font-bold text-text-primary">Release 0.5 Nadir Edition — Founder MVP</div>
-                      <div className="text-[11px] text-text-secondary">Milestone R3 Complete & Frozen • Dark-Only Desktop Surface</div>
+                      <div className="text-[11px] text-text-secondary">Zero-Trust Desktop Architecture • Dark-Only Desktop Surface</div>
                     </div>
                   </div>
                   <span className="px-2 py-0.5 rounded text-[10px] font-mono uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
@@ -2486,15 +2486,15 @@ export const Settings: React.FC<SettingsProps> = () => {
                   </div>
                   <div className="flex justify-between border-b border-border-subtle/50 pb-1 text-text-secondary">
                     <span>Local Encryption:</span>
-                    <span className="text-text-primary">AES-256-GCM (ADR-008)</span>
+                    <span className="text-text-primary">AES-256-GCM</span>
                   </div>
                   <div className="flex justify-between border-b border-border-subtle/50 pb-1 text-text-secondary">
                     <span>Network Policy:</span>
                     <span className="text-text-primary">Privacy-Enforced Routing</span>
                   </div>
                   <div className="flex justify-between text-text-secondary">
-                    <span>Milestone State:</span>
-                    <span className="text-text-primary">R3 Frozen / R4 Paused</span>
+                    <span>Substrate State:</span>
+                    <span className="text-text-primary">Active</span>
                   </div>
                 </div>
               </div>
@@ -2512,8 +2512,8 @@ export const Settings: React.FC<SettingsProps> = () => {
                     <div className="text-[10px] text-text-tertiary mt-0.5">Founder MVP audit</div>
                   </div>
                   <div className="p-2 rounded-lg bg-bg-base border border-border-subtle">
-                    <span className="text-accent font-semibold">ADR-008</span>
-                    <div className="text-[10px] text-text-tertiary mt-0.5">Zero-trust security policy</div>
+                    <span className="text-accent font-semibold">Zero-Trust Policy</span>
+                    <div className="text-[10px] text-text-tertiary mt-0.5">Local encryption architecture</div>
                   </div>
                 </div>
               </div>

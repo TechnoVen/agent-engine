@@ -134,7 +134,7 @@ const DEFAULT_PLUGINS: PluginItem[] = [
   {
     id: 'guardrails',
     name: 'Safety Guardrails',
-    description: 'High-assurance zero-trust policy checks (ADR-008)',
+    description: 'High-assurance zero-trust policy checks',
     iconName: 'shield',
     enabled: true,
     tier: 'free',

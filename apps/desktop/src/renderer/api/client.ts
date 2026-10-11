@@ -62,7 +62,7 @@ import {
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
 
 class SidecarClient {
-  private base: string;
+  public readonly base: string;
   private inMemoryToken: string | null = null;
 
   constructor(base: string = API_BASE) {
