@@ -56,6 +56,7 @@ import {
   ProviderConnectionVerification,
   RoutingObjective,
   PrivacyBoundary,
+  ArticleWorkflowState,
 } from '../types';
 
 const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
@@ -2252,6 +2253,184 @@ class SidecarClient {
       };
     }
     return await res.json();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Writing Pack MVP (Task R5.2)
+  // ---------------------------------------------------------------------------
+
+  async createWritingWorkflow(payload: {
+    project_id: string;
+    title: string;
+    source_notes: string;
+    audience?: string;
+    objective?: string;
+    desired_length?: string;
+    style_guidance?: string;
+    factuality_requirement?: string;
+  }): Promise<ArticleWorkflowState> {
+    const res = await fetch(`${this.base}/v1/writing/workflows`, {
+      method: 'POST',
+      headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}: ${res.statusText}`);
+    }
+    return res.json();
+  }
+
+  async getWritingWorkflow(workflowRunId: string): Promise<ArticleWorkflowState> {
+    const res = await fetch(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}`, {
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}: ${res.statusText}`);
+    }
+    return res.json();
+  }
+
+  async listWritingWorkflows(projectId?: string): Promise<ArticleWorkflowState[]> {
+    const url = projectId
+      ? `${this.base}/v1/writing/workflows?project_id=${encodeURIComponent(projectId)}`
+      : `${this.base}/v1/writing/workflows`;
+    const res = await fetch(url, { headers: this.getHeaders() });
+    if (!res.ok) return [];
+    return res.json();
+  }
+
+  async generateWritingOutline(
+    workflowRunId: string,
+    overrides?: {
+      title?: string;
+      source_notes?: string;
+      audience?: string;
+      objective?: string;
+      style_guidance?: string;
+    }
+  ): Promise<ArticleWorkflowState> {
+    const res = await fetch(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/outline`, {
+      method: 'POST',
+      headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(overrides || {}),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}: ${res.statusText}`);
+    }
+    return res.json();
+  }
+
+  async generateWritingDraft(
+    workflowRunId: string,
+    options?: { target_word_count?: number }
+  ): Promise<ArticleWorkflowState> {
+    const res = await fetch(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/draft`, {
+      method: 'POST',
+      headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(options || {}),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}: ${res.statusText}`);
+    }
+    return res.json();
+  }
+
+  async reviewWritingStyle(workflowRunId: string): Promise<ArticleWorkflowState> {
+    const res = await fetch(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/style-review`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}: ${res.statusText}`);
+    }
+    return res.json();
+  }
+
+  async reviseWritingDraft(
+    workflowRunId: string,
+    options?: { accepted_findings_only?: boolean }
+  ): Promise<ArticleWorkflowState> {
+    const res = await fetch(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/revise`, {
+      method: 'POST',
+      headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(options || { accepted_findings_only: true }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}: ${res.statusText}`);
+    }
+    return res.json();
+  }
+
+  async reviewWritingClaims(workflowRunId: string): Promise<ArticleWorkflowState> {
+    const res = await fetch(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/claim-review`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}: ${res.statusText}`);
+    }
+    return res.json();
+  }
+
+  async finalizeWritingArticle(
+    workflowRunId: string,
+    options?: { final_content?: string }
+  ): Promise<ArticleWorkflowState> {
+    const res = await fetch(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/finalize`, {
+      method: 'POST',
+      headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(options || {}),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}: ${res.statusText}`);
+    }
+    return res.json();
+  }
+
+  async editWritingStage(
+    workflowRunId: string,
+    payload: { stage: string; content: string }
+  ): Promise<ArticleWorkflowState> {
+    const res = await fetch(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/edit`, {
+      method: 'POST',
+      headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}: ${res.statusText}`);
+    }
+    return res.json();
+  }
+
+  async runFullWritingWorkflow(payload: {
+    project_id: string;
+    title: string;
+    source_notes: string;
+    audience?: string;
+    objective?: string;
+    desired_length?: string;
+    style_guidance?: string;
+    factuality_requirement?: string;
+  }): Promise<ArticleWorkflowState> {
+    const res = await fetch(`${this.base}/v1/writing/workflows/full`, {
+      method: 'POST',
+      headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}: ${res.statusText}`);
+    }
+    return res.json();
   }
 }
 

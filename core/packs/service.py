@@ -36,6 +36,9 @@ CANONICAL_BINDING_ALLOWLIST: Set[str] = {
     "core.storage.sqlite.SQLiteJobQueue",
     "core.safety.policy.PolicyEngine",
     "core.session.store.SessionStore",
+    "core.writing.workflow.ArticleWorkflowService",
+    "core.artifacts.service.ArtifactService",
+    "core.workflows.service.WorkflowService",
 }
 
 # Authoritative Pack Permission Vocabulary & Mapping to Zero-Trust Policy Engine (R5.1)
@@ -81,6 +84,22 @@ PACK_PERMISSION_VOCABULARY: Dict[str, Dict[str, Any]] = {
         "policy_governed": True,
         "consequential": True,
         "requires_hitl_approval": True,
+    },
+    "artifacts:manage": {
+        "description": "Create, retrieve, verify integrity, and manage durable project artifacts via ArtifactService",
+        "canonical_permission": "write_local",
+        "canonical_capability": "artifacts:manage",
+        "policy_governed": True,
+        "consequential": False,
+        "requires_hitl_approval": False,
+    },
+    "workflows:execute": {
+        "description": "Orchestrate multi-stage structured workflows and state transitions via WorkflowService",
+        "canonical_permission": "execute",
+        "canonical_capability": "workflows:execute",
+        "policy_governed": True,
+        "consequential": False,
+        "requires_hitl_approval": False,
     },
 }
 

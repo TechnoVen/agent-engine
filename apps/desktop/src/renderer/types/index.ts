@@ -1250,4 +1250,124 @@ export interface ProviderConnectionVerification {
   details: Record<string, unknown>;
 }
 
+// ---------------------------------------------------------------------------
+// Writing Pack MVP (Task R5.2)
+// ---------------------------------------------------------------------------
+
+export interface OutlineSection {
+  title: string;
+  intent: string;
+  supporting_points: string[];
+  claims_needing_evidence: string[];
+}
+
+export interface ArticleOutline {
+  working_title: string;
+  thesis: string;
+  sections: OutlineSection[];
+  execution_id?: string;
+  model_used?: string;
+  provider_used?: string;
+  artifact_id?: string;
+  raw_response?: string;
+}
+
+export interface ArticleDraft {
+  title: string;
+  content: string;
+  word_count: number;
+  outline_execution_id?: string;
+  draft_execution_id?: string;
+  model_used?: string;
+  provider_used?: string;
+  artifact_id?: string;
+  is_revised: boolean;
+}
+
+export interface StyleFinding {
+  category: string;
+  location: string;
+  issue: string;
+  suggestion: string;
+  accepted: boolean;
+}
+
+export interface StyleReviewResult {
+  findings: StyleFinding[];
+  overall_feedback: string;
+  readability_notes?: string;
+  execution_id?: string;
+  model_used?: string;
+  provider_used?: string;
+  artifact_id?: string;
+}
+
+export interface ClaimItem {
+  claim_text: string;
+  classification:
+    | 'supported'
+    | 'unsupported'
+    | 'uncertain'
+    | 'opinion_interpretation'
+    | 'source_required';
+  evidence?: string;
+  rationale: string;
+}
+
+export interface ClaimReviewResult {
+  claims: ClaimItem[];
+  unsupported_count: number;
+  supported_count: number;
+  summary: string;
+  execution_id?: string;
+  model_used?: string;
+  provider_used?: string;
+  artifact_id?: string;
+}
+
+export type ArticleWorkflowStage =
+  | 'notes'
+  | 'outline'
+  | 'draft'
+  | 'style_review'
+  | 'revised_draft'
+  | 'claim_review'
+  | 'finalized'
+  | 'failed';
+
+export interface ArticleWorkflowState {
+  workflow_run_id: string;
+  project_id: string;
+  title: string;
+  source_notes: string;
+  audience?: string;
+  objective?: string;
+  desired_length?: string;
+  style_guidance?: string;
+  factuality_requirement: string;
+  current_stage: ArticleWorkflowStage;
+  outline?: ArticleOutline;
+  draft?: ArticleDraft;
+  style_review?: StyleReviewResult;
+  revised_draft?: ArticleDraft;
+  claim_review?: ClaimReviewResult;
+  final_artifact_id?: string;
+  final_content?: string;
+  execution_history: Array<{
+    stage: string;
+    execution_id: string;
+    provider?: string;
+    model?: string;
+    cost_usd?: number;
+    artifact_id?: string;
+    timestamp: string;
+  }>;
+  manual_edits: Record<string, boolean>;
+  error?: string;
+  error_stage?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+
 

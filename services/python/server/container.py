@@ -44,6 +44,18 @@ class AppServices:
     ledger_service: Optional[ExecutionLedgerService] = None
     workflow_storage: Optional[WorkflowStorage] = None
     swarm_coordinator: Optional[SwarmCoordinator] = None
+    writing_service: Optional[Any] = None
+
+    def get_writing_workflow_service(self) -> Any:
+        if self.writing_service is None:
+            from core.writing.workflow import ArticleWorkflowService
+
+            self.writing_service = ArticleWorkflowService(
+                coordinator=self.get_coordinator(),
+                artifact_service=self.get_artifact_service(),
+                storage=self.storage,
+            )
+        return self.writing_service
 
     def get_coordinator(self) -> ExecutionCoordinator:
         if self.coordinator is None:
@@ -217,6 +229,14 @@ def get_swarm_coordinator() -> SwarmCoordinator:
 
 def set_swarm_coordinator(coord: SwarmCoordinator) -> None:
     get_services().swarm_coordinator = coord
+
+
+def get_writing_workflow_service() -> Any:
+    return get_services().get_writing_workflow_service()
+
+
+def set_writing_workflow_service(service: Any) -> None:
+    get_services().writing_service = service
 
 
 def get_event_subscribers() -> List[asyncio.Queue]:

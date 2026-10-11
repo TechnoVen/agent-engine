@@ -27,6 +27,7 @@ from services.python.server.routers import (
     tasks,
     telemetry,
     workflows,
+    writing,
 )
 
 __all__ = [
@@ -50,4 +51,5 @@ __all__ = [
     "tasks",
     "telemetry",
     "workflows",
+    "writing",
 ]
