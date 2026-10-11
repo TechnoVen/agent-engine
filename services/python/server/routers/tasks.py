@@ -75,12 +75,15 @@ async def trigger_scheduled_task_endpoint(
 
         job_service = get_job_service()
         job = job_service.submit_job(
-            job_type="scheduled_task",
+            job_type="agent_task",
             payload={
                 "task_id": task_id,
                 "task_name": task.get("name"),
+                "prompt": task.get("action") or task.get("prompt"),
                 "action": task.get("action") or task.get("prompt"),
                 "schedule": task.get("cron") or task.get("schedule"),
+                "persona": task.get("persona"),
+                "schedule_id": task_id,
             },
             priority=task.get("priority", 0) if isinstance(task.get("priority"), int) else 0,
         )

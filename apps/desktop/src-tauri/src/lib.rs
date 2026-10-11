@@ -47,6 +47,11 @@ fn get_app_version() -> &'static str {
 }
 
 #[tauri::command]
+fn get_ipc_token() -> Result<String, String> {
+    Ok(SidecarSupervisor::get_ipc_token())
+}
+
+#[tauri::command]
 async fn get_credentials(
     client: State<'_, Arc<CredentialClient>>,
     service: Option<String>,
@@ -120,6 +125,7 @@ pub fn run() {
             stop_sidecar,
             verify_sidecar_binary,
             get_app_version,
+            get_ipc_token,
             get_credentials,
             set_credential,
             delete_credential,
@@ -128,6 +134,15 @@ pub fn run() {
             set_update_channel,
             check_for_updates
         ])
+        .setup(|app| {
+            let token = SidecarSupervisor::get_or_init_ipc_token();
+            use tauri::Manager;
+            if let Some(window) = app.get_webview_window("main") {
+                let script = format!("window.__AGENT_ENGINE_IPC_TOKEN__ = {:?};", token);
+                let _ = window.eval(&script);
+            }
+            Ok(())
+        })
         .build(tauri::generate_context!())
         .expect("error while building agent-engine-desktop")
         .run(move |_app_handle, event| {

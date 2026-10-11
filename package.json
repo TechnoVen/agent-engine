@@ -4,6 +4,7 @@
   "private": true,
   "description": "Agent Engine — Cross-platform, local-first, multi-agent studio",
   "scripts": {
+    "dev:desktop": "pnpm --filter @agent-engine/desktop tauri dev",
     "build": "pnpm -r build",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint"

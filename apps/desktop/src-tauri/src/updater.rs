@@ -51,11 +51,19 @@ impl UpdateClient {
         }
     }
 
+    fn authed_req(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let token = crate::sidecar::SidecarSupervisor::get_or_init_ipc_token();
+        if !token.is_empty() {
+            req = req.header("Authorization", format!("Bearer {token}"))
+                     .header("X-IPC-Token", &token);
+        }
+        req
+    }
+
     pub async fn get_status(&self) -> Result<UpdateStatus, String> {
         let url = format!("{}/v1/updater/status", self.base_url);
         let res = self
-            .client
-            .get(&url)
+            .authed_req(self.client.get(&url))
             .send()
             .await
             .map_err(|e| e.to_string())?;
@@ -69,8 +77,7 @@ impl UpdateClient {
         let url = format!("{}/v1/updater/channel", self.base_url);
         let payload = SetChannelPayload { channel };
         let res = self
-            .client
-            .post(&url)
+            .authed_req(self.client.post(&url))
             .json(&payload)
             .send()
             .await
@@ -88,8 +95,7 @@ impl UpdateClient {
         let url = format!("{}/v1/updater/check", self.base_url);
         let payload = UpdateCheckPayload { channel };
         let res = self
-            .client
-            .post(&url)
+            .authed_req(self.client.post(&url))
             .json(&payload)
             .send()
             .await

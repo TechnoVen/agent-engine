@@ -106,12 +106,14 @@ export const TopBar: React.FC<TopBarProps> = ({
 
   const getStatusLabel = () => {
     if (health.status === 'offline') return 'Offline';
+    if (health.status === 'unauthorized') return 'Authentication Error';
     if (isBusy) return 'Busy';
     return 'Ready';
   };
 
   const getStatusDotClass = () => {
     if (health.status === 'offline') return 'bg-danger';
+    if (health.status === 'unauthorized') return 'bg-amber-400';
     if (isBusy) return 'bg-accent animate-pulse';
     return 'bg-emerald-400';
   };
@@ -175,7 +177,11 @@ export const TopBar: React.FC<TopBarProps> = ({
                   <span>Execution service</span>
                 </span>
                 <span className="font-mono text-text-primary">
-                  {health.status === 'offline' ? 'Offline' : 'Ready'}
+                  {health.status === 'offline'
+                    ? 'Offline'
+                    : health.status === 'unauthorized'
+                    ? 'Unauthorized'
+                    : 'Ready'}
                 </span>
               </div>
               <div className="flex items-center justify-between text-text-secondary">

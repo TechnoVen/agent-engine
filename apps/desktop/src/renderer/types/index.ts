@@ -101,7 +101,7 @@ export interface RecentChat {
 }
 
 export interface SidecarHealth {
-  status: 'healthy' | 'degraded' | 'offline';
+  status: 'healthy' | 'degraded' | 'offline' | 'unauthorized';
   version?: string;
   engine?: string;
   uptime_seconds?: number;

@@ -73,13 +73,136 @@ class SidecarClient {
     this.inMemoryToken = token;
   }
 
+  public getHeaders(extra?: Record<string, string>): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...extra,
+    };
+    const token =
+      this.inMemoryToken ||
+      (typeof window !== 'undefined'
+        ? (window as unknown as { __AGENT_ENGINE_IPC_TOKEN__?: string }).__AGENT_ENGINE_IPC_TOKEN__
+        : undefined);
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+      headers['X-IPC-Token'] = token;
+    }
+    return headers;
+  }
+
+  /**
+   * Bootstrap IPC token from trusted Tauri native runtime or injected window property.
+   * Delivers token to in-memory state without persisting to localStorage or URL params.
+   */
+  public async bootstrapIpcToken(): Promise<boolean> {
+    try {
+      if (typeof window !== 'undefined') {
+        const existing = (window as unknown as { __AGENT_ENGINE_IPC_TOKEN__?: string }).__AGENT_ENGINE_IPC_TOKEN__;
+        if (existing) {
+          this.setIpcToken(existing);
+          return true;
+        }
+        if ((window as any).__TAURI_INTERNALS__ || (window as any).__TAURI__) {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const token = await invoke<string>('get_ipc_token');
+          if (token) {
+            this.setIpcToken(token);
+            (window as any).__AGENT_ENGINE_IPC_TOKEN__ = token;
+            return true;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to bootstrap IPC token via Tauri IPC:', err);
+    }
+    return false;
+  }
+
+  /**
+   * Canonical raw HTTP request helper that attaches authenticated IPC headers.
+   * All protected /v1 requests flow through this helper or its typed wrappers.
+   */
+  public async requestRaw(path: string, options: RequestInit = {}): Promise<Response> {
+    const url = path.startsWith('http://') || path.startsWith('https://')
+      ? path
+      : `${this.base}${path.startsWith('/') ? path : `/${path}`}`;
+
+    const headers = this.getHeaders(options.headers as Record<string, string> | undefined);
+    const res = await fetch(url, {
+      ...options,
+      headers,
+    });
+
+    if (res.status === 401) {
+      throw new Error(`Authentication failed (401 Unauthorized): invalid or missing IPC token`);
+    }
+
+    return res;
+  }
+
+  /**
+   * Canonical typed JSON request helper that attaches authenticated headers and parses response.
+   */
+  public async request<T = any>(path: string, options: RequestInit = {}): Promise<T> {
+    const res = await this.requestRaw(path, options);
+
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      throw new Error(`Request failed with HTTP ${res.status}: ${errText || res.statusText}`);
+    }
+
+    if (res.status === 204) {
+      return undefined as unknown as T;
+    }
+
+    const contentType = res.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      return (await res.json()) as T;
+    }
+    return (await res.text()) as unknown as T;
+  }
+
+  public async get<T = any>(path: string, headers?: Record<string, string>): Promise<T> {
+    return this.request<T>(path, { method: 'GET', headers });
+  }
+
+  public async post<T = any>(path: string, body?: any, headers?: Record<string, string>): Promise<T> {
+    return this.request<T>(path, {
+      method: 'POST',
+      body: body !== undefined ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined,
+      headers,
+    });
+  }
+
+  public async put<T = any>(path: string, body?: any, headers?: Record<string, string>): Promise<T> {
+    return this.request<T>(path, {
+      method: 'PUT',
+      body: body !== undefined ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined,
+      headers,
+    });
+  }
+
+  public async delete<T = any>(path: string, headers?: Record<string, string>): Promise<T> {
+    return this.request<T>(path, { method: 'DELETE', headers });
+  }
+
+  
+
   async checkHealth(): Promise<SidecarHealth> {
     try {
       let res = await fetch(`${this.base}/v1/health`, {
         method: 'GET',
         headers: this.getHeaders(),
       });
+      if (res.status === 401) {
+        return {
+          status: 'unauthorized',
+          error: 'Authentication failed (401 Unauthorized): invalid or missing IPC token',
+          timestamp: new Date().toISOString(),
+        };
+      }
       if (!res.ok) {
+        // Explicitly documented exception: unauthenticated healthz fallback
         const fallback = await fetch(`${this.base}/healthz`).catch(() => null);
         if (fallback && fallback.ok) {
           const fb = await fallback.json();
@@ -115,7 +238,7 @@ class SidecarClient {
 
   async getRouterTiers(): Promise<Record<string, string>> {
     try {
-      const res = await fetch(`${this.base}/v1/router/tiers`);
+      const res = await this.requestRaw(`${this.base}/v1/router/tiers`);
       if (!res.ok) return {};
       const data = await res.json();
       return data.tiers || {};
@@ -126,7 +249,7 @@ class SidecarClient {
 
   async getPipelines(): Promise<any[]> {
     try {
-      const res = await fetch(`${this.base}/v1/pipelines`);
+      const res = await this.requestRaw(`${this.base}/v1/pipelines`);
       if (!res.ok) return [];
       const data = await res.json();
       return Array.isArray(data) ? data : (data.pipelines || []);
@@ -137,7 +260,7 @@ class SidecarClient {
 
   async getSessions(limit = 10): Promise<any[]> {
     try {
-      const res = await fetch(`${this.base}/v1/sessions?limit=${limit}`);
+      const res = await this.requestRaw(`${this.base}/v1/sessions?limit=${limit}`);
       if (!res.ok) return [];
       const data = await res.json();
       return Array.isArray(data) ? data : (data.sessions || []);
@@ -148,7 +271,7 @@ class SidecarClient {
 
   async getSession(sessionId: string): Promise<any | null> {
     try {
-      const res = await fetch(`${this.base}/v1/sessions/${encodeURIComponent(sessionId)}`, {
+      const res = await this.requestRaw(`${this.base}/v1/sessions/${encodeURIComponent(sessionId)}`, {
         headers: this.getHeaders(),
       });
       if (!res.ok) return null;
@@ -160,7 +283,7 @@ class SidecarClient {
 
   async getProjects(limit = 50, offset = 0): Promise<any[]> {
     try {
-      const res = await fetch(`${this.base}/v1/projects?limit=${limit}&offset=${offset}`, {
+      const res = await this.requestRaw(`${this.base}/v1/projects?limit=${limit}&offset=${offset}`, {
         headers: this.getHeaders(),
       });
       if (!res.ok) return [];
@@ -173,7 +296,7 @@ class SidecarClient {
 
   async getProject(projectId: string): Promise<any | null> {
     try {
-      const res = await fetch(`${this.base}/v1/projects/${encodeURIComponent(projectId)}`, {
+      const res = await this.requestRaw(`${this.base}/v1/projects/${encodeURIComponent(projectId)}`, {
         headers: this.getHeaders(),
       });
       if (!res.ok) return null;
@@ -190,7 +313,7 @@ class SidecarClient {
     instructions?: string;
   }): Promise<any | null> {
     try {
-      const res = await fetch(`${this.base}/v1/projects`, {
+      const res = await this.requestRaw(`${this.base}/v1/projects`, {
         method: 'POST',
         headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -204,7 +327,7 @@ class SidecarClient {
 
   async deleteProject(projectId: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.base}/v1/projects/${encodeURIComponent(projectId)}`, {
+      const res = await this.requestRaw(`${this.base}/v1/projects/${encodeURIComponent(projectId)}`, {
         method: 'DELETE',
         headers: this.getHeaders(),
       });
@@ -215,7 +338,7 @@ class SidecarClient {
   }
 
   async runPipeline(name: string, inputs: Record<string, any>): Promise<any> {
-    const res = await fetch(`${this.base}/v1/pipelines/${encodeURIComponent(name)}/run`, {
+    const res = await this.requestRaw(`${this.base}/v1/pipelines/${encodeURIComponent(name)}/run`, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify({ inputs }),
@@ -256,7 +379,7 @@ class SidecarClient {
       onDone,
     } = options;
     try {
-      const res = await fetch(`${this.base}/v1/chat/completions`, {
+      const res = await this.requestRaw(`${this.base}/v1/chat/completions`, {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify({
@@ -336,7 +459,7 @@ class SidecarClient {
       const url = projectId
         ? `${this.base}/v1/executions?limit=${limit}&project_id=${encodeURIComponent(projectId)}`
         : `${this.base}/v1/executions?limit=${limit}`;
-      const res = await fetch(url, {
+      const res = await this.requestRaw(url, {
         headers: this.getHeaders(),
       });
       if (!res.ok) return [];
@@ -348,7 +471,7 @@ class SidecarClient {
 
   async getExecution(executionId: string): Promise<any | null> {
     try {
-      const res = await fetch(`${this.base}/v1/executions/${encodeURIComponent(executionId)}`, {
+      const res = await this.requestRaw(`${this.base}/v1/executions/${encodeURIComponent(executionId)}`, {
         headers: this.getHeaders(),
       });
       if (!res.ok) return null;
@@ -363,7 +486,7 @@ class SidecarClient {
       const url = projectId
         ? `${this.base}/v1/executions/${encodeURIComponent(executionId)}/trace?project_id=${encodeURIComponent(projectId)}`
         : `${this.base}/v1/executions/${encodeURIComponent(executionId)}/trace`;
-      const res = await fetch(url, {
+      const res = await this.requestRaw(url, {
         headers: this.getHeaders(),
       });
       if (!res.ok) return null;
@@ -377,7 +500,7 @@ class SidecarClient {
     const trimmed = query.trim();
     if (!trimmed) return [];
     try {
-      const res = await fetch(
+      const res = await this.requestRaw(
         `${this.base}/v1/sessions/search?q=${encodeURIComponent(trimmed)}&limit=${limit}`
       );
       if (!res.ok) return [];
@@ -389,7 +512,7 @@ class SidecarClient {
 
   async observeMemory(payload: ObserveMemoryPayload): Promise<ObservationRecord | null> {
     try {
-      const res = await fetch(`${this.base}/v1/memory/observe`, {
+      const res = await this.requestRaw(`${this.base}/v1/memory/observe`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -406,7 +529,7 @@ class SidecarClient {
     source: string = 'attachment'
   ): Promise<{ document_id: string; count: number } | null> {
     try {
-      const res = await fetch(`${this.base}/v1/memory/ingest`, {
+      const res = await this.requestRaw(`${this.base}/v1/memory/ingest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content, source }),
@@ -420,7 +543,7 @@ class SidecarClient {
 
   async queryObservations(query: string, topK = 20): Promise<any[]> {
     try {
-      const res = await fetch(
+      const res = await this.requestRaw(
         `${this.base}/v1/memory/observations?query=${encodeURIComponent(query)}&top_k=${topK}`
       );
       if (!res.ok) return [];
@@ -431,25 +554,10 @@ class SidecarClient {
     }
   }
 
-  private getHeaders(extra?: Record<string, string>): Record<string, string> {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      ...extra,
-    };
-    const token =
-      this.inMemoryToken ||
-      (window as unknown as { __AGENT_ENGINE_IPC_TOKEN__?: string }).__AGENT_ENGINE_IPC_TOKEN__;
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-      headers['X-IPC-Token'] = token;
-    }
-    return headers;
-  }
-
   async getCredentials(service?: string): Promise<CredentialItem[]> {
     try {
       const query = service ? `?service=${encodeURIComponent(service)}` : '';
-      const res = await fetch(`${this.base}/v1/credentials${query}`, {
+      const res = await this.requestRaw(`${this.base}/v1/credentials${query}`, {
         headers: this.getHeaders(),
       });
       if (!res.ok) return [];
@@ -460,7 +568,7 @@ class SidecarClient {
   }
 
   async setCredential(payload: SetCredentialPayload): Promise<CredentialItem> {
-    const res = await fetch(`${this.base}/v1/credentials`, {
+    const res = await this.requestRaw(`${this.base}/v1/credentials`, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(payload),
@@ -477,7 +585,7 @@ class SidecarClient {
     reveal = false
   ): Promise<CredentialDetail | null> {
     try {
-      const res = await fetch(
+      const res = await this.requestRaw(
         `${this.base}/v1/credentials/${encodeURIComponent(service)}/${encodeURIComponent(key)}?reveal=${reveal}`,
         { headers: this.getHeaders() }
       );
@@ -490,7 +598,7 @@ class SidecarClient {
 
   async deleteCredential(service: string, key: string): Promise<boolean> {
     try {
-      const res = await fetch(
+      const res = await this.requestRaw(
         `${this.base}/v1/credentials/${encodeURIComponent(service)}/${encodeURIComponent(key)}`,
         { method: 'DELETE', headers: this.getHeaders() }
       );
@@ -505,7 +613,7 @@ class SidecarClient {
     apiKey?: string,
     baseUrl?: string
   ): Promise<CredentialTestResult> {
-    const res = await fetch(`${this.base}/v1/credentials/test`, {
+    const res = await this.requestRaw(`${this.base}/v1/credentials/test`, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify({ provider, api_key: apiKey, base_url: baseUrl }),
@@ -523,7 +631,7 @@ class SidecarClient {
 
   async getUpdateStatus(): Promise<UpdateStatus | null> {
     try {
-      const res = await fetch(`${this.base}/v1/updater/status`);
+      const res = await this.requestRaw(`${this.base}/v1/updater/status`);
       if (!res.ok) return null;
       return await res.json();
     } catch {
@@ -532,7 +640,7 @@ class SidecarClient {
   }
 
   async setUpdateChannel(channel: UpdateChannel): Promise<UpdateStatus> {
-    const res = await fetch(`${this.base}/v1/updater/channel`, {
+    const res = await this.requestRaw(`${this.base}/v1/updater/channel`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ channel }),
@@ -544,7 +652,7 @@ class SidecarClient {
   }
 
   async checkForUpdates(channel?: UpdateChannel): Promise<UpdateCheckResult> {
-    const res = await fetch(`${this.base}/v1/updater/check`, {
+    const res = await this.requestRaw(`${this.base}/v1/updater/check`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ channel }),
@@ -557,7 +665,7 @@ class SidecarClient {
 
   async getSkills(): Promise<SkillItem[]> {
     try {
-      const res = await fetch(`${this.base}/v1/skills`);
+      const res = await this.requestRaw(`${this.base}/v1/skills`);
       if (res.ok) {
         const rawSkills = await res.json();
         if (Array.isArray(rawSkills) && rawSkills.length > 0) {
@@ -587,7 +695,7 @@ class SidecarClient {
       if (tool) params.set('tool', tool);
       if (tag) params.set('tag', tag);
       const url = `${this.base}/v1/skills${params.toString() ? `?${params.toString()}` : ''}`;
-      const res = await fetch(url);
+      const res = await this.requestRaw(url);
       if (!res.ok) return [];
       const data = await res.json();
       return Array.isArray(data) ? data : [];
@@ -598,7 +706,7 @@ class SidecarClient {
 
   async getSkillContent(skillId: string): Promise<SkillDetailed | null> {
     try {
-      const res = await fetch(`${this.base}/v1/skills/${encodeURIComponent(skillId)}`);
+      const res = await this.requestRaw(`${this.base}/v1/skills/${encodeURIComponent(skillId)}`);
       if (!res.ok) return null;
       return await res.json();
     } catch {
@@ -617,7 +725,7 @@ class SidecarClient {
     version?: string;
     format?: string;
   }): Promise<SkillDetailed> {
-    const res = await fetch(`${this.base}/v1/skills/create`, {
+    const res = await this.requestRaw(`${this.base}/v1/skills/create`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -630,7 +738,7 @@ class SidecarClient {
   }
 
   async updateSkillContent(skillId: string, content: string): Promise<SkillDetailed> {
-    const res = await fetch(`${this.base}/v1/skills/${encodeURIComponent(skillId)}`, {
+    const res = await this.requestRaw(`${this.base}/v1/skills/${encodeURIComponent(skillId)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content }),
@@ -649,7 +757,7 @@ class SidecarClient {
     parsed_metadata?: Record<string, any>;
   }> {
     try {
-      const res = await fetch(`${this.base}/v1/skills/validate`, {
+      const res = await this.requestRaw(`${this.base}/v1/skills/validate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content, format }),
@@ -667,7 +775,7 @@ class SidecarClient {
     try {
       const params = new URLSearchParams({ q: query, limit: String(limit) });
       if (tag) params.set('tag', tag);
-      const res = await fetch(`${this.base}/v1/skills/search?${params.toString()}`);
+      const res = await this.requestRaw(`${this.base}/v1/skills/search?${params.toString()}`);
       if (!res.ok) return [];
       return await res.json();
     } catch {
@@ -677,7 +785,7 @@ class SidecarClient {
 
   async getSkillCollections(): Promise<SkillCollectionItem[]> {
     try {
-      const res = await fetch(`${this.base}/v1/skills/collections`);
+      const res = await this.requestRaw(`${this.base}/v1/skills/collections`);
       if (!res.ok) return [];
       return await res.json();
     } catch {
@@ -687,7 +795,7 @@ class SidecarClient {
 
   async getSkillCollection(id: string): Promise<SkillCollectionItem | null> {
     try {
-      const res = await fetch(`${this.base}/v1/skills/collections/${encodeURIComponent(id)}`);
+      const res = await this.requestRaw(`${this.base}/v1/skills/collections/${encodeURIComponent(id)}`);
       if (!res.ok) return null;
       return await res.json();
     } catch {
@@ -702,7 +810,7 @@ class SidecarClient {
     skill_ids?: string[];
     collection_id?: string;
   }): Promise<SkillCollectionItem> {
-    const res = await fetch(`${this.base}/v1/skills/collections`, {
+    const res = await this.requestRaw(`${this.base}/v1/skills/collections`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -716,7 +824,7 @@ class SidecarClient {
 
   async deleteSkillCollection(id: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.base}/v1/skills/collections/${encodeURIComponent(id)}`, {
+      const res = await this.requestRaw(`${this.base}/v1/skills/collections/${encodeURIComponent(id)}`, {
         method: 'DELETE',
       });
       return res.ok;
@@ -727,7 +835,7 @@ class SidecarClient {
 
   async addSkillToCollection(collectionId: string, skillId: string): Promise<boolean> {
     try {
-      const res = await fetch(
+      const res = await this.requestRaw(
         `${this.base}/v1/skills/collections/${encodeURIComponent(collectionId)}/skills/${encodeURIComponent(skillId)}`,
         { method: 'POST' }
       );
@@ -739,7 +847,7 @@ class SidecarClient {
 
   async removeSkillFromCollection(collectionId: string, skillId: string): Promise<boolean> {
     try {
-      const res = await fetch(
+      const res = await this.requestRaw(
         `${this.base}/v1/skills/collections/${encodeURIComponent(collectionId)}/skills/${encodeURIComponent(skillId)}`,
         { method: 'DELETE' }
       );
@@ -756,7 +864,7 @@ class SidecarClient {
       if (category) params.set('category', category);
       if (tag) params.set('tag', tag);
       const url = `${this.base}/v1/skills/registry${params.toString() ? `?${params.toString()}` : ''}`;
-      const res = await fetch(url);
+      const res = await this.requestRaw(url);
       if (!res.ok) return [];
       return await res.json();
     } catch {
@@ -765,7 +873,7 @@ class SidecarClient {
   }
 
   async installRegistryPackage(packageId: string, force = false): Promise<SkillRegistryPackage> {
-    const res = await fetch(`${this.base}/v1/skills/registry/install`, {
+    const res = await this.requestRaw(`${this.base}/v1/skills/registry/install`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ package_id: packageId, force }),
@@ -778,7 +886,7 @@ class SidecarClient {
   }
 
   async uninstallRegistryPackage(packageId: string): Promise<boolean> {
-    const res = await fetch(`${this.base}/v1/skills/registry/uninstall`, {
+    const res = await this.requestRaw(`${this.base}/v1/skills/registry/uninstall`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ package_id: packageId }),
@@ -791,7 +899,7 @@ class SidecarClient {
   }
 
   async discoverRemoteSkills(endpointUrl: string, apiToken?: string): Promise<SkillDetailed[]> {
-    const res = await fetch(`${this.base}/v1/skills/remote/discover`, {
+    const res = await this.requestRaw(`${this.base}/v1/skills/remote/discover`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ endpoint_url: endpointUrl, api_token: apiToken }),
@@ -810,7 +918,7 @@ class SidecarClient {
     apiToken?: string,
     force = false
   ): Promise<SkillDetailed> {
-    const res = await fetch(`${this.base}/v1/skills/remote/import`, {
+    const res = await this.requestRaw(`${this.base}/v1/skills/remote/import`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -836,7 +944,7 @@ class SidecarClient {
     skillId: string,
     payload: Record<string, any>
   ): Promise<any> {
-    const res = await fetch(`${this.base}/v1/skills`, {
+    const res = await this.requestRaw(`${this.base}/v1/skills`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ skill_id: skillId, payload }),
@@ -862,7 +970,7 @@ class SidecarClient {
     operation_id?: string;
   }> {
     try {
-      const res = await fetch(`${this.base}/v1/safety/evaluate`, {
+      const res = await this.requestRaw(`${this.base}/v1/safety/evaluate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -905,7 +1013,7 @@ class SidecarClient {
       if (status) params.set('status', status);
       if (sessionId) params.set('session_id', sessionId);
       const qs = params.toString() ? `?${params.toString()}` : '';
-      const res = await fetch(`${this.base}/v1/safety/operations${qs}`);
+      const res = await this.requestRaw(`${this.base}/v1/safety/operations${qs}`);
       if (!res.ok) return [];
       return await res.json();
     } catch {
@@ -915,7 +1023,7 @@ class SidecarClient {
 
   async getPendingOperation(operationId: string): Promise<PendingOperation | null> {
     try {
-      const res = await fetch(`${this.base}/v1/safety/operations/${operationId}`);
+      const res = await this.requestRaw(`${this.base}/v1/safety/operations/${operationId}`);
       if (!res.ok) return null;
       return await res.json();
     } catch {
@@ -934,7 +1042,7 @@ class SidecarClient {
     diff?: any;
     ttl_seconds?: number;
   }): Promise<PendingOperation> {
-    const res = await fetch(`${this.base}/v1/safety/operations`, {
+    const res = await this.requestRaw(`${this.base}/v1/safety/operations`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -950,7 +1058,7 @@ class SidecarClient {
     actor?: string,
     modifiedArgs?: Record<string, any>
   ): Promise<PendingOperation> {
-    const res = await fetch(`${this.base}/v1/safety/operations/${operationId}/approve`, {
+    const res = await this.requestRaw(`${this.base}/v1/safety/operations/${operationId}/approve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ actor: actor || 'operator', modified_args: modifiedArgs }),
@@ -967,7 +1075,7 @@ class SidecarClient {
     actor?: string,
     reason?: string
   ): Promise<PendingOperation> {
-    const res = await fetch(`${this.base}/v1/safety/operations/${operationId}/reject`, {
+    const res = await this.requestRaw(`${this.base}/v1/safety/operations/${operationId}/reject`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ actor: actor || 'operator', reason: reason || 'Rejected by operator' }),
@@ -985,7 +1093,7 @@ class SidecarClient {
     actor?: string,
     reason?: string
   ): Promise<PendingOperation[]> {
-    const res = await fetch(`${this.base}/v1/safety/operations/batch`, {
+    const res = await this.requestRaw(`${this.base}/v1/safety/operations/batch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1012,7 +1120,7 @@ class SidecarClient {
     actor: string;
     message: string;
   }> {
-    const res = await fetch(`${this.base}/v1/safety/verify-execution`, {
+    const res = await this.requestRaw(`${this.base}/v1/safety/verify-execution`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1030,7 +1138,7 @@ class SidecarClient {
 
   async listSafetyPolicies(): Promise<SafetyPolicyRuleInfo[]> {
     try {
-      const res = await fetch(`${this.base}/v1/safety/policies`);
+      const res = await this.requestRaw(`${this.base}/v1/safety/policies`);
       if (!res.ok) return [];
       return await res.json();
     } catch {
@@ -1049,7 +1157,7 @@ class SidecarClient {
     sessionId?: string;
     operator?: string;
   }): Promise<AuditLogEntry> {
-    const res = await fetch(`${this.base}/v1/safety/approval`, {
+    const res = await this.requestRaw(`${this.base}/v1/safety/approval`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1077,7 +1185,7 @@ class SidecarClient {
     try {
       const params = new URLSearchParams({ limit: String(limit) });
       if (decision) params.set('decision', decision);
-      const res = await fetch(`${this.base}/v1/safety/audit?${params.toString()}`);
+      const res = await this.requestRaw(`${this.base}/v1/safety/audit?${params.toString()}`);
       if (!res.ok) return [];
       return await res.json();
     } catch {
@@ -1087,7 +1195,7 @@ class SidecarClient {
 
   async getPolicyYaml(): Promise<PolicyYamlResponse> {
     try {
-      const res = await fetch(`${this.base}/v1/safety/policies/yaml`);
+      const res = await this.requestRaw(`${this.base}/v1/safety/policies/yaml`);
       if (res.ok) return await res.json();
     } catch (err) {
       console.error('Failed to load policy YAML', err);
@@ -1096,7 +1204,7 @@ class SidecarClient {
   }
 
   async updatePolicyYaml(yamlContent: string): Promise<{ success: boolean; message: string; rules_count?: number }> {
-    const res = await fetch(`${this.base}/v1/safety/policies/yaml`, {
+    const res = await this.requestRaw(`${this.base}/v1/safety/policies/yaml`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ yaml_content: yamlContent }),
@@ -1109,7 +1217,7 @@ class SidecarClient {
   }
 
   async dryRunPolicy(payload: DryRunRequest): Promise<DryRunResult> {
-    const res = await fetch(`${this.base}/v1/safety/policies/dry-run`, {
+    const res = await this.requestRaw(`${this.base}/v1/safety/policies/dry-run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1141,7 +1249,7 @@ class SidecarClient {
       if (query.toolName) params.set('tool_name', query.toolName);
       if (query.sessionId) params.set('session_id', query.sessionId);
 
-      const res = await fetch(`${this.base}/v1/safety/audit-logs?${params.toString()}`);
+      const res = await this.requestRaw(`${this.base}/v1/safety/audit-logs?${params.toString()}`);
       if (res.ok) return await res.json();
     } catch (err) {
       console.error('Failed to load paginated audit logs', err);
@@ -1159,7 +1267,7 @@ class SidecarClient {
     if (filters.toolName) params.set('tool_name', filters.toolName);
     if (filters.limit) params.set('limit', String(filters.limit));
 
-    const res = await fetch(`${this.base}/v1/safety/audit-logs/export?${params.toString()}`);
+    const res = await this.requestRaw(`${this.base}/v1/safety/audit-logs/export?${params.toString()}`);
     if (!res.ok) {
       throw new Error(`Export failed: HTTP ${res.status}`);
     }
@@ -1180,7 +1288,7 @@ class SidecarClient {
       if (project) params.set('project', project);
       if (agentName) params.set('agent_name', agentName);
       if (modelName) params.set('model_name', modelName);
-      const res = await fetch(`${this.base}/v1/telemetry/cost?${params.toString()}`);
+      const res = await this.requestRaw(`${this.base}/v1/telemetry/cost?${params.toString()}`);
       if (res.ok) return await res.json();
     } catch {
       // fallback if offline
@@ -1210,7 +1318,7 @@ class SidecarClient {
   async getBudgetConfig(project: string = 'default'): Promise<BudgetConfig> {
     try {
       const params = new URLSearchParams({ project });
-      const res = await fetch(`${this.base}/v1/telemetry/budget?${params.toString()}`);
+      const res = await this.requestRaw(`${this.base}/v1/telemetry/budget?${params.toString()}`);
       if (res.ok) return await res.json();
     } catch {
       // fallback
@@ -1232,7 +1340,7 @@ class SidecarClient {
     critical_threshold_pct?: number;
     project?: string;
   }): Promise<BudgetConfig> {
-    const res = await fetch(`${this.base}/v1/telemetry/budget`, {
+    const res = await this.requestRaw(`${this.base}/v1/telemetry/budget`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1259,7 +1367,7 @@ class SidecarClient {
     success?: boolean;
     project?: string;
   }): Promise<{ id: number; success: boolean }> {
-    const res = await fetch(`${this.base}/v1/telemetry/cost/record`, {
+    const res = await this.requestRaw(`${this.base}/v1/telemetry/cost/record`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1272,7 +1380,7 @@ class SidecarClient {
 
   async listDistillationCandidates(): Promise<DistillationCandidate[]> {
     try {
-      const res = await fetch(`${this.base}/v1/telemetry/distillation-candidates`);
+      const res = await this.requestRaw(`${this.base}/v1/telemetry/distillation-candidates`);
       if (res.ok) return await res.json();
     } catch {
       // fallback
@@ -1284,7 +1392,7 @@ class SidecarClient {
     candidateId: string,
     targetStudentModel?: string
   ): Promise<{ success: boolean; message: string }> {
-    const res = await fetch(`${this.base}/v1/telemetry/distill`, {
+    const res = await this.requestRaw(`${this.base}/v1/telemetry/distill`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1300,7 +1408,7 @@ class SidecarClient {
 
   async getTelemetry(): Promise<any> {
     try {
-      const res = await fetch(`${this.base}/v1/telemetry`);
+      const res = await this.requestRaw(`${this.base}/v1/telemetry`);
       if (res.ok) {
         return await res.json();
       }
@@ -1327,7 +1435,7 @@ class SidecarClient {
 
   async getHardwareTelemetry(): Promise<HardwareTelemetry> {
     try {
-      const res = await fetch(`${this.base}/v1/telemetry/hardware`);
+      const res = await this.requestRaw(`${this.base}/v1/telemetry/hardware`);
       if (res.ok) {
         return await res.json();
       }
@@ -1367,7 +1475,7 @@ class SidecarClient {
     tokens: number;
     elapsed_seconds: number;
   }> {
-    const res = await fetch(`${this.base}/v1/telemetry/record-speed`, {
+    const res = await this.requestRaw(`${this.base}/v1/telemetry/record-speed`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1380,7 +1488,7 @@ class SidecarClient {
 
   async getAppSettings(): Promise<AppSettings> {
     try {
-      const res = await fetch(`${this.base}/v1/settings/config`, {
+      const res = await this.requestRaw(`${this.base}/v1/settings/config`, {
         headers: this.getHeaders(),
       });
       if (res.ok) {
@@ -1454,7 +1562,7 @@ class SidecarClient {
   }
 
   async saveAppSettings(settings: Partial<AppSettings>): Promise<AppSettings> {
-    const res = await fetch(`${this.base}/v1/settings/config`, {
+    const res = await this.requestRaw(`${this.base}/v1/settings/config`, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify(settings),
@@ -1467,7 +1575,7 @@ class SidecarClient {
   }
 
   async exportDiagnostics(format: 'zip' | 'json' = 'zip'): Promise<Blob | DiagnosticsBundle> {
-    const res = await fetch(`${this.base}/v1/diagnostics/export?format=${format}`, {
+    const res = await this.requestRaw(`${this.base}/v1/diagnostics/export?format=${format}`, {
       headers: this.getHeaders(),
     });
     if (!res.ok) {
@@ -1481,7 +1589,7 @@ class SidecarClient {
 
   async getAdapters(includeHealth: boolean = false): Promise<AdapterMetadata[]> {
     try {
-      const res = await fetch(`${this.base}/v1/adapters?include_health=${includeHealth}`, {
+      const res = await this.requestRaw(`${this.base}/v1/adapters?include_health=${includeHealth}`, {
         headers: this.getHeaders(),
       });
       if (res.ok) {
@@ -1495,7 +1603,7 @@ class SidecarClient {
 
   async getAdapter(id: string): Promise<AdapterMetadata | null> {
     try {
-      const res = await fetch(`${this.base}/v1/adapters/${id}`, {
+      const res = await this.requestRaw(`${this.base}/v1/adapters/${id}`, {
         headers: this.getHeaders(),
       });
       if (res.ok) {
@@ -1509,7 +1617,7 @@ class SidecarClient {
 
   async executeAdapter(id: string, req: AdapterExecutionRequest): Promise<AdapterExecutionResponse | null> {
     try {
-      const res = await fetch(`${this.base}/v1/adapters/${id}/execute`, {
+      const res = await this.requestRaw(`${this.base}/v1/adapters/${id}/execute`, {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify(req),
@@ -1525,7 +1633,7 @@ class SidecarClient {
 
   async testAdapter(id: string): Promise<AdapterHealth> {
     try {
-      const res = await fetch(`${this.base}/v1/adapters/${id}/test`, {
+      const res = await this.requestRaw(`${this.base}/v1/adapters/${id}/test`, {
         method: 'POST',
         headers: this.getHeaders(),
       });
@@ -1544,7 +1652,7 @@ class SidecarClient {
 
   async sendSlackEvent(payload: Record<string, any>): Promise<any> {
     try {
-      const res = await fetch(`${this.base}/v1/channels/slack/events`, {
+      const res = await this.requestRaw(`${this.base}/v1/channels/slack/events`, {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify(payload),
@@ -1558,7 +1666,7 @@ class SidecarClient {
 
   async sendTeamsActivity(payload: Record<string, any>): Promise<any> {
     try {
-      const res = await fetch(`${this.base}/v1/channels/teams/activities`, {
+      const res = await this.requestRaw(`${this.base}/v1/channels/teams/activities`, {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify(payload),
@@ -1572,7 +1680,7 @@ class SidecarClient {
 
   async sendDiscordInteraction(payload: Record<string, any>): Promise<any> {
     try {
-      const res = await fetch(`${this.base}/v1/channels/discord/interactions`, {
+      const res = await this.requestRaw(`${this.base}/v1/channels/discord/interactions`, {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify(payload),
@@ -1586,7 +1694,7 @@ class SidecarClient {
 
   async sendMattermostHook(payload: Record<string, any>): Promise<any> {
     try {
-      const res = await fetch(`${this.base}/v1/channels/mattermost/hooks`, {
+      const res = await this.requestRaw(`${this.base}/v1/channels/mattermost/hooks`, {
         method: 'POST',
         headers: this.getHeaders(),
         body: JSON.stringify(payload),
@@ -1601,7 +1709,7 @@ class SidecarClient {
 
   async listScheduledTasks(): Promise<ScheduledTask[]> {
     try {
-      const res = await fetch(`${this.base}/v1/tasks`);
+      const res = await this.requestRaw(`${this.base}/v1/tasks`);
       if (res.ok) {
         const data = await res.json();
         if (Array.isArray(data)) return data;
@@ -1615,7 +1723,7 @@ class SidecarClient {
 
   async createScheduledTask(payload: ScheduledTaskCreatePayload): Promise<ScheduledTask> {
     try {
-      const res = await fetch(`${this.base}/v1/tasks`, {
+      const res = await this.requestRaw(`${this.base}/v1/tasks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -1649,7 +1757,7 @@ class SidecarClient {
   async toggleScheduledTask(id: string, currentStatus: string): Promise<string> {
     const nextStatus = currentStatus === 'active' ? 'paused' : 'active';
     try {
-      const res = await fetch(`${this.base}/v1/tasks/${id}/toggle`, {
+      const res = await this.requestRaw(`${this.base}/v1/tasks/${id}/toggle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: nextStatus }),
@@ -1667,7 +1775,7 @@ class SidecarClient {
   async triggerScheduledTask(id: string): Promise<boolean> {
     try {
       const headers = await this.getHeaders();
-      const res = await fetch(`${this.base}/v1/tasks/${id}/run?canonical=true`, {
+      const res = await this.requestRaw(`${this.base}/v1/tasks/${id}/run?canonical=true`, {
         method: 'POST',
         headers: {
           ...headers,
@@ -1682,7 +1790,7 @@ class SidecarClient {
 
   async deleteScheduledTask(id: string): Promise<boolean> {
     try {
-      const res = await fetch(`${this.base}/v1/tasks/${id}`, {
+      const res = await this.requestRaw(`${this.base}/v1/tasks/${id}`, {
         method: 'DELETE',
       });
       return res.ok;
@@ -1693,7 +1801,7 @@ class SidecarClient {
 
   // Collaborative Rooms (Phase 5B - Milestone M4)
   async createRoom(payload: CreateRoomPayload): Promise<CollaborativeRoom> {
-    const res = await fetch(`${this.base}/v1/rooms`, {
+    const res = await this.requestRaw(`${this.base}/v1/rooms`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1710,7 +1818,7 @@ class SidecarClient {
     if (projectId) params.append('project_id', projectId);
     if (status) params.append('status', status);
     const query = params.toString() ? `?${params.toString()}` : '';
-    const res = await fetch(`${this.base}/v1/rooms${query}`);
+    const res = await this.requestRaw(`${this.base}/v1/rooms${query}`);
     if (!res.ok) {
       throw new Error(`Failed to list rooms: HTTP ${res.status}`);
     }
@@ -1718,7 +1826,7 @@ class SidecarClient {
   }
 
   async getRoom(roomId: string): Promise<CollaborativeRoom> {
-    const res = await fetch(`${this.base}/v1/rooms/${roomId}`);
+    const res = await this.requestRaw(`${this.base}/v1/rooms/${roomId}`);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || `Failed to get room: HTTP ${res.status}`);
@@ -1727,7 +1835,7 @@ class SidecarClient {
   }
 
   async updateRoom(roomId: string, updates: Partial<CreateRoomPayload & { status: string }>): Promise<CollaborativeRoom> {
-    const res = await fetch(`${this.base}/v1/rooms/${roomId}`, {
+    const res = await this.requestRaw(`${this.base}/v1/rooms/${roomId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
@@ -1740,7 +1848,7 @@ class SidecarClient {
   }
 
   async deleteRoom(roomId: string): Promise<boolean> {
-    const res = await fetch(`${this.base}/v1/rooms/${roomId}`, {
+    const res = await this.requestRaw(`${this.base}/v1/rooms/${roomId}`, {
       method: 'DELETE',
     });
     return res.ok;
@@ -1750,7 +1858,7 @@ class SidecarClient {
     const params = new URLSearchParams();
     if (prompt) params.append('prompt', prompt);
     if (projectInstructions) params.append('project_instructions', projectInstructions);
-    const res = await fetch(`${this.base}/v1/rooms/${roomId}/context?${params.toString()}`);
+    const res = await this.requestRaw(`${this.base}/v1/rooms/${roomId}/context?${params.toString()}`);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || `Failed to get room context: HTTP ${res.status}`);
@@ -1759,7 +1867,7 @@ class SidecarClient {
   }
 
   async addRoomParticipant(roomId: string, payload: AddRoomParticipantPayload): Promise<RoomParticipant> {
-    const res = await fetch(`${this.base}/v1/rooms/${roomId}/participants`, {
+    const res = await this.requestRaw(`${this.base}/v1/rooms/${roomId}/participants`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1772,7 +1880,7 @@ class SidecarClient {
   }
 
   async listRoomParticipants(roomId: string): Promise<RoomParticipant[]> {
-    const res = await fetch(`${this.base}/v1/rooms/${roomId}/participants`);
+    const res = await this.requestRaw(`${this.base}/v1/rooms/${roomId}/participants`);
     if (!res.ok) {
       throw new Error(`Failed to list room participants: HTTP ${res.status}`);
     }
@@ -1781,14 +1889,14 @@ class SidecarClient {
 
   async removeRoomParticipant(roomId: string, participantId: string, requestedBy?: string): Promise<boolean> {
     const query = requestedBy ? `?requested_by=${encodeURIComponent(requestedBy)}` : '';
-    const res = await fetch(`${this.base}/v1/rooms/${roomId}/participants/${participantId}${query}`, {
+    const res = await this.requestRaw(`${this.base}/v1/rooms/${roomId}/participants/${participantId}${query}`, {
       method: 'DELETE',
     });
     return res.ok;
   }
 
   async createRoomTask(roomId: string, payload: CreateRoomTaskPayload): Promise<RoomTask> {
-    const res = await fetch(`${this.base}/v1/rooms/${roomId}/tasks`, {
+    const res = await this.requestRaw(`${this.base}/v1/rooms/${roomId}/tasks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1805,7 +1913,7 @@ class SidecarClient {
     if (status) params.append('status', status);
     if (assignedTo) params.append('assigned_to', assignedTo);
     const query = params.toString() ? `?${params.toString()}` : '';
-    const res = await fetch(`${this.base}/v1/rooms/${roomId}/tasks${query}`);
+    const res = await this.requestRaw(`${this.base}/v1/rooms/${roomId}/tasks${query}`);
     if (!res.ok) {
       throw new Error(`Failed to list room tasks: HTTP ${res.status}`);
     }
@@ -1813,7 +1921,7 @@ class SidecarClient {
   }
 
   async getRoomTask(roomId: string, taskId: string): Promise<RoomTask> {
-    const res = await fetch(`${this.base}/v1/rooms/${roomId}/tasks/${taskId}`);
+    const res = await this.requestRaw(`${this.base}/v1/rooms/${roomId}/tasks/${taskId}`);
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || `Failed to get room task: HTTP ${res.status}`);
@@ -1822,7 +1930,7 @@ class SidecarClient {
   }
 
   async claimRoomTask(roomId: string, taskId: string, participantId: string, adapterType?: string): Promise<RoomTask> {
-    const res = await fetch(`${this.base}/v1/rooms/${roomId}/tasks/${taskId}/claim`, {
+    const res = await this.requestRaw(`${this.base}/v1/rooms/${roomId}/tasks/${taskId}/claim`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ participant_id: participantId, adapter_type: adapterType }),
@@ -1839,7 +1947,7 @@ class SidecarClient {
     taskId: string,
     payload: { status?: string; result?: Record<string, any>; updated_by?: string }
   ): Promise<RoomTask> {
-    const res = await fetch(`${this.base}/v1/rooms/${roomId}/tasks/${taskId}`, {
+    const res = await this.requestRaw(`${this.base}/v1/rooms/${roomId}/tasks/${taskId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1854,7 +1962,7 @@ class SidecarClient {
   // Swarm Multi-Agent Execution (Phase 7 - Task 7.4)
   async listSwarmCases(): Promise<SwarmCase[]> {
     try {
-      const res = await fetch(`${this.base}/v1/swarm/cases`, {
+      const res = await this.requestRaw(`${this.base}/v1/swarm/cases`, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -1871,7 +1979,7 @@ class SidecarClient {
     model_tier?: string;
   }): Promise<{ estimated_cost_usd: number; agent_count: number; model_tier: string }> {
     try {
-      const res = await fetch(`${this.base}/v1/swarm/estimate`, {
+      const res = await this.requestRaw(`${this.base}/v1/swarm/estimate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
@@ -1889,7 +1997,7 @@ class SidecarClient {
     agents?: any[];
     model_tier?: string;
   }): Promise<SwarmRunResult> {
-    const res = await fetch(`${this.base}/v1/swarm/run`, {
+    const res = await this.requestRaw(`${this.base}/v1/swarm/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1905,7 +2013,7 @@ class SidecarClient {
   async listWorkflows(tag?: string): Promise<WorkflowDefinition[]> {
     try {
       const url = tag ? `${this.base}/v1/workflows?tag=${encodeURIComponent(tag)}` : `${this.base}/v1/workflows`;
-      const res = await fetch(url, {
+      const res = await this.requestRaw(url, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -1917,7 +2025,7 @@ class SidecarClient {
   }
 
   async getWorkflow(id: string): Promise<WorkflowDefinition> {
-    const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}`, {
+    const res = await this.requestRaw(`${this.base}/v1/workflows/${encodeURIComponent(id)}`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
     });
@@ -1929,7 +2037,7 @@ class SidecarClient {
   }
 
   async saveWorkflow(wf: WorkflowDefinition): Promise<WorkflowDefinition> {
-    const res = await fetch(`${this.base}/v1/workflows`, {
+    const res = await this.requestRaw(`${this.base}/v1/workflows`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(wf),
@@ -1942,7 +2050,7 @@ class SidecarClient {
   }
 
   async updateWorkflow(id: string, wf: WorkflowDefinition): Promise<WorkflowDefinition> {
-    const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}`, {
+    const res = await this.requestRaw(`${this.base}/v1/workflows/${encodeURIComponent(id)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(wf),
@@ -1955,7 +2063,7 @@ class SidecarClient {
   }
 
   async deleteWorkflow(id: string): Promise<{ deleted: boolean }> {
-    const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}`, {
+    const res = await this.requestRaw(`${this.base}/v1/workflows/${encodeURIComponent(id)}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
     });
@@ -1967,7 +2075,7 @@ class SidecarClient {
   }
 
   async validateWorkflow(payload: { definition_yaml?: string; definition_json?: any }): Promise<WorkflowValidationResult> {
-    const res = await fetch(`${this.base}/v1/workflows/validate`, {
+    const res = await this.requestRaw(`${this.base}/v1/workflows/validate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -1980,7 +2088,7 @@ class SidecarClient {
   }
 
   async dryRunWorkflow(id: string, inputs: Record<string, any> = {}): Promise<WorkflowRun> {
-    const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}/dry-run`, {
+    const res = await this.requestRaw(`${this.base}/v1/workflows/${encodeURIComponent(id)}/dry-run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ inputs }),
@@ -1993,7 +2101,7 @@ class SidecarClient {
   }
 
   async runWorkflow(id: string, inputs: Record<string, any> = {}): Promise<WorkflowRun> {
-    const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}/run?canonical=true`, {
+    const res = await this.requestRaw(`${this.base}/v1/workflows/${encodeURIComponent(id)}/run?canonical=true`, {
       method: 'POST',
       headers: { ...this.getHeaders(), 'X-Canonical-Runtime': 'true' },
       body: JSON.stringify({ inputs, dry_run: false }),
@@ -2007,7 +2115,7 @@ class SidecarClient {
 
   async listWorkflowRuns(id: string): Promise<WorkflowRun[]> {
     try {
-      const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}/runs`, {
+      const res = await this.requestRaw(`${this.base}/v1/workflows/${encodeURIComponent(id)}/runs`, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -2019,7 +2127,7 @@ class SidecarClient {
   }
 
   async getWorkflowRun(id: string, runId: string): Promise<WorkflowRun> {
-    const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}`, {
+    const res = await this.requestRaw(`${this.base}/v1/workflows/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
     });
@@ -2032,7 +2140,7 @@ class SidecarClient {
 
   async listPendingGates(): Promise<PendingGateInfo[]> {
     try {
-      const res = await fetch(`${this.base}/v1/workflows/gates/pending`, {
+      const res = await this.requestRaw(`${this.base}/v1/workflows/gates/pending`, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -2044,7 +2152,7 @@ class SidecarClient {
   }
 
   async approveWorkflowGate(id: string, runId: string, reviewer: string = 'operator', inputOverrides?: Record<string, any>): Promise<WorkflowRun> {
-    const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}/approve`, {
+    const res = await this.requestRaw(`${this.base}/v1/workflows/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}/approve`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reviewer, input_overrides: inputOverrides }),
@@ -2057,7 +2165,7 @@ class SidecarClient {
   }
 
   async rejectWorkflowGate(id: string, runId: string, reviewer: string = 'operator', reason?: string): Promise<WorkflowRun> {
-    const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}/reject`, {
+    const res = await this.requestRaw(`${this.base}/v1/workflows/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}/reject`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ reviewer, reason }),
@@ -2070,7 +2178,7 @@ class SidecarClient {
   }
 
   async redirectWorkflowGate(id: string, runId: string, targetNodeId: string, reviewer: string = 'operator', inputOverrides?: Record<string, any>): Promise<WorkflowRun> {
-    const res = await fetch(`${this.base}/v1/workflows/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}/redirect`, {
+    const res = await this.requestRaw(`${this.base}/v1/workflows/${encodeURIComponent(id)}/runs/${encodeURIComponent(runId)}/redirect`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ target_node_id: targetNodeId, reviewer, input_overrides: inputOverrides }),
@@ -2099,7 +2207,7 @@ class SidecarClient {
     }
     const query = searchParams.toString();
     const url = `${this.base}/v1/models/recommendations${query ? `?${query}` : ''}`;
-    const res = await fetch(url, {
+    const res = await this.requestRaw(url, {
       method: 'GET',
       headers: this.getHeaders(),
     });
@@ -2111,7 +2219,7 @@ class SidecarClient {
   }
 
   async getLocalModelCatalog(): Promise<CatalogModelEntry[]> {
-    const res = await fetch(`${this.base}/v1/models/catalog`, {
+    const res = await this.requestRaw(`${this.base}/v1/models/catalog`, {
       method: 'GET',
       headers: this.getHeaders(),
     });
@@ -2126,7 +2234,7 @@ class SidecarClient {
     modelId: string,
     providerId: string = 'llamacpp'
   ): Promise<DownloadStatus> {
-    const res = await fetch(`${this.base}/v1/models/downloads`, {
+    const res = await this.requestRaw(`${this.base}/v1/models/downloads`, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify({ model_id: modelId, provider_id: providerId }),
@@ -2139,7 +2247,7 @@ class SidecarClient {
   }
 
   async getModelDownloads(): Promise<DownloadStatus[]> {
-    const res = await fetch(`${this.base}/v1/models/downloads`, {
+    const res = await this.requestRaw(`${this.base}/v1/models/downloads`, {
       method: 'GET',
       headers: this.getHeaders(),
     });
@@ -2151,7 +2259,7 @@ class SidecarClient {
   }
 
   async getModelDownloadStatus(artifactId: string): Promise<DownloadStatus> {
-    const res = await fetch(`${this.base}/v1/models/downloads/${encodeURIComponent(artifactId)}`, {
+    const res = await this.requestRaw(`${this.base}/v1/models/downloads/${encodeURIComponent(artifactId)}`, {
       method: 'GET',
       headers: this.getHeaders(),
     });
@@ -2165,7 +2273,7 @@ class SidecarClient {
   async cancelModelDownload(
     artifactId: string
   ): Promise<{ artifact_id: string; cancelled: boolean }> {
-    const res = await fetch(
+    const res = await this.requestRaw(
       `${this.base}/v1/models/downloads/${encodeURIComponent(artifactId)}/cancel`,
       {
         method: 'POST',
@@ -2180,7 +2288,7 @@ class SidecarClient {
   }
 
   async getInstalledModels(): Promise<DownloadStatus[]> {
-    const res = await fetch(`${this.base}/v1/models/installed`, {
+    const res = await this.requestRaw(`${this.base}/v1/models/installed`, {
       method: 'GET',
       headers: this.getHeaders(),
     });
@@ -2208,7 +2316,7 @@ class SidecarClient {
     if (filters?.effectivePrivacyClass) params.append('effective_privacy_class', filters.effectivePrivacyClass);
     const qs = params.toString();
     const url = `${this.base}/v1/models/economics${qs ? `?${qs}` : ''}`;
-    const res = await fetch(url, {
+    const res = await this.requestRaw(url, {
       method: 'GET',
       headers: this.getHeaders(),
     });
@@ -2224,7 +2332,7 @@ class SidecarClient {
     modelId?: string,
     timeout?: number
   ): Promise<ProviderConnectionVerification> {
-    const res = await fetch(`${this.base}/v1/providers/${encodeURIComponent(providerId)}/verify`, {
+    const res = await this.requestRaw(`${this.base}/v1/providers/${encodeURIComponent(providerId)}/verify`, {
       method: 'POST',
       headers: this.getHeaders(),
       body: JSON.stringify({ model_id: modelId, timeout: timeout ?? 5.0 }),
@@ -2249,7 +2357,7 @@ class SidecarClient {
   }
 
   async getProviderVerification(providerId: string): Promise<ProviderConnectionVerification> {
-    const res = await fetch(`${this.base}/v1/providers/${encodeURIComponent(providerId)}/verification`, {
+    const res = await this.requestRaw(`${this.base}/v1/providers/${encodeURIComponent(providerId)}/verification`, {
       headers: this.getHeaders(),
     });
     if (!res.ok) {
@@ -2272,7 +2380,7 @@ class SidecarClient {
   }
 
   async listProviders(includeDisabled = false): Promise<any[]> {
-    const res = await fetch(`${this.base}/v1/providers?include_disabled=${includeDisabled}`, {
+    const res = await this.requestRaw(`${this.base}/v1/providers?include_disabled=${includeDisabled}`, {
       headers: this.getHeaders(),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -2280,7 +2388,7 @@ class SidecarClient {
   }
 
   async listAdapters(includeHealth = false): Promise<any[]> {
-    const res = await fetch(`${this.base}/v1/adapters?include_health=${includeHealth}`, {
+    const res = await this.requestRaw(`${this.base}/v1/adapters?include_health=${includeHealth}`, {
       headers: this.getHeaders(),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -2301,7 +2409,7 @@ class SidecarClient {
     style_guidance?: string;
     factuality_requirement?: string;
   }): Promise<ArticleWorkflowState> {
-    const res = await fetch(`${this.base}/v1/writing/workflows`, {
+    const res = await this.requestRaw(`${this.base}/v1/writing/workflows`, {
       method: 'POST',
       headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -2314,7 +2422,7 @@ class SidecarClient {
   }
 
   async getWritingWorkflow(workflowRunId: string): Promise<ArticleWorkflowState> {
-    const res = await fetch(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}`, {
+    const res = await this.requestRaw(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}`, {
       headers: this.getHeaders(),
     });
     if (!res.ok) {
@@ -2328,7 +2436,7 @@ class SidecarClient {
     const url = projectId
       ? `${this.base}/v1/writing/workflows?project_id=${encodeURIComponent(projectId)}`
       : `${this.base}/v1/writing/workflows`;
-    const res = await fetch(url, { headers: this.getHeaders() });
+    const res = await this.requestRaw(url, { headers: this.getHeaders() });
     if (!res.ok) return [];
     return res.json();
   }
@@ -2343,7 +2451,7 @@ class SidecarClient {
       style_guidance?: string;
     }
   ): Promise<ArticleWorkflowState> {
-    const res = await fetch(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/outline`, {
+    const res = await this.requestRaw(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/outline`, {
       method: 'POST',
       headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify(overrides || {}),
@@ -2359,7 +2467,7 @@ class SidecarClient {
     workflowRunId: string,
     options?: { target_word_count?: number }
   ): Promise<ArticleWorkflowState> {
-    const res = await fetch(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/draft`, {
+    const res = await this.requestRaw(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/draft`, {
       method: 'POST',
       headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify(options || {}),
@@ -2372,7 +2480,7 @@ class SidecarClient {
   }
 
   async reviewWritingStyle(workflowRunId: string): Promise<ArticleWorkflowState> {
-    const res = await fetch(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/style-review`, {
+    const res = await this.requestRaw(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/style-review`, {
       method: 'POST',
       headers: this.getHeaders(),
     });
@@ -2387,7 +2495,7 @@ class SidecarClient {
     workflowRunId: string,
     options?: { accepted_findings_only?: boolean }
   ): Promise<ArticleWorkflowState> {
-    const res = await fetch(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/revise`, {
+    const res = await this.requestRaw(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/revise`, {
       method: 'POST',
       headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify(options || { accepted_findings_only: true }),
@@ -2400,7 +2508,7 @@ class SidecarClient {
   }
 
   async reviewWritingClaims(workflowRunId: string): Promise<ArticleWorkflowState> {
-    const res = await fetch(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/claim-review`, {
+    const res = await this.requestRaw(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/claim-review`, {
       method: 'POST',
       headers: this.getHeaders(),
     });
@@ -2415,7 +2523,7 @@ class SidecarClient {
     workflowRunId: string,
     options?: { final_content?: string }
   ): Promise<ArticleWorkflowState> {
-    const res = await fetch(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/finalize`, {
+    const res = await this.requestRaw(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/finalize`, {
       method: 'POST',
       headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify(options || {}),
@@ -2431,7 +2539,7 @@ class SidecarClient {
     workflowRunId: string,
     payload: { stage: string; content: string }
   ): Promise<ArticleWorkflowState> {
-    const res = await fetch(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/edit`, {
+    const res = await this.requestRaw(`${this.base}/v1/writing/workflows/${encodeURIComponent(workflowRunId)}/edit`, {
       method: 'POST',
       headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -2453,7 +2561,7 @@ class SidecarClient {
     style_guidance?: string;
     factuality_requirement?: string;
   }): Promise<ArticleWorkflowState> {
-    const res = await fetch(`${this.base}/v1/writing/workflows/full`, {
+    const res = await this.requestRaw(`${this.base}/v1/writing/workflows/full`, {
       method: 'POST',
       headers: { ...this.getHeaders(), 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),

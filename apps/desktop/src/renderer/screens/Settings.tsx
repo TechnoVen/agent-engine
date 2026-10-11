@@ -2467,7 +2467,11 @@ export const Settings: React.FC<SettingsProps> = () => {
                   </div>
                   <div className="flex justify-between border-b border-border-subtle/50 pb-1 text-text-secondary">
                     <span>IPC Communication:</span>
-                    <span className="text-text-primary">Localhost REST + SSE</span>
+                    <span className="text-text-primary">Localhost REST (Authenticated)</span>
+                  </div>
+                  <div className="flex justify-between border-b border-border-subtle/50 pb-1 text-text-secondary">
+                    <span>Build Identity:</span>
+                    <span className="text-text-primary text-[10px]">Product Truth (Founder Dogfood)</span>
                   </div>
                   <div className="flex justify-between text-text-secondary">
                     <span>Theme Surface:</span>

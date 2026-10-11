@@ -49,6 +49,8 @@ class IPCTokenManager:
     def set_enforced(self, enforced: Optional[bool]) -> None:
         """Explicitly override enforcement status (primarily for testing)."""
         self._enforced = enforced
+        if enforced is None:
+            os.environ.pop("AGENT_ENGINE_AUTH_ENFORCED", None)
 
     def get_token(self) -> str:
         """Obtain the active IPC token, generating a 256-bit cryptographically secure secret if needed."""
@@ -238,7 +240,12 @@ def get_token_manager() -> IPCTokenManager:
 def reset_token_manager() -> None:
     """Reset token manager instance (for test isolation)."""
     global _token_manager_instance
+    if _token_manager_instance is not None:
+        _token_manager_instance.set_token(None)
+        _token_manager_instance.set_enforced(None)
     _token_manager_instance = None
+    os.environ.pop("AGENT_ENGINE_IPC_TOKEN", None)
+    os.environ.pop("AGENT_ENGINE_AUTH_ENFORCED", None)
 
 
 def verify_ipc_token(request: Request) -> bool:

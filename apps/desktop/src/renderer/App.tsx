@@ -71,16 +71,20 @@ export const App: React.FC = () => {
 
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Health poll
+  // Health poll and secure IPC token bootstrap
   useEffect(() => {
     let mounted = true;
-    const poll = async () => {
+    const initAndPoll = async () => {
+      await sidecarClient.bootstrapIpcToken();
       const h = await sidecarClient.checkHealth();
       if (mounted) setHealth(h);
     };
 
-    poll();
-    const interval = setInterval(poll, 5000);
+    initAndPoll();
+    const interval = setInterval(async () => {
+      const h = await sidecarClient.checkHealth();
+      if (mounted) setHealth(h);
+    }, 5000);
     return () => {
       mounted = false;
       clearInterval(interval);

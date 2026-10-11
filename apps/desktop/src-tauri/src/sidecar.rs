@@ -103,6 +103,87 @@ impl SidecarSupervisor {
         }
     }
 
+    /// Retrieve the authoritative local IPC authentication token or securely initialize one.
+    pub fn get_or_init_ipc_token() -> String {
+        if let Ok(token) = std::env::var("AGENT_ENGINE_IPC_TOKEN") {
+            let trimmed = token.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+
+        let token_path = if let Ok(path_str) = std::env::var("AGENT_ENGINE_TOKEN_FILE") {
+            PathBuf::from(path_str)
+        } else {
+            let home_dir = std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| PathBuf::from("."));
+            home_dir.join(".agent_engine").join("ipc.token")
+        };
+
+        if token_path.is_file() {
+            if let Ok(content) = std::fs::read_to_string(&token_path) {
+                let trimmed = content.trim();
+                if !trimmed.is_empty() {
+                    std::env::set_var("AGENT_ENGINE_IPC_TOKEN", trimmed);
+                    return trimmed.to_string();
+                }
+            }
+        }
+
+        let token = {
+            let mut bytes = [0u8; 32];
+            let mut filled = false;
+            #[cfg(unix)]
+            {
+                use std::io::Read;
+                if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+                    if f.read_exact(&mut bytes).is_ok() {
+                        filled = true;
+                    }
+                }
+            }
+            if !filled {
+                let mut hasher = Sha256::new();
+                hasher.update(&std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos().to_le_bytes());
+                hasher.update(&std::process::id().to_le_bytes());
+                hasher.update(b"agent_engine_ipc_secure_entropy_seed");
+                let result = hasher.finalize();
+                bytes.copy_from_slice(&result);
+            }
+            let mut hex_str = String::with_capacity(64);
+            for b in bytes {
+                hex_str.push_str(&format!("{:02x}", b));
+            }
+            hex_str
+        };
+
+        if let Some(parent) = token_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+            }
+        }
+
+        if std::fs::write(&token_path, &token).is_ok() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&token_path, std::fs::Permissions::from_mode(0o600));
+            }
+        }
+
+        std::env::set_var("AGENT_ENGINE_IPC_TOKEN", &token);
+        token
+    }
+
+    pub fn get_ipc_token() -> String {
+        Self::get_or_init_ipc_token()
+    }
+
     /// Compute SHA-256 hexadecimal checksum of a file on disk.
     pub fn compute_sha256(path: &Path) -> Result<String, String> {
         let mut file = std::fs::File::open(path).map_err(|e| format!("Failed to open file: {e}"))?;
@@ -248,13 +329,12 @@ impl SidecarSupervisor {
                 .arg("--host")
                 .arg("127.0.0.1");
 
-            // Forward environment and IPC token if present
+            // Forward environment and canonical IPC token
+            let token = Self::get_or_init_ipc_token();
             cmd.env("PORT", self.port.to_string());
             cmd.env("AGENT_ENGINE_PORT", self.port.to_string());
-            if let Ok(token) = std::env::var("AGENT_ENGINE_IPC_TOKEN") {
-                cmd.arg("--token").arg(&token);
-                cmd.env("AGENT_ENGINE_IPC_TOKEN", &token);
-            }
+            cmd.arg("--token").arg(&token);
+            cmd.env("AGENT_ENGINE_IPC_TOKEN", &token);
 
             let spawned = cmd
                 .spawn()
@@ -308,7 +388,14 @@ impl SidecarSupervisor {
             guard.as_ref().map(|p| p.to_string_lossy().to_string())
         };
 
-        match client.get(&url).send().await {
+        let token = Self::get_or_init_ipc_token();
+        let mut req = client.get(&url);
+        if !token.is_empty() {
+            req = req.header("Authorization", format!("Bearer {token}"))
+                     .header("X-IPC-Token", &token);
+        }
+
+        match req.send().await {
             Ok(resp) => {
                 if resp.status().is_success() {
                     let health: Option<HealthResponse> = resp.json().await.ok();
