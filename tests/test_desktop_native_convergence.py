@@ -375,3 +375,72 @@ def test_screens_contain_zero_law_3_strings():
     for screen_file in (RENDERER_ROOT / "screens").glob("*.tsx"):
         content = screen_file.read_text(encoding="utf-8")
         assert "Law 3" not in content, f"Found legacy 'Law 3' in {screen_file.name}"
+
+
+def test_diagnostics_expose_build_identity():
+    """Verify Developer and About diagnostic sections expose frontend SHA, backend SHA, and schema version."""
+    settings_tsx = (RENDERER_ROOT / "screens" / "Settings.tsx").read_text(encoding="utf-8")
+    assert "Frontend SHA:" in settings_tsx
+    assert "Tauri/Backend SHA:" in settings_tsx
+    assert "Schema Version:" in settings_tsx
+
+
+def test_sidecar_supervisor_canonical_entrypoint_and_env_invariants():
+    """Verify SidecarSupervisor uses canonical app factory and deterministic project environment."""
+    sidecar_rs = (SRC_TAURI_ROOT / "src" / "sidecar.rs").read_text(encoding="utf-8")
+    lib_rs = (SRC_TAURI_ROOT / "src" / "lib.rs").read_text(encoding="utf-8")
+
+    # Canonical entrypoint
+    assert "services.python.server.app:create_app" in sidecar_rs
+    assert "--factory" in sidecar_rs
+
+    # Deterministic project environment
+    assert ".venv" in sidecar_rs
+    assert "find_repo_root" in sidecar_rs
+
+    # Exact diagnostic failure categories
+    assert "executable not found" in sidecar_rs
+    assert "module import failure" in sidecar_rs
+    assert "token mismatch" in sidecar_rs
+    assert "port conflict" in sidecar_rs
+    assert "child exited" in sidecar_rs
+
+    # Started in Tauri setup
+    assert "sup.start().await" in lib_rs
+    assert "sup.stop().await" in lib_rs
+
+
+def test_sidecar_supervisor_runtime_lifecycle_acceptance():
+    """Integration acceptance test: compiles and runs Rust SidecarSupervisor lifecycle test.
+
+    Verifies:
+    1. launches/initializes SidecarSupervisor
+    2. waits bounded time for child health
+    3. verifies port listener
+    4. verifies /healthz
+    5. verifies authenticated /v1/health
+    6. verifies same IPC token contract
+    7. shuts supervisor down
+    8. verifies child process is gone
+    """
+    import subprocess
+
+    manifest_path = SRC_TAURI_ROOT / "Cargo.toml"
+    res = subprocess.run(
+        [
+            "cargo",
+            "test",
+            "--manifest-path",
+            str(manifest_path),
+            "test_sidecar_supervisor_lifecycle",
+            "--",
+            "--nocapture",
+        ],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+    )
+    assert (
+        res.returncode == 0
+    ), f"SidecarSupervisor runtime lifecycle test failed:\nSTDOUT:\n{res.stdout}\nSTDERR:\n{res.stderr}"
+    assert "test sidecar::tests::test_sidecar_supervisor_lifecycle ... ok" in res.stdout

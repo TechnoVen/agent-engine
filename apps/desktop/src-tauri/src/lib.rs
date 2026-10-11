@@ -112,6 +112,7 @@ pub fn run() {
     let cred_client = Arc::new(CredentialClient::new(8000));
     let update_client = Arc::new(UpdateClient::new(8000));
     let shutdown_sup = Arc::clone(&supervisor);
+    let startup_sup = Arc::clone(&supervisor);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -134,13 +135,30 @@ pub fn run() {
             set_update_channel,
             check_for_updates
         ])
-        .setup(|app| {
+        .setup(move |app| {
             let token = SidecarSupervisor::get_or_init_ipc_token();
             use tauri::Manager;
             if let Some(window) = app.get_webview_window("main") {
                 let script = format!("window.__AGENT_ENGINE_IPC_TOKEN__ = {:?};", token);
                 let _ = window.eval(&script);
             }
+
+            // Canonical native startup: start or attach sidecar supervisor
+            let sup = Arc::clone(&startup_sup);
+            tauri::async_runtime::block_on(async move {
+                match sup.start().await {
+                    Ok(status) => {
+                        println!(
+                            "[SidecarSupervisor] Python sidecar online on port {}: status={}",
+                            status.port, status.status
+                        );
+                    }
+                    Err(err) => {
+                        eprintln!("[SidecarSupervisor] CRITICAL: Sidecar startup failed: {}", err);
+                    }
+                }
+            });
+
             Ok(())
         })
         .build(tauri::generate_context!())

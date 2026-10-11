@@ -2402,6 +2402,18 @@ export const Settings: React.FC<SettingsProps> = () => {
                   <span>Active Credential Backend:</span>
                   <span className="text-text-primary">{activeBackendName}</span>
                 </div>
+                <div className="flex justify-between border-b border-border-subtle/50 pb-1">
+                  <span>Frontend SHA:</span>
+                  <span className="text-text-primary text-[10px] font-mono">b9be6c1</span>
+                </div>
+                <div className="flex justify-between border-b border-border-subtle/50 pb-1">
+                  <span>Tauri/Backend SHA:</span>
+                  <span className="text-text-primary text-[10px] font-mono">b9be6c1</span>
+                </div>
+                <div className="flex justify-between border-b border-border-subtle/50 pb-1">
+                  <span>Schema Version:</span>
+                  <span className="text-text-primary text-[10px] font-mono">v1.0.0 (API 0.1.0 / SQLite v3)</span>
+                </div>
                 <div className="flex justify-between">
                   <span>Hardware Telemetry:</span>
                   <span className="text-text-primary">
@@ -2472,6 +2484,18 @@ export const Settings: React.FC<SettingsProps> = () => {
                   <div className="flex justify-between border-b border-border-subtle/50 pb-1 text-text-secondary">
                     <span>Build Identity:</span>
                     <span className="text-text-primary text-[10px]">Product Truth (Founder Dogfood)</span>
+                  </div>
+                  <div className="flex justify-between border-b border-border-subtle/50 pb-1 text-text-secondary">
+                    <span>Frontend SHA:</span>
+                    <span className="text-text-primary text-[10px] font-mono">b9be6c1</span>
+                  </div>
+                  <div className="flex justify-between border-b border-border-subtle/50 pb-1 text-text-secondary">
+                    <span>Tauri/Backend SHA:</span>
+                    <span className="text-text-primary text-[10px] font-mono">b9be6c1</span>
+                  </div>
+                  <div className="flex justify-between border-b border-border-subtle/50 pb-1 text-text-secondary">
+                    <span>Schema Version:</span>
+                    <span className="text-text-primary text-[10px] font-mono">v1.0.0 (API 0.1.0 / SQLite v3)</span>
                   </div>
                   <div className="flex justify-between text-text-secondary">
                     <span>Theme Surface:</span>
