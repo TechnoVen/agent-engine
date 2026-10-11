@@ -2079,7 +2079,7 @@ export const Settings: React.FC<SettingsProps> = () => {
                     Security Boundary & Zero-Trust Policies
                   </h2>
                   <p className="text-xs text-text-secondary mt-1">
-                    Configure Law 3 Zero-Trust fail-closed boundaries, approval escalation, and IPC token enforcement.
+                    Configure Zero-Trust fail-closed boundaries, approval escalation, and IPC token enforcement.
                   </p>
                 </div>
                 <button
@@ -2095,7 +2095,7 @@ export const Settings: React.FC<SettingsProps> = () => {
               {appSettings && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
                   <div className="space-y-1.5">
-                    <label className="text-text-primary font-medium">Zero-Trust Evaluation Mode (Law 3)</label>
+                    <label className="text-text-primary font-medium">Zero-Trust Evaluation Mode</label>
                     <select
                       value={appSettings.security.zero_trust_eval}
                       onChange={(e) =>

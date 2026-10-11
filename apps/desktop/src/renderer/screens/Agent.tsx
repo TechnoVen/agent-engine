@@ -29,8 +29,13 @@ export const Agent: React.FC<AgentScreenProps> = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [newMemory, setNewMemory] = useState('');
   const [instructions, setInstructions] = useState(() => {
-    return localStorage.getItem('agent_engine_user_instructions') || 
-      'You are Agent Engine, a deterministic engineering assistant. Prioritize local models and zero-trust safety guardrails. Never produce sycophantic or marketing language.';
+    const raw = localStorage.getItem('agent_engine_user_instructions');
+    if (raw) {
+      return raw.replace(/\s*\(Law\s*3\)/gi, '');
+    }
+    return (
+      'You are Agent Engine, a deterministic engineering assistant. Prioritize local models and zero-trust safety guardrails. Never produce sycophantic or marketing language.'
+    );
   });
   const [privacyBoundary, setPrivacyBoundary] = useState<PrivacyBoundary>(() => {
     return (localStorage.getItem('agent_engine_privacy_boundary') as PrivacyBoundary) || 'local_only';
@@ -146,7 +151,7 @@ export const Agent: React.FC<AgentScreenProps> = () => {
                   <div className="font-semibold text-text-primary">Zero-Trust Approval Threshold</div>
                   <div className="text-[11px] text-text-tertiary">Require operator token on disk mutations and shell execution</div>
                 </div>
-                <span className="font-mono text-emerald-400">Strict (Law 3 Active)</span>
+                <span className="font-mono text-emerald-400">Strict (Zero-Trust Active)</span>
               </div>
             </div>
           </div>

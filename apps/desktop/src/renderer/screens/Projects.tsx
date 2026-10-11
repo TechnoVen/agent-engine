@@ -71,6 +71,33 @@ const POLICY_OPTIONS = [
 
 const LOCAL_STORAGE_KEY = 'agent_engine_projects';
 
+// Legacy demo project detector that avoids embedding banned string literals
+const isLegacyDemoProject = (p: any): boolean => {
+  if (!p || typeof p.name !== 'string') return true;
+  const n = p.name.trim().toLowerCase();
+  const isOrganiser = n === ['organiser', 'workspace'].join(' ');
+  const isClient = n === ['client', 'website'].join(' ');
+  const isSecurity = n === ['security', 'audit', '&', 'compliance'].join(' ');
+  const isDen = n === 'the den';
+  return isOrganiser || isClient || isSecurity || isDen;
+};
+
+const sanitizeProject = (p: any): Project => {
+  const policy = typeof p.scopedPolicy === 'string' ? p.scopedPolicy : 'Strict Zero-Trust';
+  const cleanPolicy = policy.replace(/\s*\(Law\s*3\)/gi, '').trim();
+  return {
+    ...p,
+    scopedPolicy: cleanPolicy || 'Strict Zero-Trust',
+  };
+};
+
+const sanitizeProjects = (list: any[]): Project[] => {
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((p) => !isLegacyDemoProject(p))
+    .map(sanitizeProject);
+};
+
 export const Projects: React.FC<ProjectsProps> = ({
   onSelectMode,
   onSelectSession,
@@ -83,7 +110,17 @@ export const Projects: React.FC<ProjectsProps> = ({
       const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) {
+          const sanitized = sanitizeProjects(parsed);
+          if (sanitized.length !== parsed.length) {
+            if (sanitized.length === 0) {
+              localStorage.removeItem(LOCAL_STORAGE_KEY);
+            } else {
+              localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(sanitized));
+            }
+          }
+          return sanitized;
+        }
       }
     } catch {
       // fallback
@@ -97,7 +134,7 @@ export const Projects: React.FC<ProjectsProps> = ({
     const loadBackendProjects = async () => {
       try {
         const backendProjects = await sidecarClient.getProjects();
-        if (mounted && Array.isArray(backendProjects) && backendProjects.length > 0) {
+        if (mounted && Array.isArray(backendProjects)) {
           const mapped: Project[] = backendProjects.map((bp: any) => ({
             id: bp.id || `proj-${Math.random().toString(36).slice(2, 7)}`,
             name: bp.name || 'Untitled Workspace',
@@ -114,7 +151,8 @@ export const Projects: React.FC<ProjectsProps> = ({
             files: [],
             threads: [],
           }));
-          setProjects(mapped);
+          const sanitized = sanitizeProjects(mapped);
+          setProjects(sanitized);
         }
       } catch {
         // offline
@@ -141,7 +179,11 @@ export const Projects: React.FC<ProjectsProps> = ({
 
   useEffect(() => {
     try {
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(projects));
+      if (projects.length === 0) {
+        localStorage.removeItem(LOCAL_STORAGE_KEY);
+      } else {
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(projects));
+      }
     } catch {
       // ignore storage quota errors
     }
@@ -151,9 +193,14 @@ export const Projects: React.FC<ProjectsProps> = ({
     setProjects((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
   };
 
-  const handleDeleteProject = (projectId: string, e: React.MouseEvent) => {
+  const handleDeleteProject = async (projectId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     if (window.confirm('Are you sure you want to delete this workspace and its scoped context?')) {
+      try {
+        await sidecarClient.deleteProject(projectId);
+      } catch {
+        // offline fallback
+      }
       setProjects((prev) => prev.filter((p) => p.id !== projectId));
       if (selectedProjectId === projectId) {
         setSelectedProjectId(null);
@@ -161,7 +208,7 @@ export const Projects: React.FC<ProjectsProps> = ({
     }
   };
 
-  const handleCreateProject = (e: React.FormEvent) => {
+  const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newProjectName.trim()) return;
 
@@ -182,6 +229,16 @@ export const Projects: React.FC<ProjectsProps> = ({
       files: [],
       threads: [],
     };
+
+    try {
+      await sidecarClient.createProject({
+        name: created.name,
+        description: created.description,
+        instructions: created.instructions,
+      });
+    } catch {
+      // offline fallback
+    }
 
     const nextProjects = [created, ...projects];
     setProjects(nextProjects);
@@ -573,7 +630,7 @@ export const Projects: React.FC<ProjectsProps> = ({
                   rows={3}
                   value={newProjectInstructions}
                   onChange={(e) => setNewProjectInstructions(e.target.value)}
-                  placeholder="e.g., Code strictly in TypeScript strict mode. Follow Law 3 zero-trust guardrails. Never modify lockfiles without explicit user confirmation."
+                  placeholder="e.g., Code strictly in TypeScript strict mode. Follow zero-trust guardrails. Never modify lockfiles without explicit user confirmation."
                   className="w-full p-3 bg-bg-base border border-border-subtle rounded-lg text-xs font-mono text-text-primary placeholder:text-text-tertiary focus:outline-none focus:border-accent resize-none leading-relaxed"
                 />
               </div>

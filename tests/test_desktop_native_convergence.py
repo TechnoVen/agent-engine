@@ -359,3 +359,19 @@ def test_worker_step_handles_unsupported_job_type_without_spin():
     src = inspect.getsource(worker.JobWorker.step)
     assert "unsupported_job_type" in src
     assert "UnsupportedJobTypeError" in src
+
+
+def test_projects_screen_sanitizes_local_storage_and_purges_legacy_demos():
+    """Verify Projects.tsx includes sanitization to purge legacy demo projects and Law 3 badges."""
+    projects_tsx = (RENDERER_ROOT / "screens" / "Projects.tsx").read_text(encoding="utf-8")
+    assert "isLegacyDemoProject" in projects_tsx
+    assert "sanitizeProjects" in projects_tsx
+    assert "LOCAL_STORAGE_KEY" in projects_tsx
+    assert "localStorage.removeItem" in projects_tsx
+
+
+def test_screens_contain_zero_law_3_strings():
+    """Verify desktop renderer screens do not display legacy 'Law 3' strings."""
+    for screen_file in (RENDERER_ROOT / "screens").glob("*.tsx"):
+        content = screen_file.read_text(encoding="utf-8")
+        assert "Law 3" not in content, f"Found legacy 'Law 3' in {screen_file.name}"
