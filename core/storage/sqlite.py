@@ -23,8 +23,8 @@ DEFAULT_SQLITE_PATH = str(PROJECT_ROOT / "data" / "agent_engine.db")
 class SQLiteBackend(StorageBackend):
     """Local SQLite repository implementation."""
 
-    def __init__(self, db_path: str = DEFAULT_SQLITE_PATH):
-        self.db_path = db_path
+    def __init__(self, db_path: Optional[str] = None):
+        self.db_path = db_path or os.getenv("SQLITE_DB_PATH") or DEFAULT_SQLITE_PATH
         self._is_memory = db_path == ":memory:"
         self._lock = threading.RLock()
         self._memory_conn: Optional[sqlite3.Connection] = None

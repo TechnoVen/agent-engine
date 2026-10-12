@@ -466,64 +466,90 @@ export const Home: React.FC<HomeProps> = ({
             )
           );
         },
-        onDone: (finalData: any) => {
+        onDone: (finalData?: any) => {
           setIsStreaming(false);
-          const totalTokens = (finalData.prompt_tokens || 0) + (finalData.completion_tokens || 0);
+          const data = finalData || {};
+          const totalTokens = (data.prompt_tokens || 0) + (data.completion_tokens || 0);
           setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMsgId
-                ? {
-                    ...m,
-                    isStreaming: false,
-                    metadata: {
-                      ...m.metadata,
-                      executionId: finalData.execution_id || m.metadata?.executionId,
-                      tokenCount: totalTokens || m.metadata?.tokenCount,
-                      latencyMs: finalData.latency_ms || m.metadata?.latencyMs,
-                      tokensPerSec: finalData.tokens_per_second || m.metadata?.tokensPerSec,
-                      estCost:
-                        finalData.cost_usd !== undefined
-                          ? `$${finalData.cost_usd.toFixed(4)}`
-                          : m.metadata?.estCost,
-                      provider: finalData.provider || m.metadata?.provider,
-                      modelName: finalData.model || m.metadata?.modelName,
-                      isLocal: finalData.is_local !== undefined ? finalData.is_local : m.metadata?.isLocal,
-                      execution: {
-                        ...m.metadata?.execution,
-                        executionId: finalData.execution_id || m.metadata?.execution?.executionId,
-                        status: 'completed',
-                        provider: finalData.provider || m.metadata?.execution?.provider,
-                        model: finalData.model || m.metadata?.execution?.model,
-                        isLocal: finalData.is_local !== undefined ? finalData.is_local : m.metadata?.execution?.isLocal,
-                        costUsd: finalData.cost_usd,
-                        totalTokens: totalTokens || m.metadata?.execution?.totalTokens,
-                        latencyMs: finalData.latency_ms || m.metadata?.execution?.latencyMs,
-                        tokensPerSec: finalData.tokens_per_second || m.metadata?.execution?.tokensPerSec,
-                      },
-                    },
-                  }
-                : m
-            )
+            prev.map((m) => {
+              if (m.id !== assistantMsgId) return m;
+              // Invariant: NEVER overwrite a failed or errored execution to completed
+              if (m.metadata?.execution?.status === 'failed' || m.metadata?.isError) {
+                return { ...m, isStreaming: false };
+              }
+              return {
+                ...m,
+                isStreaming: false,
+                metadata: {
+                  ...m.metadata,
+                  executionId: data.execution_id || m.metadata?.executionId,
+                  tokenCount: totalTokens || m.metadata?.tokenCount,
+                  latencyMs: data.latency_ms || m.metadata?.latencyMs,
+                  tokensPerSec: data.tokens_per_second || m.metadata?.tokensPerSec,
+                  estCost:
+                    data.cost_usd !== undefined
+                      ? `$${data.cost_usd.toFixed(4)}`
+                      : m.metadata?.estCost,
+                  provider: data.provider || m.metadata?.provider,
+                  modelName: data.model || m.metadata?.modelName,
+                  isLocal: data.is_local !== undefined ? data.is_local : m.metadata?.isLocal,
+                  execution: {
+                    ...m.metadata?.execution,
+                    executionId: data.execution_id || m.metadata?.execution?.executionId,
+                    status: 'completed',
+                    provider: data.provider || m.metadata?.execution?.provider,
+                    model: data.model || m.metadata?.execution?.model,
+                    isLocal: data.is_local !== undefined ? data.is_local : m.metadata?.execution?.isLocal,
+                    costUsd: data.cost_usd,
+                    totalTokens: totalTokens || m.metadata?.execution?.totalTokens,
+                    latencyMs: data.latency_ms || m.metadata?.execution?.latencyMs,
+                    tokensPerSec: data.tokens_per_second || m.metadata?.execution?.tokensPerSec,
+                  },
+                },
+              };
+            })
           );
           activeAbortController.current = null;
         },
-        onError: (err: any) => {
+        onError: (err: any, errPayload?: any) => {
           setIsStreaming(false);
           activeAbortController.current = null;
-          const errMsg = err?.message || 'Execution Error: Unable to complete operation.';
+          const errMsg = typeof err === 'string' ? err : err?.message || 'Execution Error: Unable to complete operation.';
+          const payload = errPayload || (typeof err === 'object' && err !== null ? err : {});
+          const errCode = payload.error_code || payload.failure_classification || 'DISPATCH_FAILED';
+          const errExecId = payload.execution_id;
+
+          const isDevMode = typeof window !== 'undefined' && (
+            localStorage.getItem('agent_engine_developer_mode') === 'true' ||
+            localStorage.getItem('ae_developer_mode') === 'true'
+          );
+
+          // Standard UI should not expose raw exception strings unless Developer mode is enabled
+          const failureContent = isDevMode
+            ? `Execution failed\nUnable to complete this request.\n\n[Developer Details]: ${errMsg}`
+            : 'Execution failed\nUnable to complete this request.';
+
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantMsgId
                 ? {
                     ...m,
                     isStreaming: false,
-                    content: m.content ? `${m.content}\n\n[Provider Error: ${errMsg}]` : `[Provider Error: ${errMsg}]`,
+                    content: failureContent,
                     metadata: {
                       ...m.metadata,
+                      isError: true,
+                      executionId: errExecId || m.metadata?.executionId,
                       execution: {
                         ...m.metadata?.execution,
                         status: 'failed',
                         error: errMsg,
+                        errorCode: errCode,
+                        failureClassification: errCode,
+                        failureStage: payload.failure_stage || 'provider_dispatch',
+                        executionId: errExecId || m.metadata?.executionId || m.metadata?.execution?.executionId,
+                        latencyMs: Math.round(performance.now() - startTime),
+                        costUsd: undefined,
                       },
                     },
                   }

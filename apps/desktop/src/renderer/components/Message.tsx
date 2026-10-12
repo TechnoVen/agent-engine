@@ -302,9 +302,11 @@ export const Message: React.FC<MessageProps> = ({
               provenance={
                 message.metadata?.execution || {
                   executionId: message.metadata?.executionId,
-                  status: 'COMPLETED',
-                  provider: message.metadata?.provider || (message.metadata?.isLocal ? 'llamacpp' : undefined),
-                  model: message.metadata?.modelName || (message.metadata?.isLocal ? 'qwen2.5-coder:7b' : undefined),
+                  status: message.metadata?.isError ? 'FAILED' : 'COMPLETED',
+                  error: message.metadata?.error,
+                  failureClassification: message.metadata?.errorCode,
+                  provider: message.metadata?.provider,
+                  model: message.metadata?.modelName,
                   isLocal: message.metadata?.isLocal,
                   effectivePrivacy: message.metadata?.effectivePrivacy,
                   routingObjective: message.metadata?.routingObjective,

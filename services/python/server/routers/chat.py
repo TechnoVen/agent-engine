@@ -232,6 +232,10 @@ async def chat_completions(req: ChatRequest):
                             "event": "error",
                             "error": err_msg,
                             "error_code": err_code,
+                            "failure_classification": err_code,
+                            "failure_stage": "provider_dispatch",
+                            "execution_id": res.execution_id or exec_req.id,
+                            "duration_ms": res.duration_ms,
                             "result": res,
                         }
                     )
@@ -244,6 +248,9 @@ async def chat_completions(req: ChatRequest):
                         "event": "error",
                         "error": str(ex),
                         "error_code": "DISPATCH_FAILED",
+                        "failure_classification": "DISPATCH_FAILED",
+                        "failure_stage": "provider_dispatch",
+                        "execution_id": exec_req.id,
                     }
                 )
 
@@ -307,8 +314,13 @@ async def chat_completions(req: ChatRequest):
                         payload = {
                             "event": "error",
                             "session_id": session_id,
+                            "execution_id": item.get("execution_id") or exec_req.id,
                             "error_code": err_code,
                             "error": err_msg,
+                            "failure_classification": item.get("failure_classification")
+                            or err_code,
+                            "failure_stage": item.get("failure_stage") or "provider_dispatch",
+                            "duration_ms": item.get("duration_ms"),
                             "timestamp": datetime.datetime.now().isoformat(),
                         }
                         yield f"data: {json.dumps(payload)}\n\n"

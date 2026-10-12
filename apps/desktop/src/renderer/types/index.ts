@@ -219,6 +219,12 @@ export interface ExecutionProvenance {
   tools?: any[];
   approvals?: any[];
   artifacts?: any[];
+  error?: string;
+  errorCode?: string;
+  failureClassification?: string;
+  failureStage?: string;
+  fallbackChain?: string[];
+  providerAttempts?: number;
 }
 
 export interface MessageMetadata {
@@ -240,6 +246,9 @@ export interface MessageMetadata {
   routingExplanation?: string;
   costUsd?: number;
   policyStatus?: string;
+  isError?: boolean;
+  error?: string;
+  errorCode?: string;
   execution?: ExecutionProvenance;
 }
 

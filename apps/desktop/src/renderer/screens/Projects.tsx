@@ -144,10 +144,10 @@ export const Projects: React.FC<ProjectsProps> = ({
             threadCount: bp.sessions_count || 0,
             lastActivity: bp.updated_at ? new Date(bp.updated_at).toLocaleTimeString() : 'Recent',
             instructions: bp.instructions || '',
-            scopedPolicy: 'Strict Zero-Trust',
-            monthlySpendUsd: 0.0,
-            budgetCeilingUsd: bp.settings?.budget_ceiling_usd || 50.0,
-            activeAgents: ['Senior Architect'],
+            scopedPolicy: bp.settings?.scoped_policy || bp.scoped_policy || undefined,
+            monthlySpendUsd: bp.monthly_spend_usd ?? 0.0,
+            budgetCeilingUsd: bp.settings?.budget_ceiling_usd ?? bp.budget_ceiling_usd ?? undefined,
+            activeAgents: bp.settings?.active_agents || bp.active_agents || [],
             files: [],
             threads: [],
           }));
@@ -222,10 +222,10 @@ export const Projects: React.FC<ProjectsProps> = ({
       threadCount: 0,
       lastActivity: 'Just now',
       instructions: newProjectInstructions.trim(),
-      scopedPolicy: newProjectPolicy,
+      scopedPolicy: newProjectPolicy || undefined,
       monthlySpendUsd: 0.0,
-      budgetCeilingUsd: parseFloat(newProjectBudget) || 25.0,
-      activeAgents: ['Senior Architect', 'Code Specialist'],
+      budgetCeilingUsd: newProjectBudget ? parseFloat(newProjectBudget) : undefined,
+      activeAgents: [],
       files: [],
       threads: [],
     };
@@ -373,8 +373,8 @@ export const Projects: React.FC<ProjectsProps> = ({
               const IconComp = getIconComponent(project.icon);
               const filesCount = project.files ? project.files.length : 0;
               const spend = project.monthlySpendUsd || 0;
-              const ceiling = project.budgetCeilingUsd || 25;
-              const spendPct = Math.min(100, Math.round((spend / ceiling) * 100));
+              const ceiling = project.budgetCeilingUsd;
+              const spendPct = ceiling ? Math.min(100, Math.round((spend / ceiling) * 100)) : 0;
 
               return (
                 <div
@@ -423,10 +423,16 @@ export const Projects: React.FC<ProjectsProps> = ({
 
                     {/* Policy & Agent Tags */}
                     <div className="flex flex-wrap items-center gap-1.5 mb-4">
-                      <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
-                        {project.scopedPolicy || 'Strict Zero-Trust'}
-                      </span>
-                      {project.activeAgents && project.activeAgents.slice(0, 2).map((ag) => (
+                      {project.scopedPolicy ? (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
+                          {project.scopedPolicy}
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-bg-surface border border-border-subtle text-text-tertiary">
+                          Unscoped
+                        </span>
+                      )}
+                      {project.activeAgents && project.activeAgents.length > 0 && project.activeAgents.slice(0, 2).map((ag) => (
                         <span
                           key={ag}
                           className="px-2 py-0.5 rounded text-[10px] bg-bg-surface border border-border-subtle text-text-secondary"
@@ -454,20 +460,22 @@ export const Projects: React.FC<ProjectsProps> = ({
                       <div className="flex items-center gap-1">
                         <Coins className="w-3.5 h-3.5 text-amber-400" />
                         <span className="text-[11px] font-mono text-text-secondary">
-                          ${spend.toFixed(2)} / ${ceiling.toFixed(0)}
+                          {ceiling !== undefined ? `$${spend.toFixed(2)} / $${ceiling.toFixed(0)}` : `$${spend.toFixed(2)} (Uncapped)`}
                         </span>
                       </div>
                     </div>
 
                     {/* Budget progress bar */}
-                    <div className="w-full h-1 bg-bg-surface rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all ${
-                          spendPct > 80 ? 'bg-rose-500' : spendPct > 50 ? 'bg-amber-500' : 'bg-accent'
-                        }`}
-                        style={{ width: `${spendPct}%` }}
-                      />
-                    </div>
+                    {ceiling !== undefined && (
+                      <div className="w-full h-1 bg-bg-surface rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${
+                            spendPct > 80 ? 'bg-rose-500' : spendPct > 50 ? 'bg-amber-500' : 'bg-accent'
+                          }`}
+                          style={{ width: `${spendPct}%` }}
+                        />
+                      </div>
+                    )}
 
                     <div className="flex items-center justify-between pt-1">
                       <span className="text-[11px] font-medium text-accent flex items-center gap-1 group-hover:underline">

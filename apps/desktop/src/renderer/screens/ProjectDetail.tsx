@@ -46,10 +46,10 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
   const [activeAgents, setActiveAgents] = useState<string[]>(project.activeAgents || []);
 
   const [scopedPolicy, setScopedPolicy] = useState<string>(
-    project.scopedPolicy || 'Strict Zero-Trust'
+    project.scopedPolicy || 'Unscoped'
   );
 
-  const [budgetCeiling, setBudgetCeiling] = useState<number>(project.budgetCeilingUsd || 15.0);
+  const [budgetCeiling, setBudgetCeiling] = useState<number | undefined>(project.budgetCeilingUsd);
 
   const handleSaveInstructions = () => {
     const updated: Project = {
@@ -510,7 +510,7 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-text-secondary">Current Monthly Spend</span>
                     <span className="font-mono font-semibold text-text-primary">
-                      ${(project.monthlySpendUsd || 1.42).toFixed(2)}
+                      ${(project.monthlySpendUsd || 0.0).toFixed(2)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between text-xs">
@@ -519,23 +519,26 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
                       type="number"
                       min="1"
                       step="5"
-                      value={budgetCeiling}
+                      placeholder="Uncapped"
+                      value={budgetCeiling ?? ''}
                       onChange={(e) => {
-                        const val = parseFloat(e.target.value) || 1;
+                        const val = e.target.value ? parseFloat(e.target.value) : undefined;
                         setBudgetCeiling(val);
                         onUpdateProject({ ...project, budgetCeilingUsd: val });
                       }}
                       className="w-20 px-2 py-0.5 bg-bg-base border border-border-subtle rounded text-right font-mono font-semibold text-text-primary text-xs focus:outline-none focus:border-accent"
                     />
                   </div>
-                  <div className="w-full bg-bg-base rounded-full h-1.5 overflow-hidden">
-                    <div
-                      className="bg-accent h-1.5 rounded-full"
-                      style={{
-                        width: `${Math.min(100, ((project.monthlySpendUsd || 1.42) / budgetCeiling) * 100)}%`,
-                      }}
-                    />
-                  </div>
+                  {budgetCeiling !== undefined && (
+                    <div className="w-full bg-bg-base rounded-full h-1.5 overflow-hidden">
+                      <div
+                        className="bg-accent h-1.5 rounded-full"
+                        style={{
+                          width: `${Math.min(100, ((project.monthlySpendUsd || 0) / budgetCeiling) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                  )}
                 </div>
 
                 <div className="p-3 rounded-lg bg-bg-surface border border-border-subtle space-y-2">

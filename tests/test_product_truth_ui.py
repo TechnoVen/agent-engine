@@ -263,3 +263,144 @@ def test_button_truth_and_no_synthetic_success():
     tasks_file = RENDERER_ROOT / "screens" / "Tasks.tsx"
     tasks_content = tasks_file.read_text(encoding="utf-8")
     assert "sidecarClient.triggerScheduledTask" in tasks_content
+
+
+# ==============================================================================
+# Execution Projection & Product Truth Regression Tests
+# ==============================================================================
+
+
+def test_provider_failure_produces_failed_execution_status(api_client: TestClient):
+    """Verify provider failure produces canonical FAILED status on backend and in SSE error events."""
+    # 1. Non-streaming failure
+    resp = api_client.post(
+        "/v1/chat/completions",
+        json={"prompt": "TRIGGER_PROVIDER_FAILURE", "stream": False},
+    )
+    assert resp.status_code == 502
+    assert "failed" in resp.json()["detail"].lower()
+
+    # 2. Streaming failure
+    resp_stream = api_client.post(
+        "/v1/chat/completions",
+        json={"prompt": "TRIGGER_PROVIDER_FAILURE", "stream": True},
+    )
+    assert resp_stream.status_code == 200
+    stream_text = resp_stream.text
+    assert '"event": "error"' in stream_text
+    assert '"failure_classification": "DISPATCH_FAILED"' in stream_text
+    assert '"failure_stage": "provider_dispatch"' in stream_text
+    assert '"execution_id"' in stream_text
+
+
+def test_failed_stream_cannot_render_completed_in_ui():
+    """Verify streaming completion callbacks and Message component never infer Completed on failure."""
+    client_ts = (RENDERER_ROOT / "api" / "client.ts").read_text(encoding="utf-8")
+    home_tsx = (RENDERER_ROOT / "screens" / "Home.tsx").read_text(encoding="utf-8")
+    message_tsx = (RENDERER_ROOT / "components" / "Message.tsx").read_text(encoding="utf-8")
+
+    # client.ts must guard onDone so it never fires after onError
+    assert "if (!hasError && !hasDone)" in client_ts
+    assert "hasError = true;" in client_ts
+
+    # Home.tsx onDone must NEVER overwrite failed status to completed
+    assert "m.metadata?.execution?.status === 'failed' || m.metadata?.isError" in home_tsx
+    assert "return { ...m, isStreaming: false };" in home_tsx
+
+    # Home.tsx standard UI copy must be restrained, reserving raw exception strings
+    assert r"Execution failed\nUnable to complete this request." in home_tsx
+
+    # Message.tsx must not default to COMPLETED when isError is true
+    assert "status: message.metadata?.isError ? 'FAILED' : 'COMPLETED'" in message_tsx
+
+
+def test_failed_execution_does_not_synthesize_local_cloud_provenance_or_zero_cost():
+    """Verify ExecutionInspector truthfully projects Failed without synthetic local/cloud or $0.00 cost."""
+    inspector_tsx = (RENDERER_ROOT / "components" / "ExecutionInspector.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    # Must classify failed status and use rose dot
+    assert "isFailed ? 'Failed'" in inspector_tsx
+    assert "isFailed" in inspector_tsx
+    assert "bg-rose-500" in inspector_tsx
+
+    # Cost display must be Unavailable on failure (never synthetic $0.00)
+    assert "if (isFailed) {\n    costDisplay = 'Provider charge: Unavailable';" in inspector_tsx
+
+    # Must not contain hardcoded latency fallback 342ms or token fallback 185
+    assert "342ms" not in inspector_tsx
+    assert ": 185" not in inspector_tsx
+
+    # Expanded inspector must show failure details section
+    assert "Execution Failure Details" in inspector_tsx
+    assert "provenance.failureClassification" in inspector_tsx
+    assert "provenance.failureStage" in inspector_tsx
+
+
+def test_successful_local_execution_renders_completed_local_model():
+    """Verify successful local execution projects Completed · Local model and truthful local compute note."""
+    inspector_tsx = (RENDERER_ROOT / "components" / "ExecutionInspector.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "isLocal ? 'Local model' : 'Cloud model'" in inspector_tsx
+    assert "Local compute cost: Unavailable (hardware/electricity unmeasured)" in inspector_tsx
+    assert "bg-emerald-400" in inspector_tsx
+
+
+def test_successful_cloud_execution_renders_truthful_provenance():
+    """Verify successful cloud execution projects real provider, model, and cost provenance."""
+    inspector_tsx = (RENDERER_ROOT / "components" / "ExecutionInspector.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Provider charge: $${cost.toFixed(4)} (Actual)" in inspector_tsx
+    assert "Provider charge: $${cost.toFixed(4)} (Estimated)" in inspector_tsx
+
+
+def test_default_project_truthful_empty_unconfigured_states():
+    """Verify project screens project truthful empty/unconfigured states rather than fake defaults."""
+    projects_tsx = (RENDERER_ROOT / "screens" / "Projects.tsx").read_text(encoding="utf-8")
+    project_detail_tsx = (RENDERER_ROOT / "screens" / "ProjectDetail.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    # Must not hardcode fake defaults on mapped project
+    assert "scopedPolicy: 'Strict Zero-Trust'" not in projects_tsx
+    assert "activeAgents: ['Senior Architect']" not in projects_tsx
+    assert "budgetCeilingUsd: bp.settings?.budget_ceiling_usd || 50.0" not in projects_tsx
+
+    # Must not hardcode fake defaults in detail screen
+    assert "project.budgetCeilingUsd || 15.0" not in project_detail_tsx
+    assert "project.monthlySpendUsd || 1.42" not in project_detail_tsx
+
+    # Must render Unscoped / Uncapped when not set
+    assert "Unscoped" in projects_tsx
+    assert "Uncapped" in projects_tsx
+
+
+def test_database_isolation_prevents_test_fixtures_in_dogfood_db():
+    """Verify automated tests run against isolated temporary database, keeping dogfood db clean."""
+    conftest_py = (REPO_ROOT / "conftest.py").read_text(encoding="utf-8")
+
+    # conftest.py must configure SQLITE_DB_PATH isolation
+    assert "_TEST_DB_PATH" in conftest_py
+    assert 'os.environ["SQLITE_DB_PATH"]' in conftest_py
+    assert "reset_storage_backend" in conftest_py
+    assert "reset_session_store" in conftest_py
+
+    # Dogfood database must contain zero test fixture sessions
+    import sqlite3
+
+    dogfood_db = REPO_ROOT / "data" / "agent_engine.db"
+    if dogfood_db.exists():
+        conn = sqlite3.connect(str(dogfood_db))
+        c = conn.cursor()
+        c.execute("SELECT count(*) FROM sessions WHERE title LIKE '%TRIGGER%'")
+        assert (
+            c.fetchone()[0] == 0
+        ), "Dogfood database must not contain TRIGGER_PROVIDER_FAILURE sessions"
+        c.execute("SELECT count(*) FROM sessions WHERE title LIKE '%What is 2+2%'")
+        assert c.fetchone()[0] == 0, "Dogfood database must not contain test math sessions"
+        conn.close()

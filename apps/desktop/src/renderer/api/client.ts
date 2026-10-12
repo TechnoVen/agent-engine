@@ -361,7 +361,7 @@ class SidecarClient {
     onRoutingResolved?: (routingData: any) => void;
     onApprovalRequired?: (approvalData: any) => void;
     onCostUpdate?: (costData: any) => void;
-    onError?: (error: string) => void;
+    onError?: (error: string, payload?: any) => void;
     onDone?: (doneData?: any) => void;
   }): Promise<void> {
     const {
@@ -396,18 +396,20 @@ class SidecarClient {
       if (!res.ok) {
         const errJson = await res.json().catch(() => ({ detail: `HTTP ${res.status}: ${res.statusText}` }));
         const errMsg = errJson.detail || `HTTP ${res.status}: ${res.statusText}`;
-        onError?.(errMsg);
+        onError?.(errMsg, errJson);
         return;
       }
 
       if (!res.body) {
-        onError?.('Response body is empty');
+        onError?.('Response body is empty', { error: 'Response body is empty', error_code: 'EMPTY_BODY' });
         return;
       }
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let hasError = false;
+      let hasDone = false;
 
       while (true) {
         const { value, done } = await reader.read();
@@ -433,8 +435,11 @@ class SidecarClient {
               } else if (payload.event === 'cost_update') {
                 onCostUpdate?.(payload);
               } else if (payload.event === 'error') {
-                onError?.(payload.error || 'Execution failed');
+                hasError = true;
+                onError?.(payload.error || 'Execution failed', payload);
+                break;
               } else if (payload.event === 'done') {
+                hasDone = true;
                 onDone?.(payload);
               }
             } catch {
@@ -442,15 +447,18 @@ class SidecarClient {
             }
           }
         }
+        if (hasError) break;
       }
-      onDone?.();
+      if (!hasError && !hasDone) {
+        onDone?.();
+      }
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') {
         // Aborted by user cancellation
         return;
       }
       const msg = err instanceof Error ? err.message : String(err);
-      onError?.(msg);
+      onError?.(msg, { error: msg, error_code: 'CLIENT_NETWORK_ERROR' });
     }
   }
 

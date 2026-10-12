@@ -26,19 +26,25 @@ export const ExecutionInspector: React.FC<ExecutionInspectorProps> = ({
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [copiedId, setCopiedId] = useState(false);
 
-  const isLocal = provenance.isLocal ?? true;
-  const status = provenance.status || 'Completed';
-  const provider = provenance.provider || (isLocal ? 'llamacpp' : 'cloud');
-  const model = provenance.model || (isLocal ? 'qwen2.5-coder:7b' : 'frontier-model');
-  const latencyStr = provenance.latencyMs !== undefined ? `${provenance.latencyMs}ms` : '342ms';
-  const totalTokens = provenance.totalTokens ?? (provenance.completionTokens ? (provenance.promptTokens || 0) + provenance.completionTokens : 185);
+  const rawStatus = provenance.status || (provenance.error ? 'failed' : 'Completed');
+  const isFailed = rawStatus.toLowerCase() === 'failed' || rawStatus.toLowerCase() === 'error';
+  const isRunning = rawStatus.toLowerCase() === 'running' || rawStatus.toLowerCase() === 'streaming';
+  const statusDisplay = isFailed ? 'Failed' : isRunning ? 'Running' : 'Completed';
+
+  const isLocal = provenance.isLocal ?? false;
+  const provider = provenance.provider || (isFailed ? 'Unavailable' : isLocal ? 'llamacpp' : 'Unavailable');
+  const model = provenance.model || (isFailed ? 'Unavailable' : isLocal ? 'qwen2.5-coder:7b' : 'Unavailable');
+  const latencyStr = provenance.latencyMs !== undefined ? `${provenance.latencyMs}ms` : undefined;
+  const totalTokens = provenance.totalTokens ?? (provenance.completionTokens ? (provenance.promptTokens || 0) + provenance.completionTokens : undefined);
   const cost = provenance.costUsd;
   const costProv = (provenance.costProvenance || trace?.usage?.cost_provenance)?.toLowerCase();
 
   let costDisplay = 'Provider charge: Unavailable';
   let localComputeCostNote: string | null = null;
 
-  if (isLocal) {
+  if (isFailed) {
+    costDisplay = 'Provider charge: Unavailable';
+  } else if (isLocal) {
     costDisplay = 'Provider charge: $0.00';
     localComputeCostNote = 'Local compute cost: Unavailable (hardware/electricity unmeasured)';
   } else if (cost !== undefined && cost !== null && !isNaN(cost)) {
@@ -60,7 +66,7 @@ export const ExecutionInspector: React.FC<ExecutionInspectorProps> = ({
   const artifacts = provenance.artifacts || trace?.artifacts || [];
 
   // Locality label
-  const localityLabel = isLocal ? 'Local model' : 'Cloud model';
+  const localityLabel = isFailed ? 'Unavailable' : isLocal ? 'Local model' : 'Cloud model';
 
   const handleCopyExecutionId = () => {
     if (!provenance.executionId) return;
@@ -124,16 +130,49 @@ export const ExecutionInspector: React.FC<ExecutionInspectorProps> = ({
         className="flex items-center justify-between px-3 py-1.5 text-text-tertiary hover:text-text-secondary cursor-pointer select-none transition-colors"
       >
         <div className="flex items-center gap-2 text-[11px]">
-          <span className="inline-flex items-center gap-1 font-medium text-text-secondary">
-            <span className={`w-1.5 h-1.5 rounded-full ${status.toLowerCase() === 'running' || status.toLowerCase() === 'streaming' ? 'bg-accent animate-pulse' : 'bg-emerald-400'}`} />
-            <span>{status.toLowerCase() === 'running' || status.toLowerCase() === 'streaming' ? 'Running' : 'Completed'}</span>
+          <span className={`inline-flex items-center gap-1 font-medium ${isFailed ? 'text-rose-400' : 'text-text-secondary'}`}>
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                isFailed
+                  ? 'bg-rose-500'
+                  : isRunning
+                  ? 'bg-accent animate-pulse'
+                  : 'bg-emerald-400'
+              }`}
+            />
+            <span>{statusDisplay}</span>
           </span>
-          <span>·</span>
-          <span>{localityLabel}</span>
-          <span>·</span>
-          <span>{latencyStr}</span>
-          <span>·</span>
-          <span className="text-text-secondary font-medium">{costDisplay}</span>
+          {isFailed ? (
+            <>
+              {provenance.failureClassification && (
+                <>
+                  <span>·</span>
+                  <span className="text-text-tertiary">{provenance.failureClassification}</span>
+                </>
+              )}
+              {latencyStr && (
+                <>
+                  <span>·</span>
+                  <span>{latencyStr}</span>
+                </>
+              )}
+              <span>·</span>
+              <span className="text-text-tertiary font-medium">Provider charge: Unavailable</span>
+            </>
+          ) : (
+            <>
+              <span>·</span>
+              <span>{localityLabel}</span>
+              {latencyStr && (
+                <>
+                  <span>·</span>
+                  <span>{latencyStr}</span>
+                </>
+              )}
+              <span>·</span>
+              <span className="text-text-secondary font-medium">{costDisplay}</span>
+            </>
+          )}
         </div>
 
         <div className="flex items-center gap-1 text-[11px] hover:text-text-primary transition-colors">
@@ -152,7 +191,7 @@ export const ExecutionInspector: React.FC<ExecutionInspectorProps> = ({
               <span className="text-text-tertiary">/</span>
               <span className="text-text-secondary font-sans font-medium">{model}</span>
               <span className="px-1.5 py-0.2 rounded text-[10px] bg-bg-elevated border border-border-subtle text-text-tertiary">
-                Model execution: {isLocal ? 'Local' : 'Cloud'}
+                Model execution: {isFailed ? 'Unavailable' : isLocal ? 'Local' : 'Cloud'}
               </span>
             </div>
 
@@ -168,6 +207,30 @@ export const ExecutionInspector: React.FC<ExecutionInspectorProps> = ({
               </button>
             )}
           </div>
+
+          {/* Failure Diagnostics Box */}
+          {isFailed && (
+            <div className="p-2.5 rounded bg-rose-500/10 border border-rose-500/30 text-rose-300 space-y-1.5 font-sans text-[11px]">
+              <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-wider font-semibold">
+                <span className="text-rose-400">Execution Failure Details</span>
+                <span className="px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300">
+                  {provenance.failureClassification || provenance.errorCode || 'DISPATCH_FAILED'}
+                </span>
+              </div>
+              <div className="font-mono text-[10px] text-text-secondary break-all">
+                {provenance.error || 'Execution failed during provider dispatch.'}
+              </div>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] font-mono text-text-tertiary pt-1 border-t border-rose-500/20">
+                <span>Stage: {provenance.failureStage || 'provider_dispatch'}</span>
+                {provenance.fallbackChain && provenance.fallbackChain.length > 0 && (
+                  <span>Fallback path: {provenance.fallbackChain.join(' → ')}</span>
+                )}
+                {provenance.latencyMs !== undefined && (
+                  <span>Duration: {provenance.latencyMs}ms</span>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Standard Metrics Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
@@ -204,7 +267,7 @@ export const ExecutionInspector: React.FC<ExecutionInspectorProps> = ({
                 Token Usage
               </div>
               <div className="text-text-primary font-medium mt-0.5">
-                {totalTokens} tokens
+                {totalTokens !== undefined ? `${totalTokens} tokens` : 'Unavailable'}
               </div>
             </div>
 
