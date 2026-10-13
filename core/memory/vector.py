@@ -14,6 +14,12 @@ DEFAULT_CHROMA_DIR = str(PROJECT_ROOT / "data" / "chroma")
 _CHROMA_CLIENTS: Dict[str, Any] = {}
 
 
+def reset_chroma_clients() -> None:
+    """Clear cached persistent chromadb client instances (primarily for tests)."""
+    global _CHROMA_CLIENTS
+    _CHROMA_CLIENTS.clear()
+
+
 class AgentMemory:
     """
     Persistent Vector Store interface using ChromaDB for Agent Context and RAG.

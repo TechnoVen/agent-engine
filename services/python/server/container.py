@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 import logging
+import os
 import time
 from typing import Any, Dict, List, Optional
 
@@ -51,7 +52,7 @@ class AppServices:
         if self.workflow_service is None:
             from core.workflows.service import WorkflowService
 
-            db_path = getattr(self.storage, "db_path", None)
+            db_path = getattr(self.storage, "db_path", None) or os.getenv("SQLITE_DB_PATH")
             self.workflow_service = WorkflowService(storage=self.storage, db_path=db_path)
         return self.workflow_service
 
@@ -96,7 +97,8 @@ class AppServices:
 
     def get_workflow_storage(self) -> WorkflowStorage:
         if self.workflow_storage is None:
-            self.workflow_storage = WorkflowStorage()
+            db_path = getattr(self.storage, "db_path", None) or os.getenv("SQLITE_DB_PATH")
+            self.workflow_storage = WorkflowStorage(db_path=db_path)
         return self.workflow_storage
 
     def get_swarm_coordinator(self) -> SwarmCoordinator:

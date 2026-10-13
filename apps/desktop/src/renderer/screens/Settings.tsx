@@ -297,25 +297,39 @@ export const Settings: React.FC<SettingsProps> = () => {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
-  // Poll hardware telemetry (every 2s when on hardware tab or when local models run)
+  // Poll hardware telemetry (5-10s while visible, paused when hidden or desktop connection required)
   useEffect(() => {
     let mounted = true;
+    let inFlight = false;
+
     const fetchHardware = async () => {
+      if (inFlight || document.hidden || sidecarClient.isDesktopConnectionRequired()) return;
+      inFlight = true;
       try {
         const data = await sidecarClient.getHardwareTelemetry();
         if (mounted) setHardwareTelem(data);
       } catch {
         // ignore
+      } finally {
+        inFlight = false;
       }
     };
 
     fetchHardware();
-    const intervalMs = activeTab === 'local' || (activeTab as string) === 'hardware' || hardwareTelem?.local_runtime_active ? 2000 : 5000;
+    const intervalMs = activeTab === 'local' || (activeTab as string) === 'hardware' || hardwareTelem?.local_runtime_active ? 5000 : 10000;
     const timer = setInterval(fetchHardware, intervalMs);
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden && !sidecarClient.isDesktopConnectionRequired()) {
+        fetchHardware();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     return () => {
       mounted = false;
       clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [activeTab, hardwareTelem?.local_runtime_active]);
 

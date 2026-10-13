@@ -16,6 +16,7 @@ import {
   NumericFactProvenance,
   DownloadStatus,
   ManagedRuntimeStatus,
+  CatalogModelEntry,
 } from '../types';
 import { sidecarClient } from '../api/client';
 
@@ -288,9 +289,20 @@ const TierCard: React.FC<TierCardProps> = ({
               </span>
             )}
             {!isDownloading && !isVerifying && !isDownloadFailed && isInstalled && !isModelActive && !isModelStarting && (
-              <span className="text-[11px] text-text-tertiary font-mono">
-                Installed (Stopped)
-              </span>
+              fit_result.state === 'does_not_fit' ? (
+                <div className="flex flex-col gap-0.5">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 w-fit">
+                    Installed · Verified
+                  </span>
+                  <span className="text-[10px] text-amber-400 font-mono">
+                    Cannot start now — insufficient available memory
+                  </span>
+                </div>
+              ) : (
+                <span className="text-[11px] text-text-tertiary font-mono">
+                  Installed (Stopped)
+                </span>
+              )
             )}
             {!isDownloading && !isVerifying && !isDownloadFailed && !isInstalled && (
               <span className="text-[11px] text-text-tertiary font-mono">
@@ -350,14 +362,25 @@ const TierCard: React.FC<TierCardProps> = ({
               </button>
             )}
             {!isDownloading && !isVerifying && !isDownloadFailed && isInstalled && !isModelActive && !isModelStarting && (
-              <button
-                type="button"
-                onClick={() => onStart(modelId)}
-                disabled={actionBusyModel !== null}
-                className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs transition-colors disabled:opacity-50"
-              >
-                Start
-              </button>
+              fit_result.state === 'does_not_fit' ? (
+                <button
+                  type="button"
+                  disabled
+                  title="Cannot start now — insufficient available memory"
+                  className="px-3 py-1 rounded bg-bg-base border border-border-subtle text-text-tertiary font-medium text-xs cursor-not-allowed opacity-50"
+                >
+                  Start
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => onStart(modelId)}
+                  disabled={actionBusyModel !== null}
+                  className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs transition-colors disabled:opacity-50"
+                >
+                  Start
+                </button>
+              )
             )}
             {!isDownloading && !isVerifying && !isDownloadFailed && isInstalled && isModelActive && (
               <button
@@ -435,6 +458,7 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
   onStateChange,
 }) => {
   const [data, setData] = useState<LocalRecommendationResponse | null>(null);
+  const [catalog, setCatalog] = useState<CatalogModelEntry[]>([]);
   const [installedModels, setInstalledModels] = useState<DownloadStatus[]>([]);
   const [downloads, setDownloads] = useState<DownloadStatus[]>([]);
   const [runtimeStatus, setRuntimeStatus] = useState<ManagedRuntimeStatus | null>(null);
@@ -468,11 +492,15 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
     setLoading(true);
     setError(null);
     try {
-      const res = await sidecarClient.getRecommendedLocalModels({
-        min_context_tokens: 4096,
-        require_local_only: true,
-      });
+      const [res, cat] = await Promise.all([
+        sidecarClient.getRecommendedLocalModels({
+          min_context_tokens: 4096,
+          require_local_only: true,
+        }),
+        sidecarClient.getLocalModelCatalog().catch(() => []),
+      ]);
       setData(res);
+      setCatalog(cat || []);
       await refreshStatuses();
     } catch (err: any) {
       if (err?.message?.includes('401') || err?.message?.toLowerCase().includes('unauthorized')) {
@@ -489,20 +517,48 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
     fetchRecommendations();
   }, [fetchRecommendations]);
 
-  // Polling during active downloading / verifying / runtime transitions
+  // Subscribe to 401 desktop connection required state
   useEffect(() => {
-    const hasActiveTasks =
-      downloads.some((d) => d.state === 'downloading' || d.state === 'verifying') ||
-      runtimeStatus?.state === 'starting' ||
-      runtimeStatus?.state === 'stopping';
+    return sidecarClient.onDesktopConnectionRequiredChange((req) => {
+      if (req) setIs401(true);
+    });
+  }, []);
 
-    if (!hasActiveTasks) return;
+  // Polling during active downloading / verifying / runtime transitions
+  // Cadence: 1.5s for downloads, 2s for runtime transitions.
+  // Suspended on document.hidden, in-flight, or when desktopConnectionRequired is active.
+  useEffect(() => {
+    let inFlight = false;
+    const hasActiveDownloads = downloads.some((d) => d.state === 'downloading' || d.state === 'verifying');
+    const hasRuntimeTransition =
+      runtimeStatus?.state === 'starting' || runtimeStatus?.state === 'stopping';
 
-    const timer = setInterval(() => {
-      refreshStatuses();
-    }, 1500);
+    if (!hasActiveDownloads && !hasRuntimeTransition) return;
 
-    return () => clearInterval(timer);
+    const poll = async () => {
+      if (inFlight || document.hidden || sidecarClient.isDesktopConnectionRequired()) return;
+      inFlight = true;
+      try {
+        await refreshStatuses();
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const intervalMs = hasActiveDownloads ? 1500 : 2000;
+    const timer = setInterval(poll, intervalMs);
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden && !sidecarClient.isDesktopConnectionRequired()) {
+        poll();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [downloads, runtimeStatus, refreshStatuses]);
 
   const handleInstall = async (modelId: string) => {
@@ -571,16 +627,29 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
     await handleInstall(modelId);
   };
 
-  if (is401) {
+  const handleRetryConnection = async () => {
+    setIs401(false);
+    await sidecarClient.retryConnection();
+    await fetchRecommendations();
+  };
+
+  if (is401 || sidecarClient.isDesktopConnectionRequired()) {
     return (
       <div
-        className={`p-8 rounded-xl bg-bg-elevated border border-border-subtle text-center space-y-2 ${className}`}
+        className={`p-8 rounded-xl bg-bg-elevated border border-border-subtle text-center space-y-3 ${className}`}
         data-testid="browser-401-notice"
       >
         <div className="text-sm font-semibold text-text-primary">Desktop connection required</div>
         <p className="text-xs text-text-secondary max-w-sm mx-auto">
           Open Agent Engine in the native desktop app to manage local models.
         </p>
+        <button
+          type="button"
+          onClick={handleRetryConnection}
+          className="px-3 py-1.5 rounded bg-accent text-accent-contrast text-xs font-medium hover:opacity-90 transition-opacity"
+        >
+          Retry Connection
+        </button>
       </div>
     );
   }
@@ -668,25 +737,179 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
 
       {/* No Safe Models State */}
       {data && !hasAnyRecommendation && (
-        <div className="p-5 rounded-xl bg-bg-surface border border-border-subtle text-center space-y-3">
-          <div className="w-10 h-10 rounded-full bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-400">
-            <AlertTriangle className="w-5 h-5" />
+        <div className="space-y-4">
+          <div className="p-5 rounded-xl bg-bg-surface border border-border-subtle text-center space-y-3">
+            <div className="w-10 h-10 rounded-full bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mx-auto text-amber-400">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold text-text-primary">No models can safely run with current memory headroom.</h3>
+              <p className="text-xs text-text-secondary max-w-md mx-auto">
+                You can still install a model for later use.
+              </p>
+            </div>
+            {Object.keys(data.rejection_summary || {}).length > 0 && (
+              <div className="text-left max-w-md mx-auto mt-3 p-3 rounded-lg bg-bg-base border border-border-subtle text-[11px] text-text-tertiary font-mono space-y-1">
+                <span className="font-semibold text-text-secondary block">Evaluated Exclusions:</span>
+                {Object.entries(data.rejection_summary).map(([modelId, reasons]) => (
+                  <div key={modelId}>
+                    <span className="text-text-primary">{modelId}:</span> {reasons.join(', ')}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
-          <div className="space-y-1">
-            <h3 className="text-sm font-bold text-text-primary">No Safe Local Models Fit Current Hardware</h3>
-            <p className="text-xs text-text-secondary max-w-md mx-auto">
-              After reserving memory for the operating system, Agent Engine, and runtime services,
-              none of the models in the curated catalog satisfy safe execution headroom.
-            </p>
-          </div>
-          {Object.keys(data.rejection_summary || {}).length > 0 && (
-            <div className="text-left max-w-md mx-auto mt-3 p-3 rounded-lg bg-bg-base border border-border-subtle text-[11px] text-text-tertiary font-mono space-y-1">
-              <span className="font-semibold text-text-secondary block">Evaluated Exclusions:</span>
-              {Object.entries(data.rejection_summary).map(([modelId, reasons]) => (
-                <div key={modelId}>
-                  <span className="text-text-primary">{modelId}:</span> {reasons.join(', ')}
-                </div>
-              ))}
+
+          {/* Curated Catalog Entries */}
+          {catalog.length > 0 && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-text-secondary">
+                  Curated Catalog ({catalog.length} Models)
+                </h4>
+                <span className="text-[11px] text-text-tertiary">
+                  Installable regardless of current memory headroom
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3">
+                {catalog.map((entry) => {
+                  const modelId = entry.model_identity.model_id;
+                  const artifactId = `${modelId}.gguf`;
+                  const downloadItem = downloads.find(
+                    (d) =>
+                      d.artifact_id === artifactId ||
+                      d.model_identity?.model_id === modelId ||
+                      d.artifact_id.includes(modelId)
+                  );
+                  const installedItem = installedModels.find(
+                    (d) =>
+                      d.artifact_id === artifactId ||
+                      d.model_identity?.model_id === modelId ||
+                      d.artifact_id.includes(modelId)
+                  );
+                  const isInstalled = !!installedItem || downloadItem?.state === 'verified';
+                  const downloadState = downloadItem?.state || (isInstalled ? 'verified' : 'not_present');
+                  const isDownloading = downloadState === 'downloading';
+                  const isVerifying = downloadState === 'verifying';
+                  const isDownloadFailed = downloadState === 'failed';
+                  const progressPct = downloadItem ? Math.round((downloadItem.progress_ratio || 0) * 100) : 0;
+
+                  // Parse memory requirements and current deficit
+                  const reasons = data.rejection_summary?.[modelId] || [];
+                  const ramReason = reasons.find((r) => r.includes('Insufficient safe RAM') || r.includes('deficit'));
+                  let requiredMemStr = formatBytes(entry.min_ram_bytes);
+                  let deficitStr = '—';
+                  if (ramReason) {
+                    const reqMatch = ramReason.match(/required\s+([\d.]+\s*(?:GiB|MiB|B))/i);
+                    if (reqMatch) requiredMemStr = reqMatch[1];
+                    const defMatch = ramReason.match(/deficit:\s*([^)]+)/i);
+                    if (defMatch) deficitStr = defMatch[1].trim();
+                  }
+
+                  return (
+                    <div
+                      key={modelId}
+                      className="p-4 rounded-xl bg-bg-surface border border-border-subtle flex flex-col md:flex-row md:items-center justify-between gap-4 hover:border-border-default transition-colors"
+                    >
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-bold text-text-primary">{modelId}</span>
+                          <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-bg-base border border-border-subtle text-text-tertiary">
+                            {entry.quantization}
+                          </span>
+                          {isInstalled && (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                              Installed · Verified
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Metric details: Model, Quantization, Artifact size, Required memory, Current deficit */}
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-[11px] font-mono">
+                          <div className="p-1.5 rounded bg-bg-base border border-border-subtle space-y-0.5">
+                            <span className="text-text-tertiary block text-[10px]">Quantization</span>
+                            <span className="text-text-primary font-semibold">{entry.quantization}</span>
+                          </div>
+                          <div className="p-1.5 rounded bg-bg-base border border-border-subtle space-y-0.5">
+                            <span className="text-text-tertiary block text-[10px]">Artifact Size</span>
+                            <span className="text-text-primary font-semibold">{formatBytes(entry.artifact_size_bytes)}</span>
+                          </div>
+                          <div className="p-1.5 rounded bg-bg-base border border-border-subtle space-y-0.5">
+                            <span className="text-text-tertiary block text-[10px]">Required Memory</span>
+                            <span className="text-text-primary font-semibold">{requiredMemStr}</span>
+                          </div>
+                          <div className="p-1.5 rounded bg-bg-base border border-border-subtle space-y-0.5">
+                            <span className="text-text-tertiary block text-[10px]">Current Deficit</span>
+                            <span className="text-amber-400 font-semibold">{deficitStr}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Action Area */}
+                      <div className="flex items-center gap-3 flex-shrink-0 self-end md:self-center">
+                        {isDownloading && (
+                          <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1.5 text-[11px] font-mono text-accent">
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Downloading {progressPct}%</span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleCancel(downloadItem?.artifact_id || artifactId)}
+                              disabled={actionBusyModel !== null}
+                              className="px-2.5 py-1 rounded bg-bg-base hover:bg-bg-hover border border-border-subtle text-xs text-text-secondary"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        )}
+                        {isVerifying && (
+                          <div className="flex items-center gap-1.5 text-[11px] font-mono text-amber-400">
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            <span>Verifying…</span>
+                          </div>
+                        )}
+                        {isDownloadFailed && (
+                          <button
+                            type="button"
+                            onClick={() => handleInstall(modelId)}
+                            disabled={actionBusyModel !== null}
+                            className="px-2.5 py-1 rounded bg-accent/15 hover:bg-accent/25 border border-accent/30 text-xs font-medium text-accent"
+                          >
+                            Retry
+                          </button>
+                        )}
+                        {!isDownloading && !isVerifying && !isDownloadFailed && !isInstalled && (
+                          <button
+                            type="button"
+                            onClick={() => handleInstall(modelId)}
+                            disabled={actionBusyModel !== null}
+                            className="px-3 py-1.5 rounded bg-accent text-accent-contrast font-medium text-xs hover:opacity-90 transition-opacity disabled:opacity-50"
+                          >
+                            Install
+                          </button>
+                        )}
+                        {!isDownloading && !isVerifying && !isDownloadFailed && isInstalled && (
+                          <div className="flex items-center gap-3">
+                            <span className="text-xs text-amber-400 font-mono">
+                              Cannot start now — insufficient available memory
+                            </span>
+                            <button
+                              type="button"
+                              disabled
+                              title="Cannot start now — insufficient available memory"
+                              className="px-3 py-1.5 rounded bg-bg-base border border-border-subtle text-text-tertiary font-medium text-xs cursor-not-allowed opacity-50"
+                            >
+                              Start
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
         </div>

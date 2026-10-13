@@ -7,7 +7,6 @@ Part of Task R1.14 (Split Monolithic API by Domain).
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 import time
 from typing import List, Optional
 
@@ -23,12 +22,14 @@ from core.economics import (
 from core.providers.registry import get_provider_registry
 from core.providers.verification.service import get_provider_verification_service
 from core.eval import EvalSample, ModelEvalReport, ModelEvalSuite, get_golden_dataset
-from core.model_download import DownloadStatus, get_download_manager
+from core.model_download import DownloadState, DownloadStatus, get_download_manager
 from core.model_recommendation import (
     CatalogModelEntry,
     LocalModelCatalog,
     LocalRecommendationResponse,
+    ReservePolicy,
     TaskRequirements,
+    evaluate_hardware_fit,
     recommend_local_models,
 )
 from core.model_registry.models import ModelIdentity
@@ -472,33 +473,54 @@ async def start_managed_runtime(req: StartManagedRuntimeRequest, request: Reques
     catalog = LocalModelCatalog()
     ident = ModelIdentity(provider_id="llamacpp", model_id=req.model_id)
     desc = catalog.get_artifact_descriptor(ident)
-    artifact_id = (
-        desc.artifact_id
-        if desc
-        else (req.model_id if req.model_id.endswith(".gguf") else f"{req.model_id}.gguf")
-    )
+    if not desc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Model '{req.model_id}' is not in the curated local model catalog.",
+        )
+    artifact_id = desc.artifact_id
 
-    # 1. Resolve model file path
+    # 1. Enforce verified artifact security invariant:
+    # discovered file != verified artifact != runtime healthy != model loaded
+    meta = mgr.storage.load_metadata(artifact_id)
+    if not meta or meta.state != DownloadState.VERIFIED:
+        curr_state = meta.state.value if meta else "not_installed"
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Model artifact '{artifact_id}' is not verified (current state: {curr_state}). "
+                f"Only cryptographically verified managed artifacts can be started."
+            ),
+        )
+
+    # 2. Resolve model file strictly in canonical managed storage
     final_p = mgr.storage.get_final_path(artifact_id)
     if not final_p.exists():
-        alt_p = mgr.storage.get_final_path(req.model_id)
-        if alt_p.exists():
-            final_p = alt_p
-        else:
-            repo_p = Path.cwd() / "models" / artifact_id
-            if not repo_p.exists():
-                repo_p = Path.cwd() / "models" / req.model_id
-            if repo_p.exists():
-                final_p = repo_p
-            elif (Path.home() / ".agent_engine" / "models" / artifact_id).exists():
-                final_p = Path.home() / ".agent_engine" / "models" / artifact_id
-            elif (Path.home() / ".agent_engine" / "models" / req.model_id).exists():
-                final_p = Path.home() / ".agent_engine" / "models" / req.model_id
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail=f"Model artifact '{artifact_id}' not found. Please install the model before starting.",
-                )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Verified model artifact '{artifact_id}' file not found in managed storage. Please re-install the model.",
+        )
+
+    # 3. Enforce runtime hardware safety: do not allow unsafe runtime start
+    model_entry = catalog.get_model(ident)
+    if model_entry:
+        manager = get_resource_manager()
+        snapshot = manager.get_snapshot()
+        fit_result = evaluate_hardware_fit(
+            model=model_entry,
+            snapshot=snapshot,
+            requirements=TaskRequirements(),
+            policy=ReservePolicy(),
+        )
+        if not fit_result.fits:
+            deficit_str = ""
+            if fit_result.ram_headroom_bytes < 0:
+                deficit_gib = abs(fit_result.ram_headroom_bytes) / (1024**3)
+                deficit_str = f" Current memory deficit is {deficit_gib:.2f} GiB."
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot start runtime: Insufficient available memory for safe execution.{deficit_str}",
+            )
 
     # 2. Pre-flight validation
     from core.inference.validation import ModelArtifactValidator, ModelValidationError

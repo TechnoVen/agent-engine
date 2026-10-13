@@ -11,7 +11,12 @@ import {
 } from 'lucide-react';
 import { LocalModelRecommendations } from '../components/LocalModelRecommendations';
 import { sidecarClient } from '../api/client';
-import { DownloadStatus, ProviderConnectionVerification, ManagedRuntimeStatus } from '../types';
+import {
+  DownloadStatus,
+  ProviderConnectionVerification,
+  ManagedRuntimeStatus,
+  LocalRecommendationResponse,
+} from '../types';
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) {
@@ -25,6 +30,7 @@ export const Models: React.FC = () => {
   const [installedModels, setInstalledModels] = useState<DownloadStatus[]>([]);
   const [activeDownloads, setActiveDownloads] = useState<DownloadStatus[]>([]);
   const [runtimeStatus, setRuntimeStatus] = useState<ManagedRuntimeStatus | null>(null);
+  const [recommendations, setRecommendations] = useState<LocalRecommendationResponse | null>(null);
   const [runtimeBusy, setRuntimeBusy] = useState(false);
   const [expandedArtifacts, setExpandedArtifacts] = useState<Record<string, boolean>>({});
   const [verifyingProvider, setVerifyingProvider] = useState<string | null>(null);
@@ -34,7 +40,7 @@ export const Models: React.FC = () => {
 
   const loadModelsState = async () => {
     try {
-      const [installed, downloads, rStatus] = await Promise.all([
+      const [installed, downloads, rStatus, recs] = await Promise.all([
         sidecarClient.getInstalledModels().catch((e: any) => {
           if (e?.message?.includes('401') || e?.message?.toLowerCase().includes('unauthorized')) {
             setIs401(true);
@@ -43,10 +49,14 @@ export const Models: React.FC = () => {
         }),
         sidecarClient.getModelDownloads().catch(() => []),
         sidecarClient.getManagedRuntimeStatus().catch(() => null),
+        sidecarClient
+          .getRecommendedLocalModels({ min_context_tokens: 4096, require_local_only: true })
+          .catch(() => null),
       ]);
       setInstalledModels(installed || []);
       setActiveDownloads(downloads || []);
       setRuntimeStatus(rStatus);
+      if (recs) setRecommendations(recs);
     } catch {
       // offline fallback
     }
@@ -89,6 +99,58 @@ export const Models: React.FC = () => {
   useEffect(() => {
     loadModelsState();
   }, []);
+
+  useEffect(() => {
+    return sidecarClient.onDesktopConnectionRequiredChange((req) => {
+      setIs401(req);
+    });
+  }, []);
+
+  // Polling during active downloading / verifying / runtime transitions
+  // Cadence: 1.5s for downloads, 2s for runtime transitions.
+  // Suspended on document.hidden, in-flight, or when desktopConnectionRequired is active.
+  useEffect(() => {
+    let inFlight = false;
+    const hasActiveDownloads = activeDownloads.some(
+      (d) => d.state === 'downloading' || d.state === 'verifying'
+    );
+    const hasRuntimeTransition =
+      runtimeStatus?.state === 'starting' || runtimeStatus?.state === 'stopping';
+
+    if (!hasActiveDownloads && !hasRuntimeTransition) return;
+
+    const poll = async () => {
+      if (inFlight || document.hidden || sidecarClient.isDesktopConnectionRequired()) return;
+      inFlight = true;
+      try {
+        const [installed, downloads, rStatus] = await Promise.all([
+          sidecarClient.getInstalledModels().catch(() => []),
+          sidecarClient.getModelDownloads().catch(() => []),
+          sidecarClient.getManagedRuntimeStatus().catch(() => null),
+        ]);
+        setInstalledModels(installed || []);
+        setActiveDownloads(downloads || []);
+        setRuntimeStatus(rStatus);
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const intervalMs = hasActiveDownloads ? 1500 : 2000;
+    const timer = setInterval(poll, intervalMs);
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden && !sidecarClient.isDesktopConnectionRequired()) {
+        poll();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [activeDownloads, runtimeStatus]);
 
   const handleTestProvider = async (providerId: string) => {
     setVerifyingProvider(providerId);
@@ -148,13 +210,25 @@ export const Models: React.FC = () => {
 
       {is401 && (
         <div
-          className="m-4 p-6 rounded-xl bg-bg-elevated border border-border-subtle text-center space-y-2"
+          className="m-4 p-6 rounded-xl bg-bg-elevated border border-border-subtle text-center space-y-3"
           data-testid="models-401-notice"
         >
           <div className="text-sm font-semibold text-text-primary">Desktop connection required</div>
           <p className="text-xs text-text-secondary max-w-sm mx-auto">
-            Open Agent Engine in the native desktop app to manage local models.
+            Open Agent Engine in the native desktop app or reconnect to manage local models.
           </p>
+          <button
+            type="button"
+            onClick={async () => {
+              await sidecarClient.retryConnection();
+              setIs401(false);
+              loadModelsState();
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-accent-contrast text-xs font-medium hover:opacity-90 transition-opacity"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Retry Connection</span>
+          </button>
         </div>
       )}
 
@@ -309,7 +383,7 @@ export const Models: React.FC = () => {
             ) : (
               <div className="border border-border-subtle rounded-lg bg-bg-elevated/40 divide-y divide-border-subtle">
                 {installedModels.map((m, idx) => {
-                  const modelName = m.model_identity?.model_id || m.artifact_id;
+                  const modelName = m.model_identity?.model_id || m.artifact_id.replace(/\.gguf$/, '');
                   const isExpanded = !!expandedArtifacts[m.artifact_id];
                   const isRunning =
                     !!runtimeStatus?.is_ready &&
@@ -320,6 +394,10 @@ export const Models: React.FC = () => {
                   const isStarting =
                     runtimeStatus?.state === 'starting' &&
                     (runtimeStatus.model_loaded === modelName || !runtimeStatus.model_loaded);
+
+                  const isUnsafe =
+                    (recommendations?.rejection_summary && !!recommendations.rejection_summary[modelName]) ||
+                    recommendations?.explanations?.[modelName]?.hardware_fit?.state === 'does_not_fit';
 
                   return (
                     <div key={m.artifact_id || idx} className="p-4 space-y-3">
@@ -333,7 +411,7 @@ export const Models: React.FC = () => {
                               GGUF · Q4_K_M
                             </span>
                             <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                              SHA-256 Verified
+                              Installed · Verified
                             </span>
                           </div>
                           <div className="text-xs text-text-secondary flex items-center gap-3">
@@ -371,6 +449,20 @@ export const Models: React.FC = () => {
                               <Loader2 className="w-3.5 h-3.5 animate-spin" />
                               <span>Starting…</span>
                             </button>
+                          ) : isUnsafe ? (
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-amber-400 font-mono">
+                                Cannot start now — insufficient available memory
+                              </span>
+                              <button
+                                type="button"
+                                disabled
+                                title="Cannot start now — insufficient available memory"
+                                className="px-3 py-1 rounded bg-bg-base border border-border-subtle text-text-tertiary font-medium text-xs cursor-not-allowed opacity-50"
+                              >
+                                Start
+                              </button>
+                            </div>
                           ) : (
                             <button
                               type="button"

@@ -74,20 +74,49 @@ export const App: React.FC = () => {
   // Health poll and secure IPC token bootstrap
   useEffect(() => {
     let mounted = true;
+    let inFlight = false;
+
+    const check = async () => {
+      if (inFlight || document.hidden || sidecarClient.isDesktopConnectionRequired()) return;
+      inFlight = true;
+      try {
+        const h = await sidecarClient.checkHealth();
+        if (mounted) setHealth(h);
+      } finally {
+        inFlight = false;
+      }
+    };
+
     const initAndPoll = async () => {
       await sidecarClient.bootstrapIpcToken();
-      const h = await sidecarClient.checkHealth();
-      if (mounted) setHealth(h);
+      await check();
     };
 
     initAndPoll();
-    const interval = setInterval(async () => {
-      const h = await sidecarClient.checkHealth();
-      if (mounted) setHealth(h);
-    }, 5000);
+    const interval = setInterval(check, 5000);
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden && !sidecarClient.isDesktopConnectionRequired()) {
+        check();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    const unsubscribe = sidecarClient.onDesktopConnectionRequiredChange((required) => {
+      if (required && mounted) {
+        setHealth({
+          status: 'unauthorized',
+          error: 'Desktop connection required (401 Unauthorized): protected polling suspended',
+          timestamp: new Date().toISOString(),
+        });
+      }
+    });
+
     return () => {
       mounted = false;
       clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      unsubscribe();
     };
   }, []);
 

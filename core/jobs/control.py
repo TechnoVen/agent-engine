@@ -90,7 +90,7 @@ class JobControlService:
         queue: Optional[PersistentJobQueue] = None,
         clock: Optional[Callable[[], datetime]] = None,
     ):
-        self.db_path = db_path or DEFAULT_JOBS_DB_PATH
+        self.db_path = db_path or os.getenv("SQLITE_DB_PATH") or DEFAULT_JOBS_DB_PATH
         self._is_memory = self.db_path == ":memory:"
         self._memory_conn: Optional[sqlite3.Connection] = None
         self._lock = threading.RLock()

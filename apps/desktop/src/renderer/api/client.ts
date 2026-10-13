@@ -65,6 +65,8 @@ const API_BASE = window.location.port === '1420' ? '' : 'http://127.0.0.1:8000';
 class SidecarClient {
   public readonly base: string;
   private inMemoryToken: string | null = null;
+  private _desktopConnectionRequired: boolean = false;
+  private _connectionListeners: Set<(required: boolean) => void> = new Set();
 
   constructor(base: string = API_BASE) {
     this.base = base;
@@ -72,6 +74,41 @@ class SidecarClient {
 
   setIpcToken(token: string | null): void {
     this.inMemoryToken = token;
+    if (token) {
+      this.resetDesktopConnectionRequired();
+    }
+  }
+
+  public isDesktopConnectionRequired(): boolean {
+    return this._desktopConnectionRequired;
+  }
+
+  public setDesktopConnectionRequired(required: boolean): void {
+    if (this._desktopConnectionRequired !== required) {
+      this._desktopConnectionRequired = required;
+      this._connectionListeners.forEach((fn) => {
+        try {
+          fn(required);
+        } catch (e) {
+          console.error('Error in desktopConnectionRequired listener:', e);
+        }
+      });
+    }
+  }
+
+  public onDesktopConnectionRequiredChange(listener: (required: boolean) => void): () => void {
+    this._connectionListeners.add(listener);
+    return () => this._connectionListeners.delete(listener);
+  }
+
+  public resetDesktopConnectionRequired(): void {
+    this.setDesktopConnectionRequired(false);
+  }
+
+  public async retryConnection(): Promise<SidecarHealth> {
+    this.resetDesktopConnectionRequired();
+    await this.bootstrapIpcToken();
+    return await this.checkHealth();
   }
 
   public getHeaders(extra?: Record<string, string>): Record<string, string> {
@@ -101,6 +138,7 @@ class SidecarClient {
         const existing = (window as unknown as { __AGENT_ENGINE_IPC_TOKEN__?: string }).__AGENT_ENGINE_IPC_TOKEN__;
         if (existing) {
           this.setIpcToken(existing);
+          this.resetDesktopConnectionRequired();
           return true;
         }
         if ((window as any).__TAURI_INTERNALS__ || (window as any).__TAURI__) {
@@ -109,6 +147,7 @@ class SidecarClient {
           if (token) {
             this.setIpcToken(token);
             (window as any).__AGENT_ENGINE_IPC_TOKEN__ = token;
+            this.resetDesktopConnectionRequired();
             return true;
           }
         }
@@ -122,8 +161,13 @@ class SidecarClient {
   /**
    * Canonical raw HTTP request helper that attaches authenticated IPC headers.
    * All protected /v1 requests flow through this helper or its typed wrappers.
+   * Immediately suspends protected network activity when desktop connection is required.
    */
   public async requestRaw(path: string, options: RequestInit = {}): Promise<Response> {
+    if (this._desktopConnectionRequired) {
+      throw new Error(`Desktop connection required (401 Unauthorized): protected polling suspended`);
+    }
+
     const url = path.startsWith('http://') || path.startsWith('https://')
       ? path
       : `${this.base}${path.startsWith('/') ? path : `/${path}`}`;
@@ -135,6 +179,7 @@ class SidecarClient {
     });
 
     if (res.status === 401) {
+      this.setDesktopConnectionRequired(true);
       throw new Error(`Authentication failed (401 Unauthorized): invalid or missing IPC token`);
     }
 
@@ -190,12 +235,20 @@ class SidecarClient {
   
 
   async checkHealth(): Promise<SidecarHealth> {
+    if (this._desktopConnectionRequired) {
+      return {
+        status: 'unauthorized',
+        error: 'Authentication failed (401 Unauthorized): invalid or missing IPC token',
+        timestamp: new Date().toISOString(),
+      };
+    }
     try {
       let res = await fetch(`${this.base}/v1/health`, {
         method: 'GET',
         headers: this.getHeaders(),
       });
       if (res.status === 401) {
+        this.setDesktopConnectionRequired(true);
         return {
           status: 'unauthorized',
           error: 'Authentication failed (401 Unauthorized): invalid or missing IPC token',

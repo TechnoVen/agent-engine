@@ -81,25 +81,46 @@ export const TopBar: React.FC<TopBarProps> = ({
     };
   }, [statusPopoverOpen]);
 
-  // Poll hardware telemetry (every 2s when local models run, 5s otherwise)
+  // Poll hardware telemetry (5-10s while visible, paused when hidden or desktop connection required)
   useEffect(() => {
     let mounted = true;
+    let inFlight = false;
+
     const fetchTelem = async () => {
+      if (inFlight || document.hidden || sidecarClient.isDesktopConnectionRequired()) return;
+      inFlight = true;
       try {
         const data = await sidecarClient.getHardwareTelemetry();
         if (mounted) setTelemetry(data);
       } catch {
         // ignore
+      } finally {
+        inFlight = false;
       }
     };
 
     fetchTelem();
-    const intervalMs = telemetry?.local_runtime_active ? 2000 : 5000;
+    const intervalMs = telemetry?.local_runtime_active ? 5000 : 10000;
     const timer = setInterval(fetchTelem, intervalMs);
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden && !sidecarClient.isDesktopConnectionRequired()) {
+        fetchTelem();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    const unsubscribe = sidecarClient.onDesktopConnectionRequiredChange((required) => {
+      if (required && mounted) {
+        setTelemetry(null);
+      }
+    });
 
     return () => {
       mounted = false;
       clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      unsubscribe();
     };
   }, [telemetry?.local_runtime_active]);
 

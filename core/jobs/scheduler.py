@@ -31,6 +31,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 import logging
+import os
 import sqlite3
 import threading
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -74,13 +75,13 @@ class SchedulerService:
 
     def __init__(
         self,
-        db_path: str = DEFAULT_JOBS_DB_PATH,
+        db_path: Optional[str] = None,
         repository: Optional[JobRepository] = None,
         queue: Optional[PersistentJobQueue] = None,
         clock_fn: Optional[Callable[[], datetime]] = None,
         poll_interval_seconds: float = 1.0,
     ) -> None:
-        self.db_path = db_path
+        self.db_path = db_path or os.getenv("SQLITE_DB_PATH") or DEFAULT_JOBS_DB_PATH
         self._clock_fn = clock_fn or (lambda: datetime.now(timezone.utc))
         self._poll_interval = poll_interval_seconds
 

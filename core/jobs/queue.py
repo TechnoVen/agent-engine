@@ -193,7 +193,7 @@ class SQLiteJobQueue(PersistentJobQueue):
         db_path: Optional[str] = None,
         clock: Optional[Callable[[], datetime]] = None,
     ) -> None:
-        self.db_path = db_path or DEFAULT_JOBS_DB_PATH
+        self.db_path = db_path or os.getenv("SQLITE_DB_PATH") or DEFAULT_JOBS_DB_PATH
         self._clock = clock
         self._is_memory = self.db_path == ":memory:"
         self._memory_conn: Optional[sqlite3.Connection] = None

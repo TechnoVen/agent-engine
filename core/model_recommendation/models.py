@@ -124,6 +124,10 @@ class HardwareFitResult(BaseModel):
     rejection_reasons: List[str] = Field(default_factory=list)
     explanation: str = ""
 
+    @property
+    def fits(self) -> bool:
+        return self.state in (HardwareFitState.FITS, HardwareFitState.FITS_WITH_LIMITS)
+
 
 class CatalogModelEntry(BaseModel):
     """Curated local model specification in Agent Engine local catalog."""

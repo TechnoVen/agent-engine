@@ -314,12 +314,30 @@ def test_05_managed_runtime_start_and_status(tmp_path: Path):
         latency_ms=12.5,
     )
 
+    mock_res_mgr = MagicMock()
+    mock_res_mgr.get_snapshot.return_value = ResourceSnapshot(
+        captured_at=time.time(),
+        platform="linux",
+        architecture="x86_64",
+        cpu=CpuResources(architecture="x86_64", logical_cores=8, status=ProbeStatus.KNOWN),
+        memory=MemoryResources(
+            total_bytes=32 * 1024 * 1024 * 1024,
+            available_bytes=16 * 1024 * 1024 * 1024,
+            used_bytes=16 * 1024 * 1024 * 1024,
+            status=ProbeStatus.KNOWN,
+        ),
+    )
+
     set_local_inference_supervisor(mock_supervisor)
     try:
         with (
             patch.dict(os.environ, {"AGENT_ENGINE_IPC_TOKEN": token}),
             patch(
                 "services.python.server.routers.models.get_download_manager", return_value=dl_mgr
+            ),
+            patch(
+                "services.python.server.routers.models.get_resource_manager",
+                return_value=mock_res_mgr,
             ),
         ):
             headers = {"X-IPC-Token": token}
@@ -343,6 +361,102 @@ def test_05_managed_runtime_start_and_status(tmp_path: Path):
             assert res_status.json()["is_ready"] is True
     finally:
         reset_local_inference_supervisor()
+
+
+def test_05b_unsafe_hardware_runtime_start_rejected(tmp_path: Path):
+    """Verify runtime/start is rejected with 400 when host hardware has insufficient memory headroom."""
+    models_dir = tmp_path / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    model_file = models_dir / "llama-3.2-1b-instruct-q4_k_m.gguf"
+    model_content = GGUF_MAGIC_BYTES + b"\x00" * 2048
+    model_file.write_bytes(model_content)
+
+    from services.python.server.api import create_app
+
+    app = create_app()
+    client = TestClient(app)
+    token = "test_ipc_token_unsafe_hardware"
+
+    storage = ModelStorageManager(models_dir=models_dir)
+    dl_mgr = ModelDownloadManager(storage_manager=storage)
+    verified_status = DownloadStatus(
+        artifact_id="llama-3.2-1b-instruct-q4_k_m.gguf",
+        model_identity=ModelIdentity(
+            provider_id="llamacpp", model_id="llama-3.2-1b-instruct-q4_k_m"
+        ),
+        state=DownloadState.VERIFIED,
+        bytes_downloaded=len(model_content),
+        total_bytes_expected=len(model_content),
+        progress_ratio=1.0,
+        expected_sha256=hashlib.sha256(model_content).hexdigest(),
+        file_path=str(model_file),
+    )
+    storage.save_metadata(verified_status)
+
+    mock_unsafe_mgr = MagicMock()
+    mock_unsafe_mgr.get_snapshot.return_value = ResourceSnapshot(
+        captured_at=time.time(),
+        platform="linux",
+        architecture="x86_64",
+        cpu=CpuResources(architecture="x86_64", logical_cores=4, status=ProbeStatus.KNOWN),
+        memory=MemoryResources(
+            total_bytes=8 * 1024 * 1024 * 1024,
+            available_bytes=int(0.47 * 1024 * 1024 * 1024),
+            used_bytes=int(7.53 * 1024 * 1024 * 1024),
+            status=ProbeStatus.KNOWN,
+        ),
+    )
+
+    with (
+        patch.dict(os.environ, {"AGENT_ENGINE_IPC_TOKEN": token}),
+        patch("services.python.server.routers.models.get_download_manager", return_value=dl_mgr),
+        patch(
+            "services.python.server.routers.models.get_resource_manager",
+            return_value=mock_unsafe_mgr,
+        ),
+    ):
+        res = client.post(
+            "/v1/models/runtime/start",
+            headers={"X-IPC-Token": token},
+            json={"model_id": "llama-3.2-1b-instruct-q4_k_m"},
+        )
+        assert res.status_code == 400
+        assert "Cannot start runtime: Insufficient available memory" in res.json()["detail"]
+
+
+def test_05c_unverified_or_unrecognized_runtime_start_rejected(tmp_path: Path):
+    """Verify runtime/start is strictly limited to curated verified managed artifacts."""
+    from services.python.server.api import create_app
+
+    app = create_app()
+    client = TestClient(app)
+    token = "test_ipc_token_unverified"
+
+    with patch.dict(os.environ, {"AGENT_ENGINE_IPC_TOKEN": token}):
+        # 1. Unrecognized model ID
+        res_unknown = client.post(
+            "/v1/models/runtime/start",
+            headers={"X-IPC-Token": token},
+            json={"model_id": "arbitrary_custom_model"},
+        )
+        assert res_unknown.status_code == 404
+
+        # 2. Arbitrary file path attempt
+        res_path = client.post(
+            "/v1/models/runtime/start",
+            headers={"X-IPC-Token": token},
+            json={"model_id": "/tmp/malicious.gguf"},
+        )
+        assert res_path.status_code == 404
+
+        # 3. Curated model that is not yet verified
+        res_unverified = client.post(
+            "/v1/models/runtime/start",
+            headers={"X-IPC-Token": token},
+            json={"model_id": "llama-3.2-1b-instruct-q4_k_m"},
+        )
+        assert res_unverified.status_code == 400
+        assert "is not verified" in res_unverified.json()["detail"]
 
 
 # ==============================================================================

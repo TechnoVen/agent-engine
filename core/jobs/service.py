@@ -12,6 +12,7 @@ internal infrastructure components.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 from core.jobs.control import JobControlService
@@ -48,8 +49,11 @@ class JobService:
     @property
     def repository(self) -> JobRepository:
         if self._repository is None:
-            db_path = self._db_path or getattr(
-                get_storage_backend(), "db_path", DEFAULT_SQLITE_PATH
+            db_path = (
+                self._db_path
+                or getattr(get_storage_backend(), "db_path", None)
+                or os.getenv("SQLITE_DB_PATH")
+                or DEFAULT_SQLITE_PATH
             )
             self._repository = SQLiteJobRepository(db_path=db_path)
         return self._repository
@@ -57,8 +61,11 @@ class JobService:
     @property
     def queue(self) -> PersistentJobQueue:
         if self._queue is None:
-            db_path = self._db_path or getattr(
-                get_storage_backend(), "db_path", DEFAULT_SQLITE_PATH
+            db_path = (
+                self._db_path
+                or getattr(get_storage_backend(), "db_path", None)
+                or os.getenv("SQLITE_DB_PATH")
+                or DEFAULT_SQLITE_PATH
             )
             self._queue = SQLiteJobQueue(db_path=db_path)
         return self._queue
@@ -66,8 +73,11 @@ class JobService:
     @property
     def control(self) -> JobControlService:
         if self._control is None:
-            db_path = self._db_path or getattr(
-                get_storage_backend(), "db_path", DEFAULT_SQLITE_PATH
+            db_path = (
+                self._db_path
+                or getattr(get_storage_backend(), "db_path", None)
+                or os.getenv("SQLITE_DB_PATH")
+                or DEFAULT_SQLITE_PATH
             )
             self._control = JobControlService(
                 repository=self.repository,

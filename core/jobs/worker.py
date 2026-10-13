@@ -212,7 +212,7 @@ class JobWorker:
         drain_timeout_seconds: float = 5.0,
         clock: Optional[Callable[[], datetime]] = None,
     ):
-        self.db_path = db_path or DEFAULT_JOBS_DB_PATH
+        self.db_path = db_path or os.getenv("SQLITE_DB_PATH") or DEFAULT_JOBS_DB_PATH
         self.worker_id = worker_id or generate_worker_id()
         self.started_at = current_timestamp_iso()
         self.pid = os.getpid()

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 import sqlite3
 import threading
@@ -84,7 +85,7 @@ class WorkflowService:
         approval_registry: Optional[PendingOperationRegistry] = None,
         policy_engine: Optional[Any] = None,
     ):
-        self.db_path = db_path or DEFAULT_JOBS_DB_PATH
+        self.db_path = db_path or os.getenv("SQLITE_DB_PATH") or DEFAULT_JOBS_DB_PATH
         self._is_memory = self.db_path == ":memory:"
         self._memory_conn: Optional[sqlite3.Connection] = None
         self._lock = threading.RLock()
