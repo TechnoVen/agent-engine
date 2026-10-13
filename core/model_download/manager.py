@@ -306,6 +306,12 @@ class ModelDownloadManager:
                 st = self.get_status(aid)
                 results[aid] = st
 
+        for gguf_file in self.storage.models_dir.glob("*.gguf"):
+            aid = gguf_file.name
+            if aid not in results:
+                st = self.get_status(aid)
+                results[aid] = st
+
         return list(results.values())
 
     def list_installed_models(self) -> List[DownloadStatus]:

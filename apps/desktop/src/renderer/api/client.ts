@@ -52,6 +52,7 @@ import {
   LocalRecommendationResponse,
   TaskRequirements,
   DownloadStatus,
+  ManagedRuntimeStatus,
   ModelEconomicsSummary,
   ProviderConnectionVerification,
   RoutingObjective,
@@ -2303,6 +2304,51 @@ class SidecarClient {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || `Failed to fetch installed models: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async getManagedRuntimeStatus(): Promise<ManagedRuntimeStatus> {
+    const res = await this.requestRaw(`${this.base}/v1/models/runtime/status`, {
+      method: 'GET',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to fetch runtime status: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async startManagedRuntime(
+    modelId: string,
+    options?: { contextSize?: number; gpuLayers?: number; threads?: number }
+  ): Promise<ManagedRuntimeStatus> {
+    const res = await this.requestRaw(`${this.base}/v1/models/runtime/start`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({
+        model_id: modelId,
+        context_size: options?.contextSize ?? 4096,
+        gpu_layers: options?.gpuLayers ?? 0,
+        threads: options?.threads,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to start managed runtime: HTTP ${res.status}`);
+    }
+    return await res.json();
+  }
+
+  async stopManagedRuntime(): Promise<ManagedRuntimeStatus> {
+    const res = await this.requestRaw(`${this.base}/v1/models/runtime/stop`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Failed to stop managed runtime: HTTP ${res.status}`);
     }
     return await res.json();
   }

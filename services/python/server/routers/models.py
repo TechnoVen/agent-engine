@@ -7,6 +7,7 @@ Part of Task R1.14 (Split Monolithic API by Domain).
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 import time
 from typing import List, Optional
 
@@ -443,6 +444,145 @@ async def list_installed_models():
     """List verified local models ready for managed inference execution."""
     mgr = get_download_manager()
     return mgr.list_installed_models()
+
+
+class StartManagedRuntimeRequest(BaseModel):
+    model_id: str
+    context_size: int = 4096
+    gpu_layers: int = 0
+    threads: Optional[int] = None
+
+
+class ManagedRuntimeStatusResponse(BaseModel):
+    state: str
+    is_ready: bool = False
+    pid: Optional[int] = None
+    endpoint_url: Optional[str] = None
+    model_loaded: Optional[str] = None
+    latency_ms: Optional[float] = None
+    last_checked_at: Optional[float] = None
+    error_message: Optional[str] = None
+
+
+@router.post("/models/runtime/start", response_model=ManagedRuntimeStatusResponse)
+async def start_managed_runtime(req: StartManagedRuntimeRequest, request: Request):
+    """Start or idempotently reuse a managed local llama.cpp runtime instance."""
+    verify_ipc_token(request)
+    mgr = get_download_manager()
+    catalog = LocalModelCatalog()
+    ident = ModelIdentity(provider_id="llamacpp", model_id=req.model_id)
+    desc = catalog.get_artifact_descriptor(ident)
+    artifact_id = (
+        desc.artifact_id
+        if desc
+        else (req.model_id if req.model_id.endswith(".gguf") else f"{req.model_id}.gguf")
+    )
+
+    # 1. Resolve model file path
+    final_p = mgr.storage.get_final_path(artifact_id)
+    if not final_p.exists():
+        alt_p = mgr.storage.get_final_path(req.model_id)
+        if alt_p.exists():
+            final_p = alt_p
+        else:
+            repo_p = Path.cwd() / "models" / artifact_id
+            if not repo_p.exists():
+                repo_p = Path.cwd() / "models" / req.model_id
+            if repo_p.exists():
+                final_p = repo_p
+            elif (Path.home() / ".agent_engine" / "models" / artifact_id).exists():
+                final_p = Path.home() / ".agent_engine" / "models" / artifact_id
+            elif (Path.home() / ".agent_engine" / "models" / req.model_id).exists():
+                final_p = Path.home() / ".agent_engine" / "models" / req.model_id
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Model artifact '{artifact_id}' not found. Please install the model before starting.",
+                )
+
+    # 2. Pre-flight validation
+    from core.inference.validation import ModelArtifactValidator, ModelValidationError
+
+    try:
+        ModelArtifactValidator.validate(final_p)
+    except ModelValidationError as ve:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Model artifact validation failed: {ve}",
+        )
+
+    # 3. Build RuntimeSpec and start via supervisor
+    from core.inference.models import RuntimeSpec
+    from core.inference.supervisor import SupervisorError, get_local_inference_supervisor
+
+    supervisor = get_local_inference_supervisor()
+    spec = RuntimeSpec(
+        model_identity=ident,
+        model_path=str(final_p.resolve()),
+        context_size=req.context_size or 4096,
+        gpu_layers=req.gpu_layers or 0,
+        threads=req.threads,
+    )
+    try:
+        supervisor.start(spec)
+    except SupervisorError as se:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to start managed runtime: {se}",
+        )
+
+    health = supervisor.get_health()
+    return ManagedRuntimeStatusResponse(
+        state=health.state.value if hasattr(health.state, "value") else str(health.state),
+        is_ready=health.is_ready,
+        pid=health.pid,
+        endpoint_url=health.endpoint_url,
+        model_loaded=health.model_loaded,
+        latency_ms=health.latency_ms,
+        last_checked_at=health.last_checked_at,
+        error_message=health.error_message,
+    )
+
+
+@router.post("/models/runtime/stop", response_model=ManagedRuntimeStatusResponse)
+async def stop_managed_runtime(request: Request):
+    """Stop the active managed local runtime instance with graceful termination."""
+    verify_ipc_token(request)
+    from core.inference.supervisor import get_local_inference_supervisor
+
+    supervisor = get_local_inference_supervisor()
+    supervisor.stop()
+    health = supervisor.get_health()
+    return ManagedRuntimeStatusResponse(
+        state=health.state.value if hasattr(health.state, "value") else str(health.state),
+        is_ready=health.is_ready,
+        pid=health.pid,
+        endpoint_url=health.endpoint_url,
+        model_loaded=health.model_loaded,
+        latency_ms=health.latency_ms,
+        last_checked_at=health.last_checked_at,
+        error_message=health.error_message,
+    )
+
+
+@router.get("/models/runtime/status", response_model=ManagedRuntimeStatusResponse)
+async def get_managed_runtime_status(request: Request):
+    """Inspect factual health and readiness of the managed local inference runtime."""
+    verify_ipc_token(request)
+    from core.inference.supervisor import get_local_inference_supervisor
+
+    supervisor = get_local_inference_supervisor()
+    health = supervisor.get_health()
+    return ManagedRuntimeStatusResponse(
+        state=health.state.value if hasattr(health.state, "value") else str(health.state),
+        is_ready=health.is_ready,
+        pid=health.pid,
+        endpoint_url=health.endpoint_url,
+        model_loaded=health.model_loaded,
+        latency_ms=health.latency_ms,
+        last_checked_at=health.last_checked_at,
+        error_message=health.error_message,
+    )
 
 
 @router.get("/models/economics", response_model=List[ModelEconomicsSummary])

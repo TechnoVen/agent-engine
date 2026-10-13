@@ -1159,6 +1159,25 @@ export interface DownloadStatus {
   verified_at?: number | null;
   catalog_version?: string;
 }
+
+export type ManagedRuntimeLifecycleState =
+  | 'stopped'
+  | 'starting'
+  | 'ready'
+  | 'stopping'
+  | 'failed';
+
+export interface ManagedRuntimeStatus {
+  state: ManagedRuntimeLifecycleState;
+  is_ready: boolean;
+  pid?: number | null;
+  endpoint_url?: string | null;
+  model_loaded?: string | null;
+  latency_ms?: number | null;
+  last_checked_at?: number | null;
+  error_message?: string | null;
+}
+
 export type TaskOutcome = 'SUCCESS' | 'FAILURE' | 'PARTIAL' | 'UNKNOWN';
 
 export type EvidenceSource = 'GOLDEN_EVAL' | 'PRODUCTION_OBSERVATION' | 'BENCHMARK_RUN';

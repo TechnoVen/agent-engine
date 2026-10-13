@@ -14,11 +14,14 @@ import {
   LocalRecommendationResponse,
   LocalModelRecommendation,
   NumericFactProvenance,
+  DownloadStatus,
+  ManagedRuntimeStatus,
 } from '../types';
 import { sidecarClient } from '../api/client';
 
 export interface LocalModelRecommendationsProps {
   className?: string;
+  onStateChange?: () => void;
 }
 
 function formatBytes(bytes: number): string {
@@ -72,6 +75,15 @@ interface TierCardProps {
   badgeBg: string;
   badgeText: string;
   rec: LocalModelRecommendation | null | undefined;
+  installedModels: DownloadStatus[];
+  downloads: DownloadStatus[];
+  runtimeStatus: ManagedRuntimeStatus | null;
+  onInstall: (modelId: string) => Promise<void>;
+  onCancel: (artifactId: string) => Promise<void>;
+  onStart: (modelId: string) => Promise<void>;
+  onStop: () => Promise<void>;
+  onRetry: (modelId: string) => Promise<void>;
+  actionBusyModel: string | null;
 }
 
 const TierCard: React.FC<TierCardProps> = ({
@@ -80,6 +92,15 @@ const TierCard: React.FC<TierCardProps> = ({
   badgeBg,
   badgeText,
   rec,
+  installedModels,
+  downloads,
+  runtimeStatus,
+  onInstall,
+  onCancel,
+  onStart,
+  onStop,
+  onRetry,
+  actionBusyModel,
 }) => {
   const [expanded, setExpanded] = useState(false);
 
@@ -108,6 +129,42 @@ const TierCard: React.FC<TierCardProps> = ({
 
   const { model_entry, fit_result } = rec;
   const headroomPct = Math.round(fit_result.ram_headroom_ratio * 100);
+
+  const modelId = model_entry.model_identity.model_id;
+  const artifactId = `${modelId}.gguf`;
+
+  const downloadItem = downloads.find(
+    (d) =>
+      d.artifact_id === artifactId ||
+      d.model_identity?.model_id === modelId ||
+      d.artifact_id.includes(modelId)
+  );
+  const installedItem = installedModels.find(
+    (d) =>
+      d.artifact_id === artifactId ||
+      d.model_identity?.model_id === modelId ||
+      d.artifact_id.includes(modelId)
+  );
+
+  const isInstalled = !!installedItem || downloadItem?.state === 'verified';
+  const downloadState = downloadItem?.state || (isInstalled ? 'verified' : 'not_present');
+  const progressPct = downloadItem ? Math.round((downloadItem.progress_ratio || 0) * 100) : 0;
+
+  const isModelActive =
+    !!runtimeStatus?.is_ready &&
+    runtimeStatus?.state === 'ready' &&
+    (runtimeStatus.model_loaded === modelId ||
+      runtimeStatus.model_loaded === artifactId ||
+      !runtimeStatus.model_loaded);
+
+  const isModelStarting =
+    (runtimeStatus?.state === 'starting' &&
+      (runtimeStatus.model_loaded === modelId || !runtimeStatus.model_loaded)) ||
+    actionBusyModel === `start-${modelId}`;
+
+  const isDownloading = downloadState === 'downloading';
+  const isVerifying = downloadState === 'verifying';
+  const isDownloadFailed = downloadState === 'failed';
 
   return (
     <div className="p-5 rounded-xl bg-bg-surface border border-border-subtle flex flex-col justify-between space-y-4 hover:border-border-default transition-colors">
@@ -187,6 +244,135 @@ const TierCard: React.FC<TierCardProps> = ({
         </div>
       </div>
 
+      {/* Contextual Action Flow */}
+      <div className="pt-3 border-t border-border-subtle">
+        <div className="flex items-center justify-between gap-2 min-h-[32px]">
+          {/* Status Badge / State Indicator */}
+          <div className="flex items-center gap-1.5 text-xs">
+            {isDownloading && (
+              <div className="space-y-1">
+                <div className="flex items-center gap-1.5 text-[11px] font-mono text-accent">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <span>Downloading {progressPct}%</span>
+                </div>
+                <div className="w-24 h-1.5 bg-bg-base rounded-full overflow-hidden border border-border-subtle">
+                  <div
+                    className="h-full bg-accent transition-all duration-300 rounded-full"
+                    style={{ width: `${progressPct}%` }}
+                  />
+                </div>
+              </div>
+            )}
+            {isVerifying && (
+              <div className="flex items-center gap-1.5 text-[11px] font-mono text-amber-400">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                <span>Verifying…</span>
+              </div>
+            )}
+            {isDownloadFailed && (
+              <div className="flex items-center gap-1.5 text-[11px] font-mono text-rose-400">
+                <AlertTriangle className="w-3 h-3" />
+                <span>Failed</span>
+              </div>
+            )}
+            {!isDownloading && !isVerifying && !isDownloadFailed && isInstalled && isModelActive && (
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                Ready
+              </span>
+            )}
+            {!isDownloading && !isVerifying && !isDownloadFailed && isInstalled && isModelStarting && (
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono text-amber-400 bg-amber-500/10 border border-amber-500/20 flex items-center gap-1">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Starting…
+              </span>
+            )}
+            {!isDownloading && !isVerifying && !isDownloadFailed && isInstalled && !isModelActive && !isModelStarting && (
+              <span className="text-[11px] text-text-tertiary font-mono">
+                Installed (Stopped)
+              </span>
+            )}
+            {!isDownloading && !isVerifying && !isDownloadFailed && !isInstalled && (
+              <span className="text-[11px] text-text-tertiary font-mono">
+                Not Installed
+              </span>
+            )}
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex items-center gap-2">
+            {isDownloading && (
+              <button
+                type="button"
+                onClick={() => onCancel(artifactId)}
+                disabled={actionBusyModel !== null}
+                className="px-2.5 py-1 rounded bg-bg-base hover:bg-bg-hover border border-border-subtle text-xs text-text-secondary hover:text-text-primary transition-colors"
+              >
+                Cancel
+              </button>
+            )}
+            {isVerifying && (
+              <button
+                type="button"
+                disabled
+                className="px-2.5 py-1 rounded bg-bg-base border border-border-subtle text-xs text-text-tertiary cursor-not-allowed"
+              >
+                Verifying…
+              </button>
+            )}
+            {isDownloadFailed && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onRetry(modelId)}
+                  disabled={actionBusyModel !== null}
+                  className="px-2.5 py-1 rounded bg-accent/15 hover:bg-accent/25 border border-accent/30 text-xs font-medium text-accent transition-colors"
+                >
+                  Retry
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setExpanded(true)}
+                  className="px-2 py-1 rounded bg-bg-base hover:bg-bg-hover border border-border-subtle text-xs text-text-tertiary hover:text-text-secondary transition-colors"
+                >
+                  Details
+                </button>
+              </>
+            )}
+            {!isDownloading && !isVerifying && !isDownloadFailed && !isInstalled && (
+              <button
+                type="button"
+                onClick={() => onInstall(modelId)}
+                disabled={actionBusyModel !== null}
+                className="px-3 py-1 rounded bg-accent text-accent-contrast font-medium text-xs hover:opacity-90 transition-opacity disabled:opacity-50"
+              >
+                Install
+              </button>
+            )}
+            {!isDownloading && !isVerifying && !isDownloadFailed && isInstalled && !isModelActive && !isModelStarting && (
+              <button
+                type="button"
+                onClick={() => onStart(modelId)}
+                disabled={actionBusyModel !== null}
+                className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs transition-colors disabled:opacity-50"
+              >
+                Start
+              </button>
+            )}
+            {!isDownloading && !isVerifying && !isDownloadFailed && isInstalled && isModelActive && (
+              <button
+                type="button"
+                onClick={onStop}
+                disabled={actionBusyModel !== null}
+                className="px-2.5 py-1 rounded bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-xs font-medium text-rose-400 transition-colors disabled:opacity-50"
+              >
+                Stop
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* Expandable Technical Details */}
       <div className="border-t border-border-subtle pt-3">
         <button
@@ -199,6 +385,12 @@ const TierCard: React.FC<TierCardProps> = ({
 
         {expanded && (
           <div className="mt-3 space-y-2 text-[10px] font-mono bg-bg-base p-3 rounded-lg border border-border-subtle text-text-secondary overflow-x-auto">
+            {downloadItem?.error_message && (
+              <div className="flex flex-col gap-0.5 text-rose-400 pb-2 border-b border-border-subtle">
+                <span className="font-semibold text-rose-300">Failure Diagnostics:</span>
+                <span className="break-all">{downloadItem.error_message}</span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span className="text-text-tertiary">Usable RAM (Denominator):</span>
               <span className="text-text-primary">{formatBytes(fit_result.usable_before_model_bytes)}</span>
@@ -238,10 +430,39 @@ const TierCard: React.FC<TierCardProps> = ({
   );
 };
 
-export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps> = ({ className = '' }) => {
+export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps> = ({
+  className = '',
+  onStateChange,
+}) => {
   const [data, setData] = useState<LocalRecommendationResponse | null>(null);
+  const [installedModels, setInstalledModels] = useState<DownloadStatus[]>([]);
+  const [downloads, setDownloads] = useState<DownloadStatus[]>([]);
+  const [runtimeStatus, setRuntimeStatus] = useState<ManagedRuntimeStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [is401, setIs401] = useState(false);
+  const [actionBusyModel, setActionBusyModel] = useState<string | null>(null);
+
+  const refreshStatuses = useCallback(async () => {
+    try {
+      const [installed, dls, rStatus] = await Promise.all([
+        sidecarClient.getInstalledModels().catch((e: any) => {
+          if (e?.message?.includes('401') || e?.message?.toLowerCase().includes('unauthorized')) {
+            setIs401(true);
+          }
+          return [];
+        }),
+        sidecarClient.getModelDownloads().catch(() => []),
+        sidecarClient.getManagedRuntimeStatus().catch(() => null),
+      ]);
+      setInstalledModels(installed || []);
+      setDownloads(dls || []);
+      setRuntimeStatus(rStatus);
+      if (onStateChange) onStateChange();
+    } catch {
+      // offline fallback
+    }
+  }, [onStateChange]);
 
   const fetchRecommendations = useCallback(async () => {
     setLoading(true);
@@ -252,16 +473,117 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
         require_local_only: true,
       });
       setData(res);
+      await refreshStatuses();
     } catch (err: any) {
-      setError(err.message || 'Failed to fetch recommendations');
+      if (err?.message?.includes('401') || err?.message?.toLowerCase().includes('unauthorized')) {
+        setIs401(true);
+      } else {
+        setError(err.message || 'Failed to fetch recommendations');
+      }
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [refreshStatuses]);
 
   useEffect(() => {
     fetchRecommendations();
   }, [fetchRecommendations]);
+
+  // Polling during active downloading / verifying / runtime transitions
+  useEffect(() => {
+    const hasActiveTasks =
+      downloads.some((d) => d.state === 'downloading' || d.state === 'verifying') ||
+      runtimeStatus?.state === 'starting' ||
+      runtimeStatus?.state === 'stopping';
+
+    if (!hasActiveTasks) return;
+
+    const timer = setInterval(() => {
+      refreshStatuses();
+    }, 1500);
+
+    return () => clearInterval(timer);
+  }, [downloads, runtimeStatus, refreshStatuses]);
+
+  const handleInstall = async (modelId: string) => {
+    setActionBusyModel(`install-${modelId}`);
+    try {
+      await sidecarClient.startModelDownload(modelId, 'llamacpp');
+      await refreshStatuses();
+    } catch (err: any) {
+      if (err?.message?.includes('401') || err?.message?.toLowerCase().includes('unauthorized')) {
+        setIs401(true);
+      } else {
+        setError(err.message || 'Failed to start download');
+      }
+    } finally {
+      setActionBusyModel(null);
+    }
+  };
+
+  const handleCancel = async (artifactId: string) => {
+    setActionBusyModel(`cancel-${artifactId}`);
+    try {
+      await sidecarClient.cancelModelDownload(artifactId);
+      await refreshStatuses();
+    } catch (err: any) {
+      setError(err.message || 'Failed to cancel download');
+    } finally {
+      setActionBusyModel(null);
+    }
+  };
+
+  const handleStart = async (modelId: string) => {
+    setActionBusyModel(`start-${modelId}`);
+    try {
+      const res = await sidecarClient.startManagedRuntime(modelId);
+      setRuntimeStatus(res);
+      await refreshStatuses();
+    } catch (err: any) {
+      if (err?.message?.includes('401') || err?.message?.toLowerCase().includes('unauthorized')) {
+        setIs401(true);
+      } else {
+        setError(err.message || 'Failed to start managed runtime');
+      }
+    } finally {
+      setActionBusyModel(null);
+    }
+  };
+
+  const handleStop = async () => {
+    setActionBusyModel('stop');
+    try {
+      const res = await sidecarClient.stopManagedRuntime();
+      setRuntimeStatus(res);
+      await refreshStatuses();
+    } catch (err: any) {
+      if (err?.message?.includes('401') || err?.message?.toLowerCase().includes('unauthorized')) {
+        setIs401(true);
+      } else {
+        setError(err.message || 'Failed to stop managed runtime');
+      }
+    } finally {
+      setActionBusyModel(null);
+    }
+  };
+
+  const handleRetry = async (modelId: string) => {
+    await handleInstall(modelId);
+  };
+
+  if (is401) {
+    return (
+      <div
+        className={`p-8 rounded-xl bg-bg-elevated border border-border-subtle text-center space-y-2 ${className}`}
+        data-testid="browser-401-notice"
+      >
+        <div className="text-sm font-semibold text-text-primary">Desktop connection required</div>
+        <p className="text-xs text-text-secondary max-w-sm mx-auto">
+          Open Agent Engine in the native desktop app to manage local models.
+        </p>
+      </div>
+    );
+  }
 
   const hasAnyRecommendation = data && (data.fast || data.balanced || data.best_local);
 
@@ -379,6 +701,15 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
             badgeBg="bg-emerald-500/10 border-emerald-500/20"
             badgeText="text-emerald-400"
             rec={data.fast}
+            installedModels={installedModels}
+            downloads={downloads}
+            runtimeStatus={runtimeStatus}
+            onInstall={handleInstall}
+            onCancel={handleCancel}
+            onStart={handleStart}
+            onStop={handleStop}
+            onRetry={handleRetry}
+            actionBusyModel={actionBusyModel}
           />
           <TierCard
             tierName="Balanced"
@@ -386,6 +717,15 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
             badgeBg="bg-blue-500/10 border-blue-500/20"
             badgeText="text-blue-400"
             rec={data.balanced}
+            installedModels={installedModels}
+            downloads={downloads}
+            runtimeStatus={runtimeStatus}
+            onInstall={handleInstall}
+            onCancel={handleCancel}
+            onStart={handleStart}
+            onStop={handleStop}
+            onRetry={handleRetry}
+            actionBusyModel={actionBusyModel}
           />
           <TierCard
             tierName="Best Local"
@@ -393,10 +733,20 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
             badgeBg="bg-purple-500/10 border-purple-500/20"
             badgeText="text-purple-400"
             rec={data.best_local}
+            installedModels={installedModels}
+            downloads={downloads}
+            runtimeStatus={runtimeStatus}
+            onInstall={handleInstall}
+            onCancel={handleCancel}
+            onStart={handleStart}
+            onStop={handleStop}
+            onRetry={handleRetry}
+            actionBusyModel={actionBusyModel}
           />
         </div>
       )}
     </div>
   );
 };
+
 export default LocalModelRecommendations;

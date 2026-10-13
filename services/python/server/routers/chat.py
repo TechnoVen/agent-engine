@@ -333,9 +333,11 @@ async def chat_completions(req: ChatRequest):
                             "llamacpp",
                             "ollama",
                         )
-                        stream_cost_usd = final_result.total_cost_usd
-                        if stream_cost_usd == 0.0 and (
-                            (final_result.prompt_tokens + final_result.completion_tokens) > 0
+                        stream_cost_usd = 0.0 if is_local else final_result.total_cost_usd
+                        if (
+                            not is_local
+                            and stream_cost_usd == 0.0
+                            and ((final_result.prompt_tokens + final_result.completion_tokens) > 0)
                         ):
                             stream_cost_usd = (
                                 round(
@@ -426,7 +428,7 @@ async def chat_completions(req: ChatRequest):
                             "execution_id": final_result.execution_id,
                             "prompt_tokens": final_result.prompt_tokens,
                             "completion_tokens": final_result.completion_tokens,
-                            "cost_usd": final_result.total_cost_usd,
+                            "cost_usd": stream_cost_usd,
                             "timestamp": datetime.datetime.now().isoformat(),
                         },
                     )
@@ -476,8 +478,9 @@ async def chat_completions(req: ChatRequest):
     full_response_text = result.outputs.get("response", "")
     prompt_tokens = result.prompt_tokens
     completion_tokens = result.completion_tokens
-    cost_usd = result.total_cost_usd
-    if cost_usd == 0.0 and (prompt_tokens + completion_tokens) > 0:
+    is_local = (result.provider_used or "").lower() in ("local", "llamacpp", "ollama")
+    cost_usd = 0.0 if is_local else result.total_cost_usd
+    if not is_local and cost_usd == 0.0 and (prompt_tokens + completion_tokens) > 0:
         cost_usd = (
             round((prompt_tokens * 0.00000015) + (completion_tokens * 0.0000006), 6) or 0.000001
         )

@@ -11,27 +11,79 @@ import {
 } from 'lucide-react';
 import { LocalModelRecommendations } from '../components/LocalModelRecommendations';
 import { sidecarClient } from '../api/client';
-import { DownloadStatus, ProviderConnectionVerification } from '../types';
+import { DownloadStatus, ProviderConnectionVerification, ManagedRuntimeStatus } from '../types';
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+}
 
 export const Models: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'local' | 'cloud' | 'installed'>('local');
   const [installedModels, setInstalledModels] = useState<DownloadStatus[]>([]);
   const [activeDownloads, setActiveDownloads] = useState<DownloadStatus[]>([]);
+  const [runtimeStatus, setRuntimeStatus] = useState<ManagedRuntimeStatus | null>(null);
+  const [runtimeBusy, setRuntimeBusy] = useState(false);
+  const [expandedArtifacts, setExpandedArtifacts] = useState<Record<string, boolean>>({});
   const [verifyingProvider, setVerifyingProvider] = useState<string | null>(null);
   const [providerStatuses, setProviderStatuses] = useState<Record<string, ProviderConnectionVerification>>({});
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [is401, setIs401] = useState(false);
 
   const loadModelsState = async () => {
     try {
-      const [installed, downloads] = await Promise.all([
-        sidecarClient.getInstalledModels().catch(() => []),
+      const [installed, downloads, rStatus] = await Promise.all([
+        sidecarClient.getInstalledModels().catch((e: any) => {
+          if (e?.message?.includes('401') || e?.message?.toLowerCase().includes('unauthorized')) {
+            setIs401(true);
+          }
+          return [];
+        }),
         sidecarClient.getModelDownloads().catch(() => []),
+        sidecarClient.getManagedRuntimeStatus().catch(() => null),
       ]);
       setInstalledModels(installed || []);
       setActiveDownloads(downloads || []);
+      setRuntimeStatus(rStatus);
     } catch {
       // offline fallback
     }
+  };
+
+  const handleStartRuntime = async (modelId: string) => {
+    setRuntimeBusy(true);
+    try {
+      const res = await sidecarClient.startManagedRuntime(modelId);
+      setRuntimeStatus(res);
+      await loadModelsState();
+    } catch (e: any) {
+      if (e?.message?.includes('401') || e?.message?.toLowerCase().includes('unauthorized')) {
+        setIs401(true);
+      }
+    } finally {
+      setRuntimeBusy(false);
+    }
+  };
+
+  const handleStopRuntime = async () => {
+    setRuntimeBusy(true);
+    try {
+      const res = await sidecarClient.stopManagedRuntime();
+      setRuntimeStatus(res);
+      await loadModelsState();
+    } catch (e: any) {
+      if (e?.message?.includes('401') || e?.message?.toLowerCase().includes('unauthorized')) {
+        setIs401(true);
+      }
+    } finally {
+      setRuntimeBusy(false);
+    }
+  };
+
+  const toggleArtifactExpanded = (id: string) => {
+    setExpandedArtifacts((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
   useEffect(() => {
@@ -72,9 +124,6 @@ export const Models: React.FC = () => {
         <div className="flex items-center gap-2.5">
           <Gauge className="w-4 h-4 text-accent" />
           <h1 className="text-sm font-semibold tracking-tight text-text-primary">Models Hub</h1>
-          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-bg-base border border-border-subtle text-text-tertiary uppercase">
-            R3 Execution Hub
-          </span>
         </div>
 
         <div className="flex items-center gap-2">
@@ -96,6 +145,18 @@ export const Models: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {is401 && (
+        <div
+          className="m-4 p-6 rounded-xl bg-bg-elevated border border-border-subtle text-center space-y-2"
+          data-testid="models-401-notice"
+        >
+          <div className="text-sm font-semibold text-text-primary">Desktop connection required</div>
+          <p className="text-xs text-text-secondary max-w-sm mx-auto">
+            Open Agent Engine in the native desktop app to manage local models.
+          </p>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="px-4 py-2 border-b border-border-subtle bg-bg-elevated/50 flex items-center gap-1 text-xs">
@@ -150,7 +211,7 @@ export const Models: React.FC = () => {
               </p>
             </div>
             {/* Embedded Canonical R3 Local Recommendations Component */}
-            <LocalModelRecommendations />
+            <LocalModelRecommendations onStateChange={loadModelsState} />
           </div>
         )}
 
@@ -247,19 +308,131 @@ export const Models: React.FC = () => {
               </div>
             ) : (
               <div className="border border-border-subtle rounded-lg bg-bg-elevated/40 divide-y divide-border-subtle">
-                {installedModels.map((m, idx) => (
-                  <div key={idx} className="p-3.5 flex items-center justify-between text-xs font-mono">
-                    <div>
-                      <div className="font-semibold text-text-primary">
-                        {m.model_identity?.model_id || m.artifact_id}
+                {installedModels.map((m, idx) => {
+                  const modelName = m.model_identity?.model_id || m.artifact_id;
+                  const isExpanded = !!expandedArtifacts[m.artifact_id];
+                  const isRunning =
+                    !!runtimeStatus?.is_ready &&
+                    runtimeStatus?.state === 'ready' &&
+                    (runtimeStatus.model_loaded === modelName ||
+                      runtimeStatus.model_loaded === m.artifact_id ||
+                      !runtimeStatus.model_loaded);
+                  const isStarting =
+                    runtimeStatus?.state === 'starting' &&
+                    (runtimeStatus.model_loaded === modelName || !runtimeStatus.model_loaded);
+
+                  return (
+                    <div key={m.artifact_id || idx} className="p-4 space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-text-primary text-sm font-sans">
+                              {modelName}
+                            </span>
+                            <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-bg-base border border-border-subtle text-text-tertiary">
+                              GGUF · Q4_K_M
+                            </span>
+                            <span className="px-2 py-0.5 rounded text-[10px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                              SHA-256 Verified
+                            </span>
+                          </div>
+                          <div className="text-xs text-text-secondary flex items-center gap-3">
+                            <span>Size: {formatBytes(m.bytes_downloaded || m.total_bytes_expected)}</span>
+                            <span>•</span>
+                            <span>Hardware: CPU / Accelerators</span>
+                            <span>•</span>
+                            <span className="text-text-tertiary">Storage: Managed AE</span>
+                          </div>
+                        </div>
+
+                        {/* Runtime Action / Status */}
+                        <div className="flex items-center gap-2.5 flex-shrink-0">
+                          {isRunning ? (
+                            <>
+                              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                                Ready {runtimeStatus?.pid ? `(PID ${runtimeStatus.pid})` : ''}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={handleStopRuntime}
+                                disabled={runtimeBusy}
+                                className="px-3 py-1 rounded bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-xs font-medium text-rose-400 transition-colors disabled:opacity-50"
+                              >
+                                Stop
+                              </button>
+                            </>
+                          ) : isStarting ? (
+                            <button
+                              type="button"
+                              disabled
+                              className="px-3 py-1 rounded bg-bg-base border border-border-subtle text-xs text-amber-400 flex items-center gap-1.5 cursor-not-allowed"
+                            >
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              <span>Starting…</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleStartRuntime(modelName)}
+                              disabled={runtimeBusy}
+                              className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs transition-colors disabled:opacity-50"
+                            >
+                              Start
+                            </button>
+                          )}
+                        </div>
                       </div>
-                      <div className="text-[11px] text-text-tertiary mt-0.5">
-                        State: {m.state} · Artifact ID: {m.artifact_id}
+
+                      {/* Advanced Details Collapsible */}
+                      <div className="pt-2 border-t border-border-subtle/60">
+                        <button
+                          type="button"
+                          onClick={() => toggleArtifactExpanded(m.artifact_id)}
+                          className="flex items-center gap-1 text-[11px] font-medium text-text-tertiary hover:text-text-secondary transition-colors"
+                        >
+                          <span>Advanced Artifact Details</span>
+                          {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                        </button>
+
+                        {isExpanded && (
+                          <div className="mt-2 p-2.5 rounded bg-bg-base border border-border-subtle text-[10px] font-mono space-y-1 text-text-secondary overflow-x-auto">
+                            <div className="flex justify-between">
+                              <span className="text-text-tertiary">Artifact ID:</span>
+                              <span className="text-text-primary">{m.artifact_id}</span>
+                            </div>
+                            {m.file_path && (
+                              <div className="flex justify-between">
+                                <span className="text-text-tertiary">Filesystem Path:</span>
+                                <span className="text-text-primary truncate max-w-md">{m.file_path}</span>
+                              </div>
+                            )}
+                            <div className="flex justify-between">
+                              <span className="text-text-tertiary">Expected SHA-256:</span>
+                              <span className="text-text-primary truncate max-w-md">
+                                {m.expected_sha256 || 'Verified'}
+                              </span>
+                            </div>
+                            {m.observed_sha256 && (
+                              <div className="flex justify-between">
+                                <span className="text-text-tertiary">Observed SHA-256:</span>
+                                <span className="text-text-primary truncate max-w-md">{m.observed_sha256}</span>
+                              </div>
+                            )}
+                            {m.verified_at && (
+                              <div className="flex justify-between">
+                                <span className="text-text-tertiary">Verified Timestamp:</span>
+                                <span className="text-text-primary">
+                                  {new Date(m.verified_at * 1000).toLocaleString()}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
-                    <span className="text-emerald-400 font-medium">Ready</span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

@@ -233,11 +233,8 @@ class HardwareTelemetryTracker:
         }
 
     def get_telemetry(self, router_status: Optional[Dict[str, Any]] = None) -> HardwareTelemetry:
-        """Compile a full snapshot of hardware utilization and throughput via canonical ResourceManager."""
-        import time
         from core.resources import get_resource_manager
 
-        now = time.time()
         res_mgr = get_resource_manager()
         snap = res_mgr.get_snapshot()
 
@@ -292,8 +289,8 @@ class HardwareTelemetryTracker:
             ollama_live = bool(router_status.get("ollama_live", False))
             llamacpp_live = bool(router_status.get("llamacpp_live", False))
 
-        is_recent_inference = (now - self._last_inference_time) < 60.0
-        local_runtime_active = ollama_live or llamacpp_live or is_recent_inference
+        # Product Truth: local_runtime_active must reflect observed runtime/provider health
+        local_runtime_active = bool(ollama_live or llamacpp_live)
 
         return HardwareTelemetry(
             cpu_usage_percent=cpu_usage_pct,

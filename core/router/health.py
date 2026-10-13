@@ -90,17 +90,37 @@ class HealthProber:
     def probe_llamacpp(self, timeout: float | None = None) -> ProbeResult:
         t0 = time.perf_counter()
         to = timeout or self.default_timeout
+
+        hosts: list[str] = []
+        auth_headers: dict[str, dict[str, str]] = {}
+        try:
+            from core.inference.supervisor import get_local_inference_supervisor
+
+            sup = get_local_inference_supervisor()
+            inst = sup.get_active_instance()
+            if inst and inst.state.value == "ready" and inst.endpoint_url:
+                sup_url = inst.endpoint_url.rstrip("/")
+                if not sup_url.endswith("/v1"):
+                    sup_url = f"{sup_url}/v1"
+                hosts.append(sup_url)
+                if inst.api_key:
+                    auth_headers[sup_url] = {"Authorization": f"Bearer {inst.api_key}"}
+        except Exception:
+            pass
+
         host_env = os.getenv("LLAMACPP_HOST", "http://127.0.0.1:8080/v1")
         if not host_env.endswith("/v1"):
             host_env = host_env.rstrip("/") + "/v1"
-        hosts = [host_env]
+        hosts.append(host_env)
+
         seen = set()
         unique_hosts = [h for h in hosts if not (h in seen or seen.add(h))]
 
         last_err = None
         for host in unique_hosts:
             try:
-                resp = requests.get(f"{host}/models", timeout=to)
+                headers = auth_headers.get(host, {})
+                resp = requests.get(f"{host}/models", headers=headers, timeout=to)
                 elapsed_ms = (time.perf_counter() - t0) * 1000.0
                 if resp.status_code == 200:
                     return ProbeResult(

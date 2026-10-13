@@ -288,10 +288,22 @@ class ModelRouter:
                 provider = "groq"
             elif pref.startswith("kimi/") or "kimi" in pref or "moonshot" in pref:
                 provider = "kimi"
-            elif pref.startswith("llamacpp/"):
+            elif (
+                pref.startswith("llamacpp/")
+                or pref.endswith(".gguf")
+                or "-q4_k_m" in pref
+                or "q4_k_m" in pref
+                or pref in ("llama-3.2-1b-instruct", "qwen2.5-coder-3b-instruct")
+            ):
                 provider = "llamacpp"
-            elif pref.startswith("ollama/") or "qwen" in pref or "llama" in pref:
+            elif pref.startswith("ollama/"):
                 provider = "ollama"
+            elif "qwen" in pref or "llama" in pref:
+                status = self.get_status()
+                if status.get("llamacpp_live", False) and not status.get("ollama_live", False):
+                    provider = "llamacpp"
+                else:
+                    provider = "ollama"
             elif pref in ("deterministic_code", "code"):
                 provider = "local"
             elif pref in ("semantic_cache", "cache"):
@@ -443,14 +455,46 @@ class ModelRouter:
                             "NO_ELIGIBLE_MODEL_UNDER_PRIVACY_POLICY: Local runtime unavailable and cloud fallback forbidden under LOCAL_ONLY",
                             rejection_details=[{"provider": "llamacpp", "status": "unavailable"}],
                         )
+                    active_model = None
+                    try:
+                        from core.inference.supervisor import get_local_inference_supervisor
+
+                        sup = get_local_inference_supervisor()
+                        inst = sup.get_active_instance()
+                        if (
+                            inst
+                            and inst.state.value == "ready"
+                            and inst.spec
+                            and inst.spec.model_identity
+                        ):
+                            active_model = inst.spec.model_identity.model_id
+                    except Exception:
+                        pass
+
                     prov = "llamacpp"
-                    model = "qwen2.5-coder-3b-instruct-q4_k_m"
+                    model = active_model or "llama-3.2-1b-instruct-q4_k_m"
                 else:
                     prov = available_local[0]
+                    active_model = None
+                    try:
+                        from core.inference.supervisor import get_local_inference_supervisor
+
+                        sup = get_local_inference_supervisor()
+                        inst = sup.get_active_instance()
+                        if (
+                            inst
+                            and inst.state.value == "ready"
+                            and inst.spec
+                            and inst.spec.model_identity
+                        ):
+                            active_model = inst.spec.model_identity.model_id
+                    except Exception:
+                        pass
+
                     model = (
                         "qwen2.5-coder:3b"
                         if prov == "ollama"
-                        else "qwen2.5-coder-3b-instruct-q4_k_m"
+                        else (active_model or "llama-3.2-1b-instruct-q4_k_m")
                     )
 
                 return ResolvedModel(

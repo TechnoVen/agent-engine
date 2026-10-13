@@ -42,6 +42,7 @@ from core.inference.supervisor import (
     set_local_inference_supervisor,
 )
 from core.inference.validation import (
+    GGUF_MAGIC_BYTES,
     InvalidModelFormatError,
     ModelArtifactValidator,
     ModelNotFoundError,
@@ -72,6 +73,7 @@ __all__ = [
     "UntrustedBinaryLocationError",
     "build_child_environment",
     "verify_child_environment_is_clean",
+    "GGUF_MAGIC_BYTES",
     "ModelArtifactValidator",
     "ValidatedModelArtifact",
     "ModelValidationError",

@@ -44,9 +44,22 @@ def get_curated_local_models() -> List[CatalogModelEntry]:
             quantization="Q4_K_M",
             managed_runtime="llamacpp",
             memory_unit="bytes",
-            artifact_size_bytes=850 * 1024 * 1024,  # ~850 MiB
+            artifact_size_bytes=807690656,
             artifact_size_provenance=NumericFactProvenance.MEASURED_FACT,
             artifact_size_source="meta_llama_3.2_1b_gguf_release",
+            artifact_descriptor=ModelArtifactDescriptor(
+                artifact_id="llama-3.2-1b-instruct-q4_k_m.gguf",
+                model_identity=ModelIdentity(
+                    provider_id="llamacpp", model_id="llama-3.2-1b-instruct-q4_k_m"
+                ),
+                source_url="https://huggingface.co/hugging-quants/Llama-3.2-1B-Instruct-Q4_K_M-GGUF/resolve/main/llama-3.2-1b-instruct-q4_k_m.gguf",
+                expected_size_bytes=807690656,
+                expected_sha256="a9b4b3b52dee68ea2d6c10f0fcf72ecf0ebef6690f2fc30ca0ca1379c379d875",
+                format="gguf",
+                quantization="Q4_K_M",
+                provenance="curated_catalog",
+                catalog_version=DEFAULT_CATALOG_VERSION,
+            ),
             min_ram_bytes=int(1.5 * 1024 * 1024 * 1024),  # 1.5 GiB
             min_ram_provenance=NumericFactProvenance.CURATED_HEURISTIC,
             min_ram_source="curated_catalog_policy_v2026.10.1",
@@ -185,9 +198,22 @@ def get_curated_local_models() -> List[CatalogModelEntry]:
             quantization="Q4_K_M",
             managed_runtime="llamacpp",
             memory_unit="bytes",
-            artifact_size_bytes=int(2.0 * 1024 * 1024 * 1024),  # ~2.0 GiB
+            artifact_size_bytes=1929903072,
             artifact_size_provenance=NumericFactProvenance.MEASURED_FACT,
             artifact_size_source="qwen2.5_coder_3b_gguf_release",
+            artifact_descriptor=ModelArtifactDescriptor(
+                artifact_id="qwen2.5-coder-3b-instruct-q4_k_m.gguf",
+                model_identity=ModelIdentity(
+                    provider_id="llamacpp", model_id="qwen2.5-coder-3b-instruct-q4_k_m"
+                ),
+                source_url="https://huggingface.co/Qwen/Qwen2.5-Coder-3B-Instruct-GGUF/resolve/main/qwen2.5-coder-3b-instruct-q4_k_m.gguf",
+                expected_size_bytes=1929903072,
+                expected_sha256="4a188102020e9c9530b687fd6400f775c45e90a0d7baafe65bd0a36963fbb7ba",
+                format="gguf",
+                quantization="Q4_K_M",
+                provenance="curated_catalog",
+                catalog_version=DEFAULT_CATALOG_VERSION,
+            ),
             min_ram_bytes=3 * 1024 * 1024 * 1024,  # 3.0 GiB
             min_ram_provenance=NumericFactProvenance.CURATED_HEURISTIC,
             min_ram_source="curated_catalog_policy_v2026.10.1",
