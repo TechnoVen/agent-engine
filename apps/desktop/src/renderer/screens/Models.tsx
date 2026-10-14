@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Gauge,
   Cpu,
@@ -38,36 +38,70 @@ export const Models: React.FC = () => {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [is401, setIs401] = useState(false);
 
-  const loadModelsState = async () => {
+  const refreshInstalled = useCallback(async () => {
     try {
-      const [installed, downloads, rStatus, recs] = await Promise.all([
-        sidecarClient.getInstalledModels().catch((e: any) => {
-          if (e?.message?.includes('401') || e?.message?.toLowerCase().includes('unauthorized')) {
-            setIs401(true);
-          }
-          return [];
-        }),
-        sidecarClient.getModelDownloads().catch(() => []),
-        sidecarClient.getManagedRuntimeStatus().catch(() => null),
-        sidecarClient
-          .getRecommendedLocalModels({ min_context_tokens: 4096, require_local_only: true })
-          .catch(() => null),
-      ]);
+      const installed = await sidecarClient.getInstalledModels().catch((e: any) => {
+        if (e?.message?.includes('401') || e?.message?.toLowerCase().includes('unauthorized')) {
+          setIs401(true);
+        }
+        return [];
+      });
       setInstalledModels(installed || []);
+    } catch {
+      // offline fallback
+    }
+  }, []);
+
+  const refreshDownloads = useCallback(async () => {
+    try {
+      const downloads = await sidecarClient.getModelDownloads().catch(() => []);
       setActiveDownloads(downloads || []);
+    } catch {
+      // offline fallback
+    }
+  }, []);
+
+  const refreshRuntime = useCallback(async () => {
+    try {
+      const rStatus = await sidecarClient.getManagedRuntimeStatus().catch(() => null);
       setRuntimeStatus(rStatus);
+    } catch {
+      // offline fallback
+    }
+  }, []);
+
+  const refreshRecommendations = useCallback(async () => {
+    try {
+      const recs = await sidecarClient
+        .getRecommendedLocalModels({ min_context_tokens: 4096, require_local_only: true })
+        .catch(() => null);
       if (recs) setRecommendations(recs);
     } catch {
       // offline fallback
     }
-  };
+  }, []);
+
+  const refreshAll = useCallback(async () => {
+    await Promise.all([
+      refreshInstalled(),
+      refreshDownloads(),
+      refreshRuntime(),
+      refreshRecommendations(),
+    ]);
+  }, [refreshInstalled, refreshDownloads, refreshRuntime, refreshRecommendations]);
+
+  const handleLocalStateChange = useCallback(() => {
+    refreshInstalled();
+    refreshDownloads();
+    refreshRuntime();
+  }, [refreshInstalled, refreshDownloads, refreshRuntime]);
 
   const handleStartRuntime = async (modelId: string) => {
     setRuntimeBusy(true);
     try {
       const res = await sidecarClient.startManagedRuntime(modelId);
       setRuntimeStatus(res);
-      await loadModelsState();
+      await refreshAll();
     } catch (e: any) {
       if (e?.message?.includes('401') || e?.message?.toLowerCase().includes('unauthorized')) {
         setIs401(true);
@@ -82,7 +116,7 @@ export const Models: React.FC = () => {
     try {
       const res = await sidecarClient.stopManagedRuntime();
       setRuntimeStatus(res);
-      await loadModelsState();
+      await refreshAll();
     } catch (e: any) {
       if (e?.message?.includes('401') || e?.message?.toLowerCase().includes('unauthorized')) {
         setIs401(true);
@@ -97,8 +131,8 @@ export const Models: React.FC = () => {
   };
 
   useEffect(() => {
-    loadModelsState();
-  }, []);
+    refreshAll();
+  }, [refreshAll]);
 
   useEffect(() => {
     return sidecarClient.onDesktopConnectionRequiredChange((req) => {
@@ -106,7 +140,7 @@ export const Models: React.FC = () => {
     });
   }, []);
 
-  // Polling during active downloading / verifying / runtime transitions
+  // Polling strictly during active downloading / verifying / runtime transitions
   // Cadence: 1.5s for downloads, 2s for runtime transitions.
   // Suspended on document.hidden, in-flight, or when desktopConnectionRequired is active.
   useEffect(() => {
@@ -123,14 +157,20 @@ export const Models: React.FC = () => {
       if (inFlight || document.hidden || sidecarClient.isDesktopConnectionRequired()) return;
       inFlight = true;
       try {
-        const [installed, downloads, rStatus] = await Promise.all([
-          sidecarClient.getInstalledModels().catch(() => []),
-          sidecarClient.getModelDownloads().catch(() => []),
-          sidecarClient.getManagedRuntimeStatus().catch(() => null),
-        ]);
-        setInstalledModels(installed || []);
-        setActiveDownloads(downloads || []);
-        setRuntimeStatus(rStatus);
+        if (hasActiveDownloads) {
+          const downloads = await sidecarClient.getModelDownloads().catch(() => []);
+          setActiveDownloads(downloads || []);
+          const stillActive = (downloads || []).some(
+            (d) => d.state === 'downloading' || d.state === 'verifying'
+          );
+          if (!stillActive) {
+            refreshInstalled();
+          }
+        }
+        if (hasRuntimeTransition) {
+          const rStatus = await sidecarClient.getManagedRuntimeStatus().catch(() => null);
+          setRuntimeStatus(rStatus);
+        }
       } finally {
         inFlight = false;
       }
@@ -150,7 +190,7 @@ export const Models: React.FC = () => {
       clearInterval(timer);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [activeDownloads, runtimeStatus]);
+  }, [activeDownloads, runtimeStatus, refreshInstalled]);
 
   const handleTestProvider = async (providerId: string) => {
     setVerifyingProvider(providerId);
@@ -199,7 +239,7 @@ export const Models: React.FC = () => {
           </button>
           <button
             type="button"
-            onClick={loadModelsState}
+            onClick={refreshAll}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-bg-base hover:bg-bg-hover border border-border-subtle text-xs text-text-secondary transition-colors"
           >
             <RefreshCw className="w-3.5 h-3.5" />
@@ -222,7 +262,7 @@ export const Models: React.FC = () => {
             onClick={async () => {
               await sidecarClient.retryConnection();
               setIs401(false);
-              loadModelsState();
+              refreshAll();
             }}
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-accent-contrast text-xs font-medium hover:opacity-90 transition-opacity"
           >
@@ -285,7 +325,7 @@ export const Models: React.FC = () => {
               </p>
             </div>
             {/* Embedded Canonical R3 Local Recommendations Component */}
-            <LocalModelRecommendations onStateChange={loadModelsState} />
+            <LocalModelRecommendations onStateChange={handleLocalStateChange} />
           </div>
         )}
 

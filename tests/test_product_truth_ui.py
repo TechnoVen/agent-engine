@@ -404,3 +404,36 @@ def test_database_isolation_prevents_test_fixtures_in_dogfood_db():
         c.execute("SELECT count(*) FROM sessions WHERE title LIKE '%What is 2+2%'")
         assert c.fetchone()[0] == 0, "Dogfood database must not contain test math sessions"
         conn.close()
+
+
+def test_idle_models_screen_does_not_fire_recurring_polling_timers_or_requests():
+    """Verify idle Models screen and recommendations components do not start recurring polling loops."""
+    models_tsx = (RENDERER_ROOT / "screens" / "Models.tsx").read_text(encoding="utf-8")
+    recs_tsx = (RENDERER_ROOT / "components" / "LocalModelRecommendations.tsx").read_text(
+        encoding="utf-8"
+    )
+
+    # 1. Models.tsx polling effect strictly exits when idle
+    assert "const hasActiveDownloads = activeDownloads.some(" in models_tsx
+    assert "const hasRuntimeTransition =" in models_tsx
+    assert "if (!hasActiveDownloads && !hasRuntimeTransition) return;" in models_tsx
+    assert "clearInterval(timer);" in models_tsx
+
+    # 2. LocalModelRecommendations.tsx separates read query from state notifications
+    assert "const refreshStatuses = useCallback(async () => {" in recs_tsx
+    # refreshStatuses must never call onStateChange or trigger circular re-render loops
+    assert (
+        "onStateChange("
+        not in recs_tsx.split("const refreshStatuses =")[1].split("const handleInstall =")[0]
+    )
+
+    # 3. LocalModelRecommendations.tsx transition polling strictly exits when idle
+    assert "const hasActiveDownloads = downloads.some(" in recs_tsx
+    assert "const hasRuntimeTransition =" in recs_tsx
+    assert "if (!hasActiveDownloads && !hasRuntimeTransition) return;" in recs_tsx
+
+    # 4. onStateChange is invoked only on terminal user action triggers (install, cancel, start, stop)
+    assert "onStateChangeRef.current?.();" in recs_tsx
+    # Models.tsx passes handleLocalStateChange, not loadModelsState
+    assert "loadModelsState" not in models_tsx
+    assert "<LocalModelRecommendations onStateChange={handleLocalStateChange} />" in models_tsx

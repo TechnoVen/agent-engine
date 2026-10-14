@@ -582,11 +582,32 @@ def test_16_dns_rebinding_defense_and_socket_pinning():
         assert hostname == "safe.example.com"
         assert pinned_ip == "93.184.216.34"
 
-    # 3. Adapter pins connection to validated IP and sets _dns_host
+    # 3. Adapter pins connection to validated IP and preserves canonical hostname
     adapter = PinningHTTPAdapter(pinned_ips={"safe.example.com": "93.184.216.34"})
     conn = adapter.poolmanager.connection_from_url("https://safe.example.com/model.gguf")
     http_conn = conn._new_conn()
-    assert getattr(http_conn, "_dns_host", None) == "93.184.216.34"
+    # Canonical hostname is preserved for HTTP Host, TLS SNI, and certificate verification
+    assert http_conn.host == "safe.example.com"
+    assert http_conn.server_hostname == "safe.example.com"
+    assert getattr(http_conn, "_pinned_ip_map", {}).get("safe.example.com") == "93.184.216.34"
+
+    # When socket connects, it connects directly to pinned IP
+    with patch("urllib3.util.connection.create_connection") as mock_create_conn:
+        mock_sock = MagicMock()
+        mock_create_conn.return_value = mock_sock
+        sock = http_conn._new_conn()
+        assert sock == mock_sock
+        mock_create_conn.assert_called_once()
+        args, kwargs = mock_create_conn.call_args
+        assert args[0] == ("93.184.216.34", 443)
+
+    # Unpinned connection fails closed with SSRFSecurityError
+    conn_unpinned = adapter.poolmanager.connection_from_url(
+        "https://unpinned.example.com/model.gguf"
+    )
+    http_conn_unpinned = conn_unpinned._new_conn()
+    with pytest.raises(SSRFSecurityError, match="not pinned"):
+        http_conn_unpinned._new_conn()
 
 
 # ==============================================================================
@@ -971,3 +992,87 @@ def test_24_streamed_socket_byte_limit_enforced(temp_models_dir):
     assert status.state == DownloadState.FAILED
     assert "significantly exceeded expected size" in (status.error_message or "")
     assert not storage.get_final_path("runaway-test.gguf").exists()
+
+
+# ==============================================================================
+# 20. Clean Retry from Terminal FAILED State Without Manual Deletion
+# ==============================================================================
+def test_25_retry_from_failed_clears_error_and_stale_partial(mock_model_server, temp_models_dir):
+    """Verify retry from FAILED clears previous errors and byte counts without requiring manual artifact deletion."""
+    storage = ModelStorageManager(models_dir=temp_models_dir)
+    downloader = SafeStreamingDownloader(allow_http_for_test=True, allow_loopback_for_test=True)
+    mgr = ModelDownloadManager(storage_manager=storage, downloader=downloader)
+
+    descriptor = ModelArtifactDescriptor(
+        artifact_id="retry-failed-test.gguf",
+        model_identity=ModelIdentity(provider_id="llamacpp", model_id="retry-failed-model"),
+        source_url=f"{mock_model_server}/model.gguf",
+        destination_filename="retry-failed-test.gguf",
+        expected_size_bytes=DUMMY_GGUF_SIZE,
+        expected_sha256=DUMMY_GGUF_SHA256,
+    )
+
+    # 1. Simulate an earlier failed attempt that wrote a corrupt/stale partial file and metadata
+    partial_path = storage.get_partial_path(descriptor.artifact_id)
+    partial_path.write_bytes(b"STALE_CORRUPTED_BYTES_FROM_FAILED_DOWNLOAD")
+    stale_failed_status = DownloadStatus(
+        artifact_id=descriptor.artifact_id,
+        model_identity=descriptor.model_identity,
+        state=DownloadState.FAILED,
+        bytes_downloaded=len(b"STALE_CORRUPTED_BYTES_FROM_FAILED_DOWNLOAD"),
+        total_bytes_expected=DUMMY_GGUF_SIZE,
+        progress_ratio=0.5,
+        etag='"corrupted-etag"',
+        expected_sha256=descriptor.expected_sha256,
+        resumable=False,
+        error_message="Connection aborted prematurely: [SSL: SSLV3_ALERT_HANDSHAKE_FAILURE]",
+        started_at=time.time() - 100,
+        updated_at=time.time() - 50,
+    )
+    storage.save_metadata(stale_failed_status)
+
+    # Verify initial failed state
+    persisted_failed = storage.load_metadata(descriptor.artifact_id)
+    assert persisted_failed is not None
+    assert persisted_failed.state == DownloadState.FAILED
+    assert persisted_failed.error_message is not None
+    assert partial_path.exists()
+
+    # 2. Start retry download without any manual file deletion
+    status = mgr.start_download(descriptor, sync=True)
+
+    # 3. Verify clean recovery: FAILED error cleared, fresh bytes streamed, final state VERIFIED
+    assert status.state == DownloadState.VERIFIED
+    assert status.error_message is None
+    assert status.bytes_downloaded == DUMMY_GGUF_SIZE
+    assert not partial_path.exists()
+    final_path = storage.get_final_path(descriptor.artifact_id)
+    assert final_path.exists()
+    assert final_path.read_bytes() == DUMMY_GGUF_CONTENT
+
+    # Verify persisted metadata is clean
+    final_meta = storage.load_metadata(descriptor.artifact_id)
+    assert final_meta is not None
+    assert final_meta.state == DownloadState.VERIFIED
+    assert final_meta.error_message is None
+
+
+# ==============================================================================
+# 21. Live Network Transport Acceptance Gate (Opt-in)
+# ==============================================================================
+@pytest.mark.live_network
+def test_26_pinned_https_transport_live_network():
+    """Verify PinningHTTPSConnection connects to canonical artifact URL, follows CDN redirect, and reads initial bytes."""
+    source_url = (
+        "https://huggingface.co/hugging-quants/Llama-3.2-1B-Instruct-Q4_K_M-GGUF"
+        "/resolve/main/llama-3.2-1b-instruct-q4_k_m.gguf"
+    )
+    downloader = SafeStreamingDownloader(connect_timeout_seconds=20.0, read_timeout_seconds=30.0)
+
+    resp = downloader.open_stream(source_url, range_start=0)
+    try:
+        assert resp.status_code in (200, 206)
+        initial_chunk = resp.raw.read(4)
+        assert initial_chunk == b"GGUF", f"Expected magic bytes b'GGUF', got {initial_chunk!r}"
+    finally:
+        resp.close()

@@ -36,6 +36,9 @@ members = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "live_network: opt-in test that makes real network calls to external artifacts",
+]
 
 [tool.ruff]
 line-length = 100

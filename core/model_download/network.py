@@ -18,6 +18,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 import socket
+import sys
 from typing import Optional, Set
 from urllib.parse import urljoin, urlparse
 
@@ -181,29 +182,82 @@ class SSRFProtection:
 
 from requests.adapters import HTTPAdapter
 from urllib3.connection import HTTPConnection, HTTPSConnection
+from urllib3.exceptions import ConnectTimeoutError, NameResolutionError, NewConnectionError
 from urllib3.poolmanager import PoolManager
+from urllib3.util import connection as urllib3_connection
 
 
 class PinningHTTPConnection(HTTPConnection):
-    """HTTPConnection that binds its socket strictly to a pre-validated IP address."""
+    """HTTPConnection that binds its TCP socket strictly to a pre-validated IP address without mutating canonical hostname."""
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def _new_conn(self) -> socket.socket:
         pinned = getattr(self, "_pinned_ip_map", {})
-        if self.host in pinned:
-            self._dns_host = pinned[self.host]
+        target_ip = pinned.get(self.host)
+        if not target_ip:
+            raise SSRFSecurityError(
+                f"Connection to host '{self.host}' rejected: host is not pinned to a pre-validated IP."
+            )
+
+        try:
+            sock = urllib3_connection.create_connection(
+                (target_ip, self.port),
+                self.timeout,
+                source_address=self.source_address,
+                socket_options=self.socket_options,
+            )
+        except socket.gaierror as e:
+            raise NameResolutionError(self.host, self, e) from e
+        except TimeoutError as e:
+            raise ConnectTimeoutError(
+                self,
+                f"Connection to {self.host} ({target_ip}) timed out. (connect timeout={self.timeout})",
+            ) from e
+        except OSError as e:
+            raise NewConnectionError(
+                self, f"Failed to establish a new connection to {self.host} ({target_ip}): {e}"
+            ) from e
+
+        sys.audit("http.client.connect", self, self.host, self.port)
+        return sock
 
 
 class PinningHTTPSConnection(HTTPSConnection):
-    """HTTPSConnection that connects strictly to pre-validated IP while preserving hostname for TLS SNI/verification."""
+    """HTTPSConnection that connects strictly to pre-validated IP while preserving hostname for TLS SNI and certificate verification."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        if not self.server_hostname:
+            self.server_hostname = self.host
+
+    def _new_conn(self) -> socket.socket:
         pinned = getattr(self, "_pinned_ip_map", {})
-        if self.host in pinned:
-            self._dns_host = pinned[self.host]
-            if not self.server_hostname:
-                self.server_hostname = self.host
+        target_ip = pinned.get(self.host)
+        if not target_ip:
+            raise SSRFSecurityError(
+                f"Connection to host '{self.host}' rejected: host is not pinned to a pre-validated IP."
+            )
+
+        try:
+            sock = urllib3_connection.create_connection(
+                (target_ip, self.port),
+                self.timeout,
+                source_address=self.source_address,
+                socket_options=self.socket_options,
+            )
+        except socket.gaierror as e:
+            raise NameResolutionError(self.host, self, e) from e
+        except TimeoutError as e:
+            raise ConnectTimeoutError(
+                self,
+                f"Connection to {self.host} ({target_ip}) timed out. (connect timeout={self.timeout})",
+            ) from e
+        except OSError as e:
+            raise NewConnectionError(
+                self, f"Failed to establish a new connection to {self.host} ({target_ip}): {e}"
+            ) from e
+
+        sys.audit("http.client.connect", self, self.host, self.port)
+        return sock
 
 
 class PinningPoolManager(PoolManager):
@@ -333,8 +387,10 @@ class SafeStreamingDownloader:
 
                 # Resolve relative redirect URLs against current URL
                 redirect_target = urljoin(current_url, location)
+                target_parsed = urlparse(redirect_target)
+                safe_target = f"{target_parsed.scheme}://{target_parsed.netloc}{target_parsed.path}"
                 logger.info(
-                    "Following verified redirect hop %d to %s", redirect_count + 1, redirect_target
+                    "Following verified redirect hop %d to %s", redirect_count + 1, safe_target
                 )
 
                 # Re-validate target URL immediately (fail closed if target is private/loopback/metadata)

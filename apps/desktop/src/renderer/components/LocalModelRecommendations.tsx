@@ -467,6 +467,11 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
   const [is401, setIs401] = useState(false);
   const [actionBusyModel, setActionBusyModel] = useState<string | null>(null);
 
+  const onStateChangeRef = React.useRef(onStateChange);
+  useEffect(() => {
+    onStateChangeRef.current = onStateChange;
+  }, [onStateChange]);
+
   const refreshStatuses = useCallback(async () => {
     try {
       const [installed, dls, rStatus] = await Promise.all([
@@ -482,13 +487,13 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
       setInstalledModels(installed || []);
       setDownloads(dls || []);
       setRuntimeStatus(rStatus);
-      if (onStateChange) onStateChange();
+      // NOTE: refreshStatuses is a pure read and never invokes onStateChange
     } catch {
       // offline fallback
     }
-  }, [onStateChange]);
+  }, []);
 
-  const fetchRecommendations = useCallback(async () => {
+  const fetchRecommendationsAndCatalog = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -501,7 +506,6 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
       ]);
       setData(res);
       setCatalog(cat || []);
-      await refreshStatuses();
     } catch (err: any) {
       if (err?.message?.includes('401') || err?.message?.toLowerCase().includes('unauthorized')) {
         setIs401(true);
@@ -511,11 +515,12 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
     } finally {
       setLoading(false);
     }
-  }, [refreshStatuses]);
+  }, []);
 
   useEffect(() => {
-    fetchRecommendations();
-  }, [fetchRecommendations]);
+    fetchRecommendationsAndCatalog();
+    refreshStatuses();
+  }, [fetchRecommendationsAndCatalog, refreshStatuses]);
 
   // Subscribe to 401 desktop connection required state
   useEffect(() => {
@@ -524,12 +529,14 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
     });
   }, []);
 
-  // Polling during active downloading / verifying / runtime transitions
+  // Polling strictly during active downloading / verifying / runtime transitions
   // Cadence: 1.5s for downloads, 2s for runtime transitions.
   // Suspended on document.hidden, in-flight, or when desktopConnectionRequired is active.
   useEffect(() => {
     let inFlight = false;
-    const hasActiveDownloads = downloads.some((d) => d.state === 'downloading' || d.state === 'verifying');
+    const hasActiveDownloads = downloads.some(
+      (d) => d.state === 'downloading' || d.state === 'verifying'
+    );
     const hasRuntimeTransition =
       runtimeStatus?.state === 'starting' || runtimeStatus?.state === 'stopping';
 
@@ -539,7 +546,25 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
       if (inFlight || document.hidden || sidecarClient.isDesktopConnectionRequired()) return;
       inFlight = true;
       try {
-        await refreshStatuses();
+        if (hasActiveDownloads) {
+          const dls = await sidecarClient.getModelDownloads().catch(() => []);
+          setDownloads(dls || []);
+          const stillActive = (dls || []).some(
+            (d) => d.state === 'downloading' || d.state === 'verifying'
+          );
+          if (!stillActive) {
+            const installed = await sidecarClient.getInstalledModels().catch(() => []);
+            setInstalledModels(installed || []);
+            onStateChangeRef.current?.();
+          }
+        }
+        if (hasRuntimeTransition) {
+          const rStatus = await sidecarClient.getManagedRuntimeStatus().catch(() => null);
+          setRuntimeStatus(rStatus);
+          if (rStatus?.state !== 'starting' && rStatus?.state !== 'stopping') {
+            onStateChangeRef.current?.();
+          }
+        }
       } finally {
         inFlight = false;
       }
@@ -559,13 +584,14 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
       clearInterval(timer);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [downloads, runtimeStatus, refreshStatuses]);
+  }, [downloads, runtimeStatus]);
 
   const handleInstall = async (modelId: string) => {
     setActionBusyModel(`install-${modelId}`);
     try {
       await sidecarClient.startModelDownload(modelId, 'llamacpp');
       await refreshStatuses();
+      onStateChangeRef.current?.();
     } catch (err: any) {
       if (err?.message?.includes('401') || err?.message?.toLowerCase().includes('unauthorized')) {
         setIs401(true);
@@ -582,6 +608,7 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
     try {
       await sidecarClient.cancelModelDownload(artifactId);
       await refreshStatuses();
+      onStateChangeRef.current?.();
     } catch (err: any) {
       setError(err.message || 'Failed to cancel download');
     } finally {
@@ -595,6 +622,7 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
       const res = await sidecarClient.startManagedRuntime(modelId);
       setRuntimeStatus(res);
       await refreshStatuses();
+      onStateChangeRef.current?.();
     } catch (err: any) {
       if (err?.message?.includes('401') || err?.message?.toLowerCase().includes('unauthorized')) {
         setIs401(true);
@@ -612,6 +640,7 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
       const res = await sidecarClient.stopManagedRuntime();
       setRuntimeStatus(res);
       await refreshStatuses();
+      onStateChangeRef.current?.();
     } catch (err: any) {
       if (err?.message?.includes('401') || err?.message?.toLowerCase().includes('unauthorized')) {
         setIs401(true);
@@ -630,7 +659,8 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
   const handleRetryConnection = async () => {
     setIs401(false);
     await sidecarClient.retryConnection();
-    await fetchRecommendations();
+    await fetchRecommendationsAndCatalog();
+    await refreshStatuses();
   };
 
   if (is401 || sidecarClient.isDesktopConnectionRequired()) {
@@ -695,7 +725,7 @@ export const LocalModelRecommendations: React.FC<LocalModelRecommendationsProps>
           )}
 
           <button
-            onClick={fetchRecommendations}
+            onClick={fetchRecommendationsAndCatalog}
             disabled={loading}
             className="p-1.5 rounded-lg bg-bg-surface hover:bg-bg-base border border-border-subtle text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50"
             title="Refresh Recommendations"

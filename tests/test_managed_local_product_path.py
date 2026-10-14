@@ -432,7 +432,15 @@ def test_05c_unverified_or_unrecognized_runtime_start_rejected(tmp_path: Path):
     client = TestClient(app)
     token = "test_ipc_token_unverified"
 
-    with patch.dict(os.environ, {"AGENT_ENGINE_IPC_TOKEN": token}):
+    empty_models = tmp_path / "empty_models"
+    empty_models.mkdir(parents=True, exist_ok=True)
+    storage = ModelStorageManager(models_dir=empty_models)
+    dl_mgr = ModelDownloadManager(storage_manager=storage)
+
+    with (
+        patch.dict(os.environ, {"AGENT_ENGINE_IPC_TOKEN": token}),
+        patch("services.python.server.routers.models.get_download_manager", return_value=dl_mgr),
+    ):
         # 1. Unrecognized model ID
         res_unknown = client.post(
             "/v1/models/runtime/start",

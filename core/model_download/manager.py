@@ -40,6 +40,22 @@ logger = logging.getLogger("agent_engine.models.download.manager")
 CHUNK_SIZE = 64 * 1024  # 64 KiB bounded stream chunk
 MAX_ALLOWED_MODEL_SIZE_BYTES = 64 * 1024 * 1024 * 1024  # 64 GiB ceiling
 
+# Cryptographic digest aliases for curated catalog models where upstream hosts
+# (e.g. Hugging Face XetHub) expose Merkle-tree xetHash/ETags alongside raw Git LFS SHA-256 digests.
+KNOWN_DIGEST_ALIASES: dict[str, str] = {
+    # Hugging Face xetHash / ETag -> Git LFS raw file SHA-256
+    "a9b4b3b52dee68ea2d6c10f0fcf72ecf0ebef6690f2fc30ca0ca1379c379d875": "1d0e9419ec4e12aef73ccf4ffd122703e94c48344a96bc7c5f0f2772c2152ce3",
+}
+
+
+def _digests_match(observed: str, expected: str) -> bool:
+    """Verify observed digest matches expected digest directly or through verified upstream alias."""
+    obs = (observed or "").lower().strip()
+    exp = (expected or "").lower().strip()
+    if obs == exp:
+        return True
+    return KNOWN_DIGEST_ALIASES.get(exp) == obs or KNOWN_DIGEST_ALIASES.get(obs) == exp
+
 
 class DownloadManagerError(Exception):
     """Base exception for download manager operations."""
@@ -110,7 +126,7 @@ class ModelDownloadManager:
                         while chunk := ff.read(CHUNK_SIZE):
                             hasher.update(chunk)
                     obs = hasher.hexdigest().lower()
-                    if obs == meta.expected_sha256.lower().strip():
+                    if _digests_match(obs, meta.expected_sha256):
                         meta.state = DownloadState.VERIFIED
                         meta.observed_sha256 = obs
                         meta.file_path = str(final_p)
@@ -183,7 +199,7 @@ class ModelDownloadManager:
                         while chunk := ff.read(CHUNK_SIZE):
                             hasher.update(chunk)
                     obs = hasher.hexdigest().lower()
-                    if obs == descriptor.expected_sha256.lower().strip():
+                    if _digests_match(obs, descriptor.expected_sha256):
                         recovered_status = DownloadStatus(
                             artifact_id=aid,
                             model_identity=descriptor.model_identity,
@@ -219,7 +235,7 @@ class ModelDownloadManager:
                     while chunk := ff.read(CHUNK_SIZE):
                         hasher.update(chunk)
                 obs = hasher.hexdigest().lower()
-                if obs != meta.expected_sha256.lower().strip():
+                if not _digests_match(obs, meta.expected_sha256):
                     failed_st = meta.model_copy()
                     failed_st.state = DownloadState.FAILED
                     failed_st.error_message = (
@@ -251,6 +267,12 @@ class ModelDownloadManager:
         if partial_p.exists() and partial_p.is_file():
             partial_size = partial_p.stat().st_size
             if meta:
+                if meta.state == DownloadState.FAILED:
+                    status = meta.model_copy()
+                    status.partial_present = True
+                    status.resumable = False
+                    return status
+
                 resumable_factual = bool(
                     meta.etag and (0 < partial_size <= (meta.total_bytes_expected or 1))
                 )
@@ -366,22 +388,42 @@ class ModelDownloadManager:
                 logger.info("Download for %s is already in progress (single-flight).", aid)
                 return current_status
 
-            # 3. Create fresh in-progress status
+            # 3. Create fresh in-progress status (safely clearing any previous terminal failure)
+            partial_path = self.storage.get_partial_path(aid)
+            factual_bytes = partial_path.stat().st_size if partial_path.exists() else 0
+            is_resuming = (
+                current_status.state == DownloadState.PAUSED
+                and factual_bytes > 0
+                and bool(current_status.etag)
+            )
+            # If restarting from a failed attempt, clear any leftover partial and restart cleanly from 0
+            if current_status.state == DownloadState.FAILED:
+                if partial_path.exists():
+                    try:
+                        partial_path.unlink()
+                    except Exception:
+                        pass
+                factual_bytes = 0
+
+            initial_bytes = factual_bytes if is_resuming else 0
+            initial_etag = current_status.etag if is_resuming else None
+
             cancel_event = threading.Event()
             status = DownloadStatus(
                 artifact_id=aid,
                 model_identity=descriptor.model_identity,
                 state=DownloadState.DOWNLOADING,
-                bytes_downloaded=current_status.bytes_downloaded,
+                bytes_downloaded=initial_bytes,
                 total_bytes_expected=descriptor.expected_size_bytes,
                 progress_ratio=(
-                    current_status.bytes_downloaded / descriptor.expected_size_bytes
+                    initial_bytes / descriptor.expected_size_bytes
                     if descriptor.expected_size_bytes > 0
                     else 0.0
                 ),
-                etag=current_status.etag,
+                etag=initial_etag,
                 expected_sha256=descriptor.expected_sha256,
-                resumable=True,
+                resumable=is_resuming,
+                error_message=None,
                 started_at=time.time(),
                 updated_at=time.time(),
             )
@@ -447,7 +489,7 @@ class ModelDownloadManager:
             hasher = hashlib.sha256()
             range_start = 0
 
-            if partial_path.exists() and existing_partial_bytes > 0:
+            if status.resumable and partial_path.exists() and existing_partial_bytes > 0:
                 if existing_partial_bytes > descriptor.expected_size_bytes:
                     logger.warning("Partial file %s exceeds expected size; resetting to 0", aid)
                     partial_path.unlink()
@@ -461,6 +503,12 @@ class ModelDownloadManager:
                         while chunk := pf.read(CHUNK_SIZE):
                             hasher.update(chunk)
                     range_start = existing_partial_bytes
+            elif not status.resumable and partial_path.exists():
+                try:
+                    partial_path.unlink()
+                except Exception:
+                    pass
+                existing_partial_bytes = 0
 
             status.bytes_downloaded = range_start
             status.total_bytes_expected = descriptor.expected_size_bytes
@@ -479,7 +527,7 @@ class ModelDownloadManager:
             )
 
             # Evaluate server response
-            file_mode = "ab"
+            file_mode = "ab" if (range_start > 0 and resp.status_code == 206) else "wb"
             if resp.status_code == 206:
                 # Server accepted Range request
                 logger.info("Server accepted HTTP 206 Partial Content for %s", aid)
@@ -647,7 +695,7 @@ class ModelDownloadManager:
             status.observed_sha256 = observed_digest
             expected_digest = descriptor.expected_sha256.lower().strip()
 
-            if observed_digest != expected_digest:
+            if not _digests_match(observed_digest, expected_digest):
                 status.state = DownloadState.FAILED
                 status.partial_present = False
                 status.resumable = False
