@@ -100,6 +100,14 @@ def test_01_catalog_descriptor_accuracy():
     assert llama_entry.artifact_descriptor.format == "gguf"
     assert (
         llama_entry.artifact_descriptor.expected_sha256
+        == "1d0e9419ec4e12aef73ccf4ffd122703e94c48344a96bc7c5f0f2772c2152ce3"
+    )
+    assert (
+        llama_entry.artifact_descriptor.expected_etag
+        == "a9b4b3b52dee68ea2d6c10f0fcf72ecf0ebef6690f2fc30ca0ca1379c379d875"
+    )
+    assert (
+        llama_entry.artifact_descriptor.expected_xet_hash
         == "a9b4b3b52dee68ea2d6c10f0fcf72ecf0ebef6690f2fc30ca0ca1379c379d875"
     )
     assert llama_entry.artifact_descriptor.expected_size_bytes == 807690656

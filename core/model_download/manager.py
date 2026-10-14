@@ -40,22 +40,6 @@ logger = logging.getLogger("agent_engine.models.download.manager")
 CHUNK_SIZE = 64 * 1024  # 64 KiB bounded stream chunk
 MAX_ALLOWED_MODEL_SIZE_BYTES = 64 * 1024 * 1024 * 1024  # 64 GiB ceiling
 
-# Cryptographic digest aliases for curated catalog models where upstream hosts
-# (e.g. Hugging Face XetHub) expose Merkle-tree xetHash/ETags alongside raw Git LFS SHA-256 digests.
-KNOWN_DIGEST_ALIASES: dict[str, str] = {
-    # Hugging Face xetHash / ETag -> Git LFS raw file SHA-256
-    "a9b4b3b52dee68ea2d6c10f0fcf72ecf0ebef6690f2fc30ca0ca1379c379d875": "1d0e9419ec4e12aef73ccf4ffd122703e94c48344a96bc7c5f0f2772c2152ce3",
-}
-
-
-def _digests_match(observed: str, expected: str) -> bool:
-    """Verify observed digest matches expected digest directly or through verified upstream alias."""
-    obs = (observed or "").lower().strip()
-    exp = (expected or "").lower().strip()
-    if obs == exp:
-        return True
-    return KNOWN_DIGEST_ALIASES.get(exp) == obs or KNOWN_DIGEST_ALIASES.get(obs) == exp
-
 
 class DownloadManagerError(Exception):
     """Base exception for download manager operations."""
@@ -126,7 +110,7 @@ class ModelDownloadManager:
                         while chunk := ff.read(CHUNK_SIZE):
                             hasher.update(chunk)
                     obs = hasher.hexdigest().lower()
-                    if _digests_match(obs, meta.expected_sha256):
+                    if obs == (meta.expected_sha256 or "").lower().strip():
                         meta.state = DownloadState.VERIFIED
                         meta.observed_sha256 = obs
                         meta.file_path = str(final_p)
@@ -199,7 +183,7 @@ class ModelDownloadManager:
                         while chunk := ff.read(CHUNK_SIZE):
                             hasher.update(chunk)
                     obs = hasher.hexdigest().lower()
-                    if _digests_match(obs, descriptor.expected_sha256):
+                    if obs == (descriptor.expected_sha256 or "").lower().strip():
                         recovered_status = DownloadStatus(
                             artifact_id=aid,
                             model_identity=descriptor.model_identity,
@@ -235,7 +219,7 @@ class ModelDownloadManager:
                     while chunk := ff.read(CHUNK_SIZE):
                         hasher.update(chunk)
                 obs = hasher.hexdigest().lower()
-                if not _digests_match(obs, meta.expected_sha256):
+                if obs != (meta.expected_sha256 or "").lower().strip():
                     failed_st = meta.model_copy()
                     failed_st.state = DownloadState.FAILED
                     failed_st.error_message = (
@@ -534,6 +518,13 @@ class ModelDownloadManager:
                 etag = resp.headers.get("ETag")
                 if etag:
                     status.etag = etag
+                    if descriptor.expected_etag or descriptor.expected_xet_hash:
+                        logger.info(
+                            "Observed transport ETag for %s: %s (descriptor provenance: %s)",
+                            aid,
+                            etag,
+                            descriptor.expected_etag or descriptor.expected_xet_hash,
+                        )
             elif resp.status_code == 200:
                 # Server ignored Range or full download initiated: must reset partial from 0!
                 if range_start > 0:
@@ -548,6 +539,13 @@ class ModelDownloadManager:
                 etag = resp.headers.get("ETag")
                 if etag:
                     status.etag = etag
+                    if descriptor.expected_etag or descriptor.expected_xet_hash:
+                        logger.info(
+                            "Observed transport ETag for %s: %s (descriptor provenance: %s)",
+                            aid,
+                            etag,
+                            descriptor.expected_etag or descriptor.expected_xet_hash,
+                        )
             else:
                 resp.close()
                 raise DownloadManagerError(
@@ -694,8 +692,7 @@ class ModelDownloadManager:
             observed_digest = hasher.hexdigest().lower()
             status.observed_sha256 = observed_digest
             expected_digest = descriptor.expected_sha256.lower().strip()
-
-            if not _digests_match(observed_digest, expected_digest):
+            if observed_digest != expected_digest:
                 status.state = DownloadState.FAILED
                 status.partial_present = False
                 status.resumable = False

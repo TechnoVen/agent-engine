@@ -40,6 +40,8 @@ class ModelArtifactDescriptor(BaseModel):
     source_url: str
     expected_size_bytes: int
     expected_sha256: str
+    expected_etag: Optional[str] = None
+    expected_xet_hash: Optional[str] = None
     format: str = "gguf"
     quantization: str = "Q4_K_M"
     provenance: str = "curated_catalog"

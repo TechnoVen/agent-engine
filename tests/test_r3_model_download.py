@@ -340,6 +340,38 @@ def test_08_checksum_mismatch_quarantines_and_fails(mock_model_server, temp_mode
     assert not partial_file.exists()
 
 
+def test_08b_matching_etag_with_mismatched_sha256_fails_closed_and_quarantines(
+    mock_model_server, temp_models_dir
+):
+    """Verify matching upstream ETag with mismatched artifact SHA-256 fails closed and quarantines."""
+    storage = ModelStorageManager(models_dir=temp_models_dir)
+    downloader = SafeStreamingDownloader(allow_http_for_test=True, allow_loopback_for_test=True)
+    mgr = ModelDownloadManager(storage_manager=storage, downloader=downloader)
+
+    descriptor = ModelArtifactDescriptor(
+        artifact_id="etag-match-hash-mismatch.gguf",
+        model_identity=ModelIdentity(provider_id="llamacpp", model_id="etag-test"),
+        source_url=f"{mock_model_server}/test.gguf",
+        expected_size_bytes=DUMMY_GGUF_SIZE,
+        expected_sha256="badbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbadbad1",
+        expected_etag='"model-etag-v1"',  # Matches mock_model_server's etag_value
+        expected_xet_hash="a9b4b3b52dee68ea2d6c10f0fcf72ecf0ebef6690f2fc30ca0ca1379c379d875",
+    )
+
+    status = mgr.start_download(descriptor, sync=True)
+
+    assert status.state == DownloadState.FAILED
+    assert "Checksum mismatch" in (status.error_message or "")
+    assert status.observed_sha256 == DUMMY_GGUF_SHA256
+    assert status.etag == '"model-etag-v1"'
+
+    final_file = storage.get_final_path("etag-match-hash-mismatch.gguf")
+    assert not final_file.exists(), "Final file must never be created on checksum mismatch!"
+
+    partial_file = storage.get_partial_path("etag-match-hash-mismatch.gguf")
+    assert not partial_file.exists(), "Partial file must be quarantined on checksum mismatch!"
+
+
 # ==============================================================================
 # 5. Resume Semantics (HTTP 206 Range vs 200 Reset)
 # ==============================================================================
