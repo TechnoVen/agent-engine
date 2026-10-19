@@ -43,6 +43,7 @@ from core.engine import calculator_tool
 from core.execution.cancellation import CancellationToken
 from core.sandbox.backend import (
     DarwinSandboxBackend,
+    LinuxBubblewrapBackend,
     NullSandboxBackend,
     WindowsSandboxBackend,
 )
@@ -87,9 +88,9 @@ def test_01_external_process_separation(sandbox_service: SandboxService, temp_wo
     worker_pid = int(res.stdout.strip())
     parent_pid = os.getpid()
 
-    assert worker_pid != parent_pid, (
-        f"Worker executed in parent process! worker_pid={worker_pid}, parent_pid={parent_pid}"
-    )
+    assert (
+        worker_pid != parent_pid
+    ), f"Worker executed in parent process! worker_pid={worker_pid}, parent_pid={parent_pid}"
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Bubblewrap requires Linux")
@@ -813,3 +814,76 @@ except Exception:
     assert "valid.json" in res.artifacts
     assert "bad_fifo.pipe" not in res.artifacts
     assert "leak_hosts" not in res.artifacts
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Bubblewrap requires Linux")
+def test_27_interpreter_mount_resolution_variants(tmp_path: Path):
+    """Scenario 27: Unit test interpreter mount resolution across executable variants."""
+    # 1. Missing target fails closed (empty list)
+    assert LinuxBubblewrapBackend._resolve_interpreter_mounts("/nonexistent/bin/python") == []
+    assert LinuxBubblewrapBackend._resolve_interpreter_mounts("") == []
+
+    # 2. Regular system executable in /bin or /usr/bin
+    sh_exe = "/bin/sh" if os.path.exists("/bin/sh") else "/usr/bin/sh"
+    if os.path.exists(sh_exe):
+        sh_mounts = LinuxBubblewrapBackend._resolve_interpreter_mounts(sh_exe)
+        # Should not mount /bin or /usr as dynamic custom mounts
+        for flag, src, _ in sh_mounts:
+            assert not src.startswith(("/home", "/root", "/etc"))
+
+    # 3. Virtualenv-local executable without symlinks
+    mock_venv = tmp_path / "mock_venv"
+    mock_bin = mock_venv / "bin"
+    mock_bin.mkdir(parents=True)
+    mock_py = mock_bin / "python"
+    mock_py.write_text("#!/bin/sh\necho mock\n")
+    mock_py.chmod(0o755)
+    mock_mounts = LinuxBubblewrapBackend._resolve_interpreter_mounts(str(mock_py))
+    # Must only mount base_prefix or mock_venv root, never parent of tmp_path
+    for flag, src, dest in mock_mounts:
+        assert src != str(tmp_path)
+        assert src != str(tmp_path.parent)
+
+    # 4. Active runtime interpreter with external symlink chain (real uv topology)
+    real_mounts = LinuxBubblewrapBackend._resolve_interpreter_mounts(sys.executable)
+    # Must have at least one mount directive for the base installation root
+    assert len(real_mounts) > 0
+    mount_flags = [m[0] for m in real_mounts]
+    assert "--ro-bind" in mount_flags
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Bubblewrap requires Linux")
+def test_28_sandbox_executes_symlinked_venv_python(
+    sandbox_service: SandboxService, temp_workspace: Path
+):
+    """Scenario 28: Sandbox successfully executes code using host virtualenv Python."""
+    if not sandbox_service.is_available():
+        pytest.skip("Bubblewrap backend is not available on this host")
+
+    code = "import sys; print('SANDBOX_VENV_OK:' + sys.version.split()[0])"
+    res = sandbox_service.run_code(code, workspace_dir=temp_workspace)
+
+    assert res.is_success, f"Execution failed: {res.stderr}"
+    assert "SANDBOX_VENV_OK:" in res.stdout
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Bubblewrap requires Linux")
+def test_29_unrelated_host_home_inaccessible_in_sandbox(
+    sandbox_service: SandboxService, temp_workspace: Path
+):
+    """Scenario 29: Unrelated user home directories and config files remain inaccessible in sandbox."""
+    if not sandbox_service.is_available():
+        pytest.skip("Bubblewrap backend is not available on this host")
+
+    home_dir = str(Path.home())
+    code = f"""
+import os
+results = []
+for p in ['{home_dir}/.bashrc', '{home_dir}/.profile', '{home_dir}/.ssh']:
+    if os.path.exists(p):
+        results.append('LEAK:' + p)
+print('LEAK_COUNT:' + str(len(results)))
+"""
+    res = sandbox_service.run_code(code, workspace_dir=temp_workspace)
+    assert res.is_success
+    assert "LEAK_COUNT:0" in res.stdout

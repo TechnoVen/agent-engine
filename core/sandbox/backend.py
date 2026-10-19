@@ -26,7 +26,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from core.sandbox.models import (
     ResourceIsolationUnavailableError,
@@ -574,6 +574,85 @@ class LinuxBubblewrapBackend(SandboxBackend):
         caps = self.probe_controllers()
         return caps.get("user_scope", False)
 
+    @staticmethod
+    def _resolve_interpreter_mounts(target_exe: str) -> List[Tuple[str, str, str]]:
+        """Resolve minimal read-only mounts and symlinks required to execute an interpreter inside bwrap.
+
+        Invariants:
+        1. Never exposes arbitrary home directories or parent directory trees.
+        2. Mounts only the factual installation root of the target executable.
+        3. Replicates only the minimal directory symlink hops required to traverse the symlink.
+        4. Fails closed: non-existent or inaccessible targets produce no mounts.
+        """
+        directives: List[Tuple[str, str, str]] = []
+        if not target_exe or not os.path.exists(target_exe):
+            return directives
+
+        try:
+            real_exe = os.path.realpath(target_exe)
+        except Exception:
+            return directives
+
+        base_roots = set()
+        system_roots = {"/", "/usr", "/bin", "/lib", "/lib64", "/sbin"}
+
+        # Active runtime base prefix if target is associated with current python environment
+        is_python_env = (
+            target_exe == sys.executable
+            or real_exe == os.path.realpath(sys.executable)
+            or target_exe.startswith(sys.prefix)
+            or "python" in os.path.basename(target_exe).lower()
+        )
+        if (
+            is_python_env
+            and sys.base_prefix
+            and not sys.base_prefix.startswith("/usr")
+            and os.path.isdir(sys.base_prefix)
+        ):
+            base_roots.add(os.path.abspath(sys.base_prefix))
+
+        # Real executable installation root (e.g. ~/.local/share/uv/python/cpython-3.11.17-...)
+        real_root = os.path.dirname(os.path.dirname(real_exe))
+        if (
+            real_root
+            and real_root not in system_roots
+            and not any(
+                real_root.startswith(sr + "/") for sr in ("/usr", "/bin", "/lib", "/lib64", "/sbin")
+            )
+            and os.path.isdir(real_root)
+        ):
+            base_roots.add(os.path.abspath(real_root))
+
+        for b_root in sorted(base_roots):
+            directives.append(("--ro-bind", b_root, b_root))
+
+        # Trace and replicate any intermediate directory symlinks in the hop chain
+        curr = target_exe
+        visited = set()
+        while os.path.islink(curr) and curr not in visited:
+            visited.add(curr)
+            try:
+                target = os.readlink(curr)
+            except Exception:
+                break
+            if not os.path.isabs(target):
+                target = os.path.normpath(os.path.join(os.path.dirname(curr), target))
+
+            parent = os.path.dirname(target)
+            grandparent = os.path.dirname(parent)
+            for d in (grandparent, parent):
+                if os.path.islink(d):
+                    try:
+                        link_val = os.readlink(d)
+                        if not os.path.isabs(link_val):
+                            link_val = os.path.normpath(os.path.join(os.path.dirname(d), link_val))
+                        directives.append(("--symlink", link_val, d))
+                    except Exception:
+                        pass
+            curr = target
+
+        return directives
+
     def _build_bwrap_argv(
         self,
         spec: SandboxSpec,
@@ -650,6 +729,12 @@ class LinuxBubblewrapBackend(SandboxBackend):
             vpath = os.path.abspath(venv_path)
             if os.path.exists(vpath):
                 argv.extend(["--ro-bind", vpath, vpath])
+
+        # Resolve minimal runtime dependencies for symlinked interpreter targets (e.g. uv Python toolchains)
+        exe_candidate = (spec.command[0] if spec.command else None) or sys.executable
+        if exe_candidate:
+            for flag, src_or_target, dest in self._resolve_interpreter_mounts(exe_candidate):
+                argv.extend([flag, src_or_target, dest])
 
         # 4. Workspace filesystem mounts (Item 1: Project input READ_ONLY by default)
         ws_path = str(spec.filesystem.workspace_dir.resolve())
