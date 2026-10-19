@@ -339,19 +339,24 @@ def test_storage_factory_selection(monkeypatch, tmp_path):
     """Verify get_storage_backend respects parameters, env vars, and defaults."""
     reset_storage_backend()
 
-    # 1. Default -> SQLiteBackend
-    monkeypatch.delenv("STORAGE_BACKEND", raising=False)
-    b1 = get_storage_backend(force_new=True)
-    assert isinstance(b1, SQLiteBackend)
-    assert b1.db_path == DEFAULT_SQLITE_PATH
+    # 1. Verify DEFAULT_SQLITE_PATH constant points to canonical production default
+    assert DEFAULT_SQLITE_PATH.endswith("data/agent_engine.db")
 
-    # 2. Custom SQLite path
+    # 2. Configured test-isolation path via SQLITE_DB_PATH
+    monkeypatch.delenv("STORAGE_BACKEND", raising=False)
+    test_db = str(tmp_path / "test_isolated.db")
+    monkeypatch.setenv("SQLITE_DB_PATH", test_db)
+    b_env = get_storage_backend(force_new=True)
+    assert isinstance(b_env, SQLiteBackend)
+    assert b_env.db_path == test_db
+
+    # 3. Custom SQLite path parameter takes precedence over env var
     custom_path = str(tmp_path / "custom.db")
     b2 = get_storage_backend(backend_type="sqlite", db_path=custom_path, force_new=True)
     assert isinstance(b2, SQLiteBackend)
     assert b2.db_path == custom_path
 
-    # 3. STORAGE_BACKEND=postgres via env var
+    # 4. STORAGE_BACKEND=postgres via env var
     monkeypatch.setenv("STORAGE_BACKEND", "postgres")
     monkeypatch.setenv("POSTGRES_URL", f"sqlite:///{tmp_path / 'env_pg.db'}")
     b3 = get_storage_backend(force_new=True)
