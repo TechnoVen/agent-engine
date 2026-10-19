@@ -29,6 +29,7 @@ from core.router import (
 # Services container, schemas, errors, transport, dependencies
 from services.python.server.container import (
     get_execution_coordinator,
+    get_storage_backend,
 )
 from services.python.server.schemas import *
 
@@ -75,8 +76,14 @@ async def run_pipeline(
         req.project_id
         or (req.inputs.get("project_id") if isinstance(req.inputs, dict) else None)
         or x_project_id
-        or "default"
     )
+    if not effective_project_id or effective_project_id in ("default", "proj_default"):
+        storage = get_storage_backend()
+        default_proj = storage.get_default_project()
+        if default_proj:
+            effective_project_id = default_proj["id"]
+        else:
+            effective_project_id = "default"
     effective_session_id = req.session_id or (
         req.inputs.get("session_id") if isinstance(req.inputs, dict) else None
     )
