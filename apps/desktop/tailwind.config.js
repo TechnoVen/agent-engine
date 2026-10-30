@@ -9,6 +9,7 @@ export default {
     extend: {
       colors: {
         'bg-base': '#0a0a0a',
+        'bg-surface': '#101010',
         'bg-elevated': '#141414',
         'bg-hover': '#1c1c1c',
         'border-subtle': '#1f1f1f',

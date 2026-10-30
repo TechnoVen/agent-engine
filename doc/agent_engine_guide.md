@@ -1,11 +1,12 @@
 # Autonomous Agent Engine Control Center — Master Operational Guide
 
-> **Control Center URL**: `http://localhost:8501`  
+> **Official Desktop UI**: Tauri Native Desktop Shell (`make desktop-tauri-dev`)  
+> **Sidecar API**: `http://127.0.0.1:8000`  
+> **Internal Dev Dashboard**: `make dev-dashboard`  
 > **Production Version**: `v1.0.0`  
 > **Hardware Target**: AMD Ryzen 5 PRO 2400G &bull; 14.6 GB RAM &bull; Arch Linux  
 > **Active Local Engines**: `llama-server` (Port 8080) & Ollama (Port 11434)  
 > **Default Workspace**: `~/code` (`/home/nadir/code`)  
-> **Test Verification**: 24 / 24 Tests Passing (100%)
 
 ---
 
@@ -17,10 +18,13 @@ Welcome! If you are new to the Agent Engine, here is the basic concept in plain 
 * **Where does it run?** 100% locally on your machine using your local LLM (Qwen2.5-Coder-3B via llama-server / Ollama) or optional cloud APIs (Gemini, OpenAI, Anthropic).
 * **How do you start it?**
   ```bash
-  cd ~/agent_engine
+  # Start backend supervisor daemons
   ./start_studio.sh
+
+  # Launch the official native Tauri Desktop Application
+  make desktop-tauri-dev
   ```
-  Then open your browser to **`http://localhost:8501`**.
+  *(For internal debugging and benchmarks, developers can run `make dev-dashboard`)*.
 
 ```
  ┌──────────────────────────────────────────────────────────────────────────────────┐

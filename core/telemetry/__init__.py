@@ -11,6 +11,11 @@ from core.telemetry.cost import (
     ModelPricing,
     get_cost_tracker,
 )
+from core.telemetry.hardware import (
+    HardwareTelemetry,
+    HardwareTelemetryTracker,
+    get_hardware_telemetry_tracker,
+)
 
 __all__ = [
     "CostTracker",
@@ -19,4 +24,7 @@ __all__ = [
     "BudgetAlert",
     "DEFAULT_PRICING",
     "get_cost_tracker",
+    "HardwareTelemetry",
+    "HardwareTelemetryTracker",
+    "get_hardware_telemetry_tracker",
 ]

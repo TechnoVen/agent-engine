@@ -1,0 +1,96 @@
+{
+  "mode": "design",
+  "title": "UI/UX Design",
+  "tagline": "Generate design token palettes, design systems, and responsive layout wireframes",
+  "badge": "Design Engine",
+  "pipeline": "summarize",
+  "categories": [
+    "All",
+    "Design Systems",
+    "Color Palettes",
+    "Wireframing",
+    "Component Tokens"
+  ],
+  "cases": [
+    {
+      "id": "design-1",
+      "title": "Dark-Mode Design Token System (CSS/Tailwind)",
+      "category": "Design Systems",
+      "description": "Generate harmonious semantic tokens for backgrounds, borders, accents, and contrast ratios.",
+      "mode": "design",
+      "icon_name": "palette",
+      "est_cost": "$0.0008 (CODE Tier)",
+      "tags": [
+        "Tokens",
+        "CSS",
+        "Tailwind"
+      ],
+      "prompt": "Design a complete dark-theme token system with WCAG AAA contrast for text, subtle hairline borders, and glowing primary accents.",
+      "expected_tools": [
+        "token_generator",
+        "contrast_checker"
+      ],
+      "sample_output": "```css\n:root {\n  --bg-base: #0a0a0a;\n  --bg-elevated: #141414;\n  --border-subtle: #1f1f1f;\n  --accent: #3b82f6;\n  --text-primary: #f5f5f5;\n}\n```"
+    },
+    {
+      "id": "design-2",
+      "title": "Micro-Interaction & Motion Specs",
+      "category": "Design Systems",
+      "description": "Define easing curves, spring physics, and transition durations for fluid 60fps UI feedback.",
+      "mode": "design",
+      "icon_name": "palette",
+      "est_cost": "$0.0010 (Small Model)",
+      "tags": [
+        "Motion",
+        "Transitions",
+        "FramerMotion"
+      ],
+      "prompt": "Specify animation timings and bezier curves for modal entry, dropdown expansion, and hover elevation states.",
+      "expected_tools": [
+        "motion_specifier",
+        "bezier_curve_evaluator"
+      ],
+      "sample_output": "Motion specifications defined: 150ms ease-out (cubic-bezier(0.16, 1, 0.3, 1)) for hovers, 250ms for slide-over panels."
+    },
+    {
+      "id": "design-3",
+      "title": "Desktop Multi-Pane Wireframe Layout",
+      "category": "Wireframing",
+      "description": "Create responsive 3-pane layout specs (Sidebar, Main Stage, Inspector) with collapse thresholds.",
+      "mode": "design",
+      "icon_name": "palette",
+      "est_cost": "$0.0014 (Small Model)",
+      "tags": [
+        "Wireframe",
+        "Layout",
+        "Grid"
+      ],
+      "prompt": "Design a multi-pane desktop layout specification supporting collapsible sidebars, flexible canvas, and responsive breakpoints.",
+      "expected_tools": [
+        "layout_flex_engine",
+        "wireframe_renderer"
+      ],
+      "sample_output": "Multi-pane layout specification generated: Zone A (280px fixed), Zone B (flex-1 min 600px), Zone C (320px collapsible)."
+    },
+    {
+      "id": "design-4",
+      "title": "Accessible Color Contrast Audit Matrix",
+      "category": "Color Palettes",
+      "description": "Evaluate APCA and WCAG 2.1 color contrast across every text/background pair in the theme.",
+      "mode": "design",
+      "icon_name": "palette",
+      "est_cost": "$0.0012 (Small Model)",
+      "tags": [
+        "Accessibility",
+        "Contrast",
+        "APCA"
+      ],
+      "prompt": "Audit the palette contrast for disabled, hover, and active states against WCAG AA 4.5:1 standards.",
+      "expected_tools": [
+        "contrast_checker",
+        "color_evaluator"
+      ],
+      "sample_output": "Contrast audit: 18 color combinations tested. All pass WCAG AA (>= 4.5:1) with text-primary achieving 15.2:1 contrast ratio."
+    }
+  ]
+}

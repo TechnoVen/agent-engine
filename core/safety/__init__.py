@@ -10,8 +10,16 @@ Provides:
 """
 
 from core.safety.audit import AuditLogger
+from core.safety.pending import (
+    OperationExpiredError,
+    PendingOperation,
+    PendingOperationRegistry,
+    SecurityBoundaryViolation,
+    get_pending_registry,
+)
 from core.safety.policy import PolicyDecision, PolicyEngine, PolicyRule
 from core.safety.risk import RiskLevel, RiskScorer
+from core.safety.service import ApprovalService, get_approval_service
 
 _GLOBAL_POLICY_ENGINE = None
 
@@ -32,4 +40,11 @@ __all__ = [
     "RiskLevel",
     "AuditLogger",
     "get_policy_engine",
+    "PendingOperation",
+    "PendingOperationRegistry",
+    "get_pending_registry",
+    "OperationExpiredError",
+    "SecurityBoundaryViolation",
+    "ApprovalService",
+    "get_approval_service",
 ]

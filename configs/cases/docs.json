@@ -1,0 +1,97 @@
+{
+  "mode": "docs",
+  "title": "Docs & Writing",
+  "tagline": "Craft high-fidelity specifications, whitepapers, contracts, and technical prose",
+  "badge": "Document Engine",
+  "pipeline": "summarize",
+  "categories": [
+    "All",
+    "Technical Specs",
+    "Contracts & Legal",
+    "PRDs",
+    "Proposals"
+  ],
+  "cases": [
+    {
+      "id": "docs-1",
+      "title": "Write RFC Architecture Specification",
+      "category": "Technical Specs",
+      "description": "Structure a formal RFC with problem statement, system architecture, failure modes, and migration path.",
+      "mode": "docs",
+      "icon_name": "file-text",
+      "est_cost": "$0.0015 (Mid Model)",
+      "tags": [
+        "RFC",
+        "Architecture",
+        "Spec"
+      ],
+      "prompt": "Draft a formal RFC specification for introducing end-to-end cryptographic provenance into local agent workflows.",
+      "expected_tools": [
+        "markdown_ast",
+        "style_linter",
+        "term_consistency_checker"
+      ],
+      "sample_output": "# RFC-042: Cryptographic Provenance in Agent Workflows\n\n## Status: Proposed\n## Author: Agent Engine Team\n\n### 1. Abstract\nThis document describes an Ed25519 signing protocol for all agent-generated artifacts..."
+    },
+    {
+      "id": "docs-2",
+      "title": "SaaS Service Level Agreement (SLA)",
+      "category": "Contracts & Legal",
+      "description": "Generate rigorous enterprise SLA clauses including uptime targets, support tiers, and credit remedies.",
+      "mode": "docs",
+      "icon_name": "file-text",
+      "est_cost": "$0.0020 (Mid Model)",
+      "tags": [
+        "Legal",
+        "SLA",
+        "Enterprise"
+      ],
+      "prompt": "Draft an enterprise software SLA section covering 99.9% uptime commitment, maintenance windows, and tiered credit remedies.",
+      "expected_tools": [
+        "legal_clause_matcher",
+        "compliance_checker"
+      ],
+      "sample_output": "### 4. Service Commitment & Uptime\nProvider will use commercially reasonable efforts to ensure the Service maintains a Monthly Uptime Percentage of at least 99.9% during each calendar month."
+    },
+    {
+      "id": "docs-3",
+      "title": "Product Requirements Document (PRD)",
+      "category": "PRDs",
+      "description": "Synthesize a comprehensive PRD with user personas, success metrics, edge cases, and rollout phases.",
+      "mode": "docs",
+      "icon_name": "file-text",
+      "est_cost": "$0.0018 (Mid Model)",
+      "tags": [
+        "PRD",
+        "Product",
+        "User Stories"
+      ],
+      "prompt": "Draft a comprehensive PRD for an observational memory system that learns user preferences without cloud synchronization.",
+      "expected_tools": [
+        "prd_generator",
+        "user_story_builder"
+      ],
+      "sample_output": "# PRD: Observational Memory Engine\n\n## 1. Objective\nEnable personalized agent responses by extracting durable user preferences from conversation turns with zero cloud data leakage."
+    },
+    {
+      "id": "docs-4",
+      "title": "Commercial Partnership Proposal",
+      "category": "Proposals",
+      "description": "Construct an executive business proposal with value proposition, technical milestones, and governance framework.",
+      "mode": "docs",
+      "icon_name": "file-text",
+      "est_cost": "$0.0022 (Mid Model)",
+      "tags": [
+        "Business",
+        "Partnership",
+        "Executive"
+      ],
+      "prompt": "Write an executive partnership proposal presenting a co-development roadmap for edge-deployed autonomous agents.",
+      "expected_tools": [
+        "executive_summarizer",
+        "table_generator"
+      ],
+      "sample_output": "Executive partnership proposal formatted with shared OKRs, timeline milestones, and intellectual property protections."
+    }
+  ]
+}

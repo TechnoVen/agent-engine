@@ -60,6 +60,15 @@ impl CredentialClient {
         }
     }
 
+    fn authed_req(&self, mut req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let token = crate::sidecar::SidecarSupervisor::get_or_init_ipc_token();
+        if !token.is_empty() {
+            req = req.header("Authorization", format!("Bearer {token}"))
+                     .header("X-IPC-Token", &token);
+        }
+        req
+    }
+
     pub async fn list_credentials(
         &self,
         service: Option<String>,
@@ -69,8 +78,7 @@ impl CredentialClient {
             url = format!("{}?service={}", url, s);
         }
         let res = self
-            .client
-            .get(&url)
+            .authed_req(self.client.get(&url))
             .send()
             .await
             .map_err(|e| e.to_string())?;
@@ -88,8 +96,7 @@ impl CredentialClient {
     ) -> Result<CredentialInfo, String> {
         let url = format!("{}/v1/credentials", self.base_url);
         let res = self
-            .client
-            .post(&url)
+            .authed_req(self.client.post(&url))
             .json(&payload)
             .send()
             .await
@@ -113,8 +120,7 @@ impl CredentialClient {
             self.base_url, service, key, reveal
         );
         let res = self
-            .client
-            .get(&url)
+            .authed_req(self.client.get(&url))
             .send()
             .await
             .map_err(|e| e.to_string())?;
@@ -129,8 +135,7 @@ impl CredentialClient {
     pub async fn delete_credential(&self, service: &str, key: &str) -> Result<bool, String> {
         let url = format!("{}/v1/credentials/{}/{}", self.base_url, service, key);
         let res = self
-            .client
-            .delete(&url)
+            .authed_req(self.client.delete(&url))
             .send()
             .await
             .map_err(|e| e.to_string())?;
@@ -149,8 +154,7 @@ impl CredentialClient {
     ) -> Result<TestCredentialResponse, String> {
         let url = format!("{}/v1/credentials/test", self.base_url);
         let res = self
-            .client
-            .post(&url)
+            .authed_req(self.client.post(&url))
             .json(&payload)
             .send()
             .await

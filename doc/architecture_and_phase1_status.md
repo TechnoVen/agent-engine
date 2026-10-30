@@ -1,10 +1,10 @@
 # Autonomous Agent Engine: Master System Blueprint & Verification Report
 
 > [!NOTE]
-> **Project Location:** [`/home/nadir/agent_engine`](file:///home/nadir/agent_engine)  
-> **Interactive Tutorial Guide:** [`/home/nadir/Documents/agent_engine_guide.html`](file:///home/nadir/Documents/agent_engine_guide.html)  
-> **Streamlit Operations Center:** `http://localhost:8501`
-
+> **Project Location:** [repository root](../)  
+> **Official UI:** Tauri Native Desktop Shell (`apps/desktop`)  
+> **Sidecar API:** `http://127.0.0.1:8000`  
+> **Developer Dashboard:** `make dev-dashboard`  
 ---
 
 ## 1. System Architecture
@@ -13,8 +13,8 @@
 flowchart TD
     subgraph Clients ["Interfaces & IDEs"]
         VSCode["VS Code / Cursor / Claude Desktop"]
-        Goose["Goose AI Developer Assistant"]
-        StreamlitUI["Streamlit Control Center (:8501)"]
+        TauriDesktop["Tauri Native Desktop Shell"]
+        DevDashboard["Developer Dashboard (:tools/dev_dashboard.py)"]
         CLI["Rich Terminal CLI (main.py)"]
     end
 
@@ -72,15 +72,15 @@ flowchart TD
 
 | Component | File Path | Description |
 | :--- | :--- | :--- |
-| **Dynamic Compiler** | [`core/engine.py`](file:///home/nadir/agent_engine/core/engine.py) | Dynamic signature generation and runtime compilation into `ChainOfThought`, `ReAct`, or `Predict`. |
-| **Multi-Model Router** | [`core/router.py`](file:///home/nadir/agent_engine/core/router.py) | Multi-provider router with local health checks (Ollama/llama.cpp) and cloud fallback. |
-| **RAG Vector Memory** | [`core/memory.py`](file:///home/nadir/agent_engine/core/memory.py) | Persistent ChromaDB vector database for embeddings, semantic search, and context retrieval. |
-| **Optimizer Harness** | [`core/harness.py`](file:///home/nadir/agent_engine/core/harness.py) | Automated prompt evaluation and self-improvement compilation via `BootstrapFewShot`. |
-| **Hardened Code Sentry**| [`server/watcher.py`](file:///home/nadir/agent_engine/server/watcher.py) | Filesystem watcher with 3-tier audit chain, loop breaker, and SQLite patch staging database. |
-| **FastMCP Server** | [`server/mcp_server.py`](file:///home/nadir/agent_engine/server/mcp_server.py) | Exposes 7 native IDE tools over stdio for VS Code, Claude Desktop, Cursor, and Goose AI. |
-| **Streamlit Studio** | [`server/dashboard.py`](file:///home/nadir/agent_engine/server/dashboard.py) | Web control center on port 8501 for live telemetry, patch approvals, and speedometers. |
-| **Master CLI** | [`main.py`](file:///home/nadir/agent_engine/main.py) | Unified CLI with `status`, `watch`, `staged`, `apply`, `mcp`, `dashboard`, and `rag-demo`. |
-| **Exclusions Filter** | [`.agentignore`](file:///home/nadir/agent_engine/.agentignore) | Pattern matcher ignoring `.venv/`, `__pycache__/`, database files, and watcher daemons. |
+| **Dynamic Compiler** | [`core/engine.py`](../core/engine.py) | Dynamic signature generation and runtime compilation into `ChainOfThought`, `ReAct`, or `Predict`. |
+| **Multi-Model Router** | [`core/router.py`](../core/router.py) | Multi-provider router with local health checks (Ollama/llama.cpp) and cloud fallback. |
+| **RAG Vector Memory** | [`core/memory.py`](../core/memory.py) | Persistent ChromaDB vector database for embeddings, semantic search, and context retrieval. |
+| **Optimizer Harness** | [`core/harness.py`](../core/harness.py) | Automated prompt evaluation and self-improvement compilation via `BootstrapFewShot`. |
+| **Hardened Code Sentry**| [`server/watcher.py`](../server/watcher.py) | Filesystem watcher with 3-tier audit chain, loop breaker, and SQLite patch staging database. |
+| **FastMCP Server** | [`server/mcp_server.py`](../server/mcp_server.py) | Exposes 7 native IDE tools over stdio for VS Code, Claude Desktop, Cursor, and Goose AI. |
+| **Dev Dashboard** | [`tools/dev_dashboard.py`](../tools/dev_dashboard.py) | Internal developer diagnostic dashboard (`make dev-dashboard`). |
+| **Master CLI** | [`main.py`](../main.py) | Unified CLI with `status`, `watch`, `staged`, `apply`, `mcp`, `dashboard`, and `rag-demo`. |
+| **Exclusions Filter** | [`.agentignore`](../.agentignore) | Pattern matcher ignoring `.venv/`, `__pycache__/`, database files, and watcher daemons. |
 
 ---
 
@@ -122,14 +122,15 @@ tests/test_watcher.py::test_infinite_loop_breaker PASSED                 [100%]
 
 | Command | Purpose |
 | :--- | :--- |
-| `/home/nadir/agent_engine/.venv/bin/python /home/nadir/agent_engine/main.py dashboard` | **Launch Web Dashboard (`http://localhost:8501`)** |
-| `/home/nadir/agent_engine/.venv/bin/python /home/nadir/agent_engine/main.py watch` | **Start Code Sentry (Safe Staging Mode)** |
-| `/home/nadir/agent_engine/.venv/bin/python /home/nadir/agent_engine/main.py watch --auto-apply` | **Start Code Sentry (Auto-Apply Mode)** |
-| `/home/nadir/agent_engine/.venv/bin/python /home/nadir/agent_engine/main.py status` | **Check Health & Provider Status** |
-| `/home/nadir/agent_engine/.venv/bin/python /home/nadir/agent_engine/main.py staged` | **List Staged Patches in SQLite** |
-| `/home/nadir/agent_engine/.venv/bin/python /home/nadir/agent_engine/main.py apply <id>` | **Apply Staged Patch to File** |
-| `/home/nadir/agent_engine/.venv/bin/python /home/nadir/agent_engine/main.py mcp` | **Start FastMCP Server for IDEs** |
-| `/home/nadir/agent_engine/.venv/bin/pytest /home/nadir/agent_engine/tests/ -v` | **Run Full Test Suite** |
+| `make desktop-tauri-dev` | **Launch Official Tauri Native Desktop App** |
+| `.venv/bin/python main.py dev-dashboard` | **Launch Internal Dev Dashboard (`make dev-dashboard`)** |
+| `.venv/bin/python main.py watch` | **Start Code Sentry (Safe Staging Mode)** |
+| `.venv/bin/python main.py watch --auto-apply` | **Start Code Sentry (Auto-Apply Mode)** |
+| `.venv/bin/python main.py status` | **Check Health & Provider Status** |
+| `.venv/bin/python main.py staged` | **List Staged Patches in SQLite** |
+| `.venv/bin/python main.py apply <id>` | **Apply Staged Patch to File** |
+| `.venv/bin/python main.py mcp` | **Start FastMCP Server for IDEs** |
+| `.venv/bin/pytest tests/ -v` | **Run Full Test Suite** |
 
 ---
 
@@ -141,12 +142,12 @@ Add this configuration to your `claude_desktop_config.json` or VS Code / Cursor 
 {
   "mcpServers": {
     "agent-engine": {
-      "command": "/home/nadir/agent_engine/.venv/bin/python",
+      "command": ".venv/bin/python",
       "args": [
-        "/home/nadir/agent_engine/server/mcp_server.py"
+        "server/mcp_server.py"
       ],
       "env": {
-        "PYTHONPATH": "/home/nadir/agent_engine"
+        "PYTHONPATH": "."
       }
     }
   }

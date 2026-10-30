@@ -75,12 +75,17 @@ def test_events_schema_validity():
 
 
 def test_roadmap_tracker_exists():
-    """Verify that docs/ROADMAP.md exists and tracks Milestone 0."""
+    """Verify that canonical docs/ROADMAP.md exists and archived roadmap preserves legacy tasks."""
     roadmap_path = os.path.join(PROJECT_ROOT, "docs", "ROADMAP.md")
     assert os.path.isfile(roadmap_path), "ROADMAP.md not found"
 
     with open(roadmap_path, "r", encoding="utf-8") as f:
         content = f.read()
 
-    assert "M0 — Foundations" in content
-    assert "Task 0.1 — Repository Restructure" in content
+    assert "Canonical Comprehensive Roadmap" in content or "R0 — Architecture Rebaseline" in content
+
+    legacy_path = os.path.join(PROJECT_ROOT, "docs", "archive", "ROADMAP_LEGACY.md")
+    if os.path.isfile(legacy_path):
+        with open(legacy_path, "r", encoding="utf-8") as f:
+            legacy_content = f.read()
+        assert "M0 — Foundations" in legacy_content

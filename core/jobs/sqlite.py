@@ -1,0 +1,1086 @@
+"""core/jobs/sqlite.py
+
+SQLite Implementation of the Canonical JobRepository (Task R4.1).
+Part of Milestone R4 (Task R4.1 - Canonical Job Domain).
+
+Provides robust ACID persistence for Jobs, Attempts, Events, Dependencies,
+Artifact associations, and Schedules with zero dependencies outside the standard library.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from pathlib import Path
+import sqlite3
+import threading
+from typing import Any, Dict, List, Optional, Set
+
+from core.jobs.exceptions import (
+    DependencyCycleError,
+    DuplicateDependencyError,
+    DuplicateOccurrenceError,
+    JobNotFoundError,
+    ScheduleNotFoundError,
+    SelfDependencyError,
+)
+from core.jobs.migrations import apply_job_migrations
+from core.jobs.models import (
+    Job,
+    JobArtifact,
+    JobAttempt,
+    JobAttemptStatus,
+    JobDependency,
+    JobDependencyType,
+    JobEvent,
+    JobEventType,
+    JobSchedule,
+    JobStatus,
+    MissedRunPolicy,
+    OccurrenceStatus,
+    ScheduledOccurrence,
+    ControlIntent,
+    TERMINAL_JOB_STATES,
+    current_timestamp_iso,
+    sanitize_bounded_dict,
+    validate_job_state_transition,
+)
+from core.jobs.repository import JobRepository
+
+logger = logging.getLogger("agent_engine.jobs.sqlite")
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_JOBS_DB_PATH = str(PROJECT_ROOT / "data" / "agent_engine.db")
+
+
+class SQLiteJobRepository(JobRepository):
+    """Thread-safe SQLite repository implementing the canonical JobRepository contract.
+
+    Deletion Policy (Carry-Forward Durability Invariant):
+    Public runtime code MUST NOT hard-delete jobs or casually erase attempts, lifecycle events,
+    execution bindings, or artifacts. Normal lifecycle transitions are strictly state-based.
+    Hard deletion via database cascades is strictly restricted to unit tests and administrative
+    retention purge routines.
+    """
+
+    def __init__(self, db_path: Optional[str] = None):
+        self.db_path = db_path or os.getenv("SQLITE_DB_PATH") or DEFAULT_JOBS_DB_PATH
+        self._is_memory = self.db_path == ":memory:"
+        self._memory_conn: Optional[sqlite3.Connection] = None
+        self._lock = threading.RLock()
+
+        if not self._is_memory:
+            os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
+
+        self._init_schema()
+
+    def _get_connection(self) -> sqlite3.Connection:
+        if self._is_memory:
+            if self._memory_conn is None:
+                self._memory_conn = sqlite3.connect(":memory:", check_same_thread=False)
+                self._memory_conn.row_factory = sqlite3.Row
+                self._memory_conn.execute("PRAGMA foreign_keys = ON;")
+            return self._memory_conn
+
+        conn = sqlite3.connect(self.db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("PRAGMA foreign_keys = ON;")
+        return conn
+
+    def _init_schema(self) -> None:
+        with self._lock:
+            conn = self._get_connection()
+            apply_job_migrations(conn)
+            if not self._is_memory:
+                conn.close()
+
+    def close(self) -> None:
+        """Close any cached memory or file connections."""
+        with self._lock:
+            if self._memory_conn is not None:
+                self._memory_conn.close()
+                self._memory_conn = None
+
+    # --------------------------------------------------------------------------
+    # Job CRUD
+    # --------------------------------------------------------------------------
+
+    def _insert_event(self, cursor: sqlite3.Cursor, event: JobEvent) -> JobEvent:
+        """Atomically insert an audit event with a monotonic per-job sequence number."""
+        cursor.execute(
+            "SELECT COALESCE(MAX(sequence_number), 0) + 1 FROM job_events WHERE job_id = ?",
+            (event.job_id,),
+        )
+        event.sequence_number = cursor.fetchone()[0]
+        cursor.execute(
+            """
+            INSERT INTO job_events (
+                event_id, job_id, attempt_id, event_type, sequence_number, timestamp, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event.event_id,
+                event.job_id,
+                event.attempt_id,
+                event.event_type.value,
+                event.sequence_number,
+                event.timestamp,
+                json.dumps(sanitize_bounded_dict(event.metadata)),
+            ),
+        )
+        return event
+
+    def create_job(self, job: Job) -> Job:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    cursor = conn.cursor()
+                    # Sanitize summary metadata to guarantee secret prevention
+                    clean_summary = sanitize_bounded_dict(job.payload_summary)
+                    cursor.execute(
+                        """
+                        INSERT INTO jobs (
+                            job_id, job_type, status, payload_reference,
+                            payload_summary_json, created_by, project_id,
+                            schedule_id, policy_context_id, created_at,
+                            updated_at, completed_at,
+                            control_intent, control_generation, timeout_seconds,
+                            timeout_at, prior_status_before_pause
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            job.job_id,
+                            job.job_type,
+                            job.status.value,
+                            job.payload_reference,
+                            json.dumps(clean_summary),
+                            job.created_by,
+                            job.project_id,
+                            job.schedule_id,
+                            job.policy_context_id,
+                            job.created_at,
+                            job.updated_at,
+                            job.completed_at,
+                            job.control_intent.value,
+                            job.control_generation,
+                            job.timeout_seconds,
+                            job.timeout_at,
+                            (
+                                job.prior_status_before_pause.value
+                                if job.prior_status_before_pause
+                                else None
+                            ),
+                        ),
+                    )
+
+                    # Append initial lifecycle event in same atomic transaction
+                    init_event = JobEvent(
+                        job_id=job.job_id,
+                        event_type=JobEventType.JOB_CREATED,
+                        timestamp=job.created_at,
+                        metadata={
+                            "job_type": job.job_type,
+                            "created_by": job.created_by,
+                            "initial_status": job.status.value,
+                        },
+                    )
+                    self._insert_event(cursor, init_event)
+                return job
+
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_job(self, job_id: str) -> Optional[Job]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT *
+                    FROM jobs WHERE job_id = ?
+                    """,
+                    (job_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                return self._row_to_job(row)
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def update_state(
+        self,
+        job_id: str,
+        new_status: JobStatus,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Job:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT status FROM jobs WHERE job_id = ?", (job_id,))
+                    row = cursor.fetchone()
+                    if not row:
+                        raise JobNotFoundError(f"Job {job_id} does not exist.")
+
+                    current_status = JobStatus(row["status"])
+                    validate_job_state_transition(current_status, new_status)
+
+                    now_iso = current_timestamp_iso()
+                    completed_at = now_iso if new_status in TERMINAL_JOB_STATES else None
+
+                    cursor.execute(
+                        """
+                        UPDATE jobs
+                        SET status = ?, updated_at = ?, completed_at = COALESCE(completed_at, ?)
+                        WHERE job_id = ?
+                        """,
+                        (new_status.value, now_iso, completed_at, job_id),
+                    )
+
+                    # Append event in the same atomic transaction
+                    event_meta = {
+                        "from_status": current_status.value,
+                        "to_status": new_status.value,
+                    }
+                    if metadata:
+                        event_meta.update(metadata)
+
+                    state_event = JobEvent(
+                        job_id=job_id,
+                        event_type=JobEventType.JOB_STATE_CHANGED,
+                        timestamp=now_iso,
+                        metadata=event_meta,
+                    )
+                    self._insert_event(cursor, state_event)
+
+                return self.get_job(job_id)  # type: ignore[return-value]
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_jobs(
+        self,
+        project_id: Optional[str] = None,
+        status: Optional[JobStatus] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[Job]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                query = """
+                    SELECT *
+                    FROM jobs
+                    WHERE 1=1
+                """
+                params: List[Any] = []
+                if project_id is not None:
+                    query += " AND project_id = ?"
+                    params.append(project_id)
+                if status is not None:
+                    query += " AND status = ?"
+                    params.append(status.value)
+
+                query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                params.extend([limit, offset])
+
+                cursor.execute(query, params)
+                return [self._row_to_job(r) for r in cursor.fetchall()]
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    # --------------------------------------------------------------------------
+    # Job Attempts
+    # --------------------------------------------------------------------------
+
+    def create_attempt(
+        self,
+        job_id: str,
+        execution_id: Optional[str] = None,
+        worker_id: Optional[str] = None,
+        lease_generation: Optional[int] = None,
+    ) -> JobAttempt:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT status FROM jobs WHERE job_id = ?", (job_id,))
+                    if not cursor.fetchone():
+                        raise JobNotFoundError(f"Job {job_id} not found.")
+
+                    # Calculate next monotonic attempt number atomically within transaction
+                    cursor.execute(
+                        "SELECT COALESCE(MAX(attempt_number), 0) + 1 FROM job_attempts WHERE job_id = ?",
+                        (job_id,),
+                    )
+                    next_attempt_number = cursor.fetchone()[0]
+
+                    attempt_lease_gen = lease_generation if lease_generation is not None else 0
+                    attempt = JobAttempt(
+                        job_id=job_id,
+                        attempt_number=next_attempt_number,
+                        execution_id=execution_id,
+                        status=JobAttemptStatus.PENDING,
+                        worker_id=worker_id,
+                        lease_generation=attempt_lease_gen,
+                        started_at=current_timestamp_iso(),
+                    )
+
+                    cursor.execute(
+                        """
+                        INSERT INTO job_attempts (
+                            attempt_id, job_id, attempt_number, execution_id,
+                            status, worker_id, lease_generation, started_at, finished_at,
+                            failure_classification, failure_message
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            attempt.attempt_id,
+                            attempt.job_id,
+                            attempt.attempt_number,
+                            attempt.execution_id,
+                            attempt.status.value,
+                            attempt.worker_id,
+                            attempt_lease_gen,
+                            attempt.started_at,
+                            attempt.finished_at,
+                            attempt.failure_classification,
+                            attempt.failure_message,
+                        ),
+                    )
+
+                    # Append attempt event
+                    attempt_metadata: Dict[str, Any] = {
+                        "attempt_number": attempt.attempt_number,
+                        "execution_id": attempt.execution_id,
+                    }
+                    if worker_id:
+                        attempt_metadata["worker_id"] = worker_id
+                    if lease_generation is not None:
+                        attempt_metadata["lease_generation"] = lease_generation
+
+                    attempt_event = JobEvent(
+                        job_id=job_id,
+                        attempt_id=attempt.attempt_id,
+                        event_type=JobEventType.ATTEMPT_CREATED,
+                        timestamp=attempt.started_at,
+                        metadata=attempt_metadata,
+                    )
+                    self._insert_event(cursor, attempt_event)
+
+                    # If execution_id was bound, emit explicit event
+                    if execution_id:
+                        exec_event = JobEvent(
+                            job_id=job_id,
+                            attempt_id=attempt.attempt_id,
+                            event_type=JobEventType.EXECUTION_BOUND,
+                            timestamp=attempt.started_at,
+                            metadata={"execution_id": execution_id},
+                        )
+                        self._insert_event(cursor, exec_event)
+
+                return attempt
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_attempt(self, attempt_id: str) -> Optional[JobAttempt]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT attempt_id, job_id, attempt_number, execution_id,
+                           status, worker_id, lease_generation,
+                           started_at, finished_at, failure_classification, failure_message
+                    FROM job_attempts WHERE attempt_id = ?
+                    """,
+                    (attempt_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                return self._row_to_attempt(row)
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def update_attempt_status(
+        self,
+        attempt_id: str,
+        status: JobAttemptStatus,
+        finished_at: Optional[str] = None,
+        failure_classification: Optional[str] = None,
+        failure_message: Optional[str] = None,
+    ) -> JobAttempt:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT attempt_id FROM job_attempts WHERE attempt_id = ?", (attempt_id,)
+                    )
+                    if not cursor.fetchone():
+                        raise JobNotFoundError(f"Attempt {attempt_id} does not exist.")
+
+                    cursor.execute(
+                        """
+                        UPDATE job_attempts
+                        SET status = ?, finished_at = ?, failure_classification = ?, failure_message = ?
+                        WHERE attempt_id = ?
+                        """,
+                        (
+                            status.value,
+                            finished_at,
+                            failure_classification,
+                            failure_message,
+                            attempt_id,
+                        ),
+                    )
+                return self.get_attempt(attempt_id)  # type: ignore[return-value]
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_attempts(self, job_id: str) -> List[JobAttempt]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT attempt_id, job_id, attempt_number, execution_id,
+                           status, worker_id, lease_generation,
+                           started_at, finished_at, failure_classification, failure_message
+                    FROM job_attempts WHERE job_id = ?
+                    ORDER BY attempt_number ASC
+                    """,
+                    (job_id,),
+                )
+                return [self._row_to_attempt(r) for r in cursor.fetchall()]
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    # --------------------------------------------------------------------------
+    # Job Events
+    # --------------------------------------------------------------------------
+
+    def append_event(self, event: JobEvent) -> JobEvent:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT job_id FROM jobs WHERE job_id = ?", (event.job_id,))
+                    if not cursor.fetchone():
+                        raise JobNotFoundError(f"Job {event.job_id} does not exist.")
+
+                    self._insert_event(cursor, event)
+                return event
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_events(
+        self,
+        job_id: str,
+        attempt_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[JobEvent]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                query = """
+                    SELECT event_id, job_id, attempt_id, event_type, sequence_number, timestamp, metadata_json
+                    FROM job_events WHERE job_id = ?
+                """
+                params: List[Any] = [job_id]
+                if attempt_id is not None:
+                    query += " AND attempt_id = ?"
+                    params.append(attempt_id)
+                query += " ORDER BY timestamp ASC, sequence_number ASC, event_id ASC LIMIT ?"
+                params.append(limit)
+
+                cursor.execute(query, params)
+                return [self._row_to_event(r) for r in cursor.fetchall()]
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    # --------------------------------------------------------------------------
+    # Job Dependencies
+    # --------------------------------------------------------------------------
+
+    def add_dependency(self, dependency: JobDependency) -> JobDependency:
+        if dependency.job_id == dependency.depends_on_job_id:
+            raise SelfDependencyError(f"Job {dependency.job_id} cannot depend on itself.")
+
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    cursor = conn.cursor()
+                    # Verify both jobs exist
+                    cursor.execute("SELECT job_id FROM jobs WHERE job_id = ?", (dependency.job_id,))
+                    if not cursor.fetchone():
+                        raise JobNotFoundError(f"Job {dependency.job_id} does not exist.")
+                    cursor.execute(
+                        "SELECT job_id FROM jobs WHERE job_id = ?", (dependency.depends_on_job_id,)
+                    )
+                    if not cursor.fetchone():
+                        raise JobNotFoundError(
+                            f"Prerequisite job {dependency.depends_on_job_id} does not exist."
+                        )
+
+                    # Check for duplicate
+                    cursor.execute(
+                        "SELECT dependency_id FROM job_dependencies WHERE job_id = ? AND depends_on_job_id = ?",
+                        (dependency.job_id, dependency.depends_on_job_id),
+                    )
+                    if cursor.fetchone():
+                        raise DuplicateDependencyError(
+                            f"Dependency from {dependency.job_id} to {dependency.depends_on_job_id} already exists."
+                        )
+
+                    # Cycle Detection via Depth-First Search on existing graph:
+                    # If depends_on_job_id can reach job_id, adding job_id -> depends_on_job_id creates a cycle!
+                    if self._check_path_exists(
+                        cursor, start_id=dependency.depends_on_job_id, target_id=dependency.job_id
+                    ):
+                        raise DependencyCycleError(
+                            f"Adding dependency from {dependency.job_id} to {dependency.depends_on_job_id} creates a cycle."
+                        )
+
+                    cursor.execute(
+                        """
+                        INSERT INTO job_dependencies (
+                            dependency_id, job_id, depends_on_job_id, dependency_type, created_at
+                        ) VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            dependency.dependency_id,
+                            dependency.job_id,
+                            dependency.depends_on_job_id,
+                            dependency.dependency_type.value,
+                            dependency.created_at,
+                        ),
+                    )
+
+                    # Append audit event in same transaction
+                    dep_event = JobEvent(
+                        job_id=dependency.job_id,
+                        event_type=JobEventType.DEPENDENCY_ADDED,
+                        timestamp=dependency.created_at,
+                        metadata={
+                            "depends_on_job_id": dependency.depends_on_job_id,
+                            "dependency_type": dependency.dependency_type.value,
+                        },
+                    )
+                    self._insert_event(cursor, dep_event)
+
+                return dependency
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def _check_path_exists(self, cursor: sqlite3.Cursor, start_id: str, target_id: str) -> bool:
+        """Perform DFS to check if start_id can reach target_id through existing dependencies."""
+        visited: Set[str] = set()
+        stack: List[str] = [start_id]
+
+        while stack:
+            current = stack.pop()
+            if current == target_id:
+                return True
+            if current in visited:
+                continue
+            visited.add(current)
+
+            cursor.execute(
+                "SELECT depends_on_job_id FROM job_dependencies WHERE job_id = ?", (current,)
+            )
+            for (neighbor,) in cursor.fetchall():
+                if neighbor not in visited:
+                    stack.append(neighbor)
+
+        return False
+
+    def list_dependencies(self, job_id: str) -> List[JobDependency]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT dependency_id, job_id, depends_on_job_id, dependency_type, created_at
+                    FROM job_dependencies WHERE job_id = ?
+                    ORDER BY created_at ASC
+                    """,
+                    (job_id,),
+                )
+                return [self._row_to_dependency(r) for r in cursor.fetchall()]
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    # --------------------------------------------------------------------------
+    # Job Artifacts
+    # --------------------------------------------------------------------------
+
+    def attach_artifact(self, artifact: JobArtifact) -> JobArtifact:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT job_id FROM jobs WHERE job_id = ?", (artifact.job_id,))
+                    if not cursor.fetchone():
+                        raise JobNotFoundError(f"Job {artifact.job_id} does not exist.")
+
+                    cursor.execute(
+                        """
+                        INSERT INTO job_artifacts (
+                            job_artifact_id, job_id, artifact_id, role, created_at
+                        ) VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (
+                            artifact.job_artifact_id,
+                            artifact.job_id,
+                            artifact.artifact_id,
+                            artifact.role,
+                            artifact.created_at,
+                        ),
+                    )
+
+                    art_event = JobEvent(
+                        job_id=artifact.job_id,
+                        event_type=JobEventType.ARTIFACT_ATTACHED,
+                        timestamp=artifact.created_at,
+                        metadata={
+                            "artifact_id": artifact.artifact_id,
+                            "role": artifact.role,
+                        },
+                    )
+                    self._insert_event(cursor, art_event)
+                return artifact
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_artifacts(self, job_id: str) -> List[JobArtifact]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT job_artifact_id, job_id, artifact_id, role, created_at
+                    FROM job_artifacts WHERE job_id = ?
+                    ORDER BY created_at ASC
+                    """,
+                    (job_id,),
+                )
+                return [self._row_to_artifact(r) for r in cursor.fetchall()]
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    # --------------------------------------------------------------------------
+    # Job Schedules
+    # --------------------------------------------------------------------------
+
+    def create_schedule(self, schedule: JobSchedule) -> JobSchedule:
+        summary_json = json.dumps(schedule.payload_summary)
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    conn.execute(
+                        """
+                        INSERT INTO job_schedules (
+                            schedule_id, job_template_id, job_type, cron_expression,
+                            timezone, enabled, schedule_generation, missed_run_policy,
+                            payload_reference, payload_summary_json, created_by, project_id,
+                            timeout_seconds, next_run_at, last_run_at, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            schedule.schedule_id,
+                            schedule.job_template_id,
+                            schedule.job_type,
+                            schedule.cron_expression,
+                            schedule.timezone,
+                            1 if schedule.enabled else 0,
+                            schedule.schedule_generation,
+                            schedule.missed_run_policy.value
+                            if hasattr(schedule.missed_run_policy, "value")
+                            else str(schedule.missed_run_policy),
+                            schedule.payload_reference,
+                            summary_json,
+                            schedule.created_by,
+                            schedule.project_id,
+                            schedule.timeout_seconds,
+                            schedule.next_run_at,
+                            schedule.last_run_at,
+                            schedule.created_at,
+                            schedule.updated_at,
+                        ),
+                    )
+                return schedule
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_schedule(self, schedule_id: str) -> Optional[JobSchedule]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT schedule_id, job_template_id, job_type, cron_expression,
+                           timezone, enabled, schedule_generation, missed_run_policy,
+                           payload_reference, payload_summary_json, created_by, project_id,
+                           timeout_seconds, next_run_at, last_run_at, created_at, updated_at
+                    FROM job_schedules WHERE schedule_id = ?
+                    """,
+                    (schedule_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                return self._row_to_schedule(row)
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_schedules(self, enabled_only: bool = False) -> List[JobSchedule]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                query = """
+                    SELECT schedule_id, job_template_id, job_type, cron_expression,
+                           timezone, enabled, schedule_generation, missed_run_policy,
+                           payload_reference, payload_summary_json, created_by, project_id,
+                           timeout_seconds, next_run_at, last_run_at, created_at, updated_at
+                    FROM job_schedules
+                """
+                params: List[Any] = []
+                if enabled_only:
+                    query += " WHERE enabled = 1"
+                query += " ORDER BY created_at DESC"
+                cursor.execute(query, params)
+                return [self._row_to_schedule(r) for r in cursor.fetchall()]
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def update_schedule(self, schedule: JobSchedule) -> JobSchedule:
+        summary_json = json.dumps(schedule.payload_summary)
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        UPDATE job_schedules
+                        SET job_template_id = ?,
+                            job_type = ?,
+                            cron_expression = ?,
+                            timezone = ?,
+                            enabled = ?,
+                            schedule_generation = ?,
+                            missed_run_policy = ?,
+                            payload_reference = ?,
+                            payload_summary_json = ?,
+                            created_by = ?,
+                            project_id = ?,
+                            timeout_seconds = ?,
+                            next_run_at = ?,
+                            last_run_at = ?,
+                            updated_at = ?
+                        WHERE schedule_id = ?
+                        """,
+                        (
+                            schedule.job_template_id,
+                            schedule.job_type,
+                            schedule.cron_expression,
+                            schedule.timezone,
+                            1 if schedule.enabled else 0,
+                            schedule.schedule_generation,
+                            schedule.missed_run_policy.value
+                            if hasattr(schedule.missed_run_policy, "value")
+                            else str(schedule.missed_run_policy),
+                            schedule.payload_reference,
+                            summary_json,
+                            schedule.created_by,
+                            schedule.project_id,
+                            schedule.timeout_seconds,
+                            schedule.next_run_at,
+                            schedule.last_run_at,
+                            schedule.updated_at,
+                            schedule.schedule_id,
+                        ),
+                    )
+                    if cursor.rowcount == 0:
+                        raise ScheduleNotFoundError(
+                            f"Schedule {schedule.schedule_id} does not exist."
+                        )
+                return schedule
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def delete_schedule(self, schedule_id: str) -> bool:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "DELETE FROM job_schedules WHERE schedule_id = ?", (schedule_id,)
+                    )
+                    if cursor.rowcount == 0:
+                        raise ScheduleNotFoundError(f"Schedule {schedule_id} does not exist.")
+                return True
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def create_occurrence(self, occurrence: ScheduledOccurrence) -> ScheduledOccurrence:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    try:
+                        conn.execute(
+                            """
+                            INSERT INTO scheduled_occurrences (
+                                occurrence_id, schedule_id, scheduled_for_utc,
+                                scheduled_for_local, schedule_generation, job_id,
+                                materialized_at, status
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                occurrence.occurrence_id,
+                                occurrence.schedule_id,
+                                occurrence.scheduled_for_utc,
+                                occurrence.scheduled_for_local,
+                                occurrence.schedule_generation,
+                                occurrence.job_id,
+                                occurrence.materialized_at,
+                                occurrence.status.value
+                                if hasattr(occurrence.status, "value")
+                                else str(occurrence.status),
+                            ),
+                        )
+                    except sqlite3.IntegrityError as e:
+                        if "UNIQUE constraint failed" in str(e):
+                            raise DuplicateOccurrenceError(
+                                f"Occurrence already materialized for schedule {occurrence.schedule_id} at {occurrence.scheduled_for_utc} (gen {occurrence.schedule_generation})."
+                            ) from e
+                        raise
+                return occurrence
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_occurrence(self, occurrence_id: str) -> Optional[ScheduledOccurrence]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT occurrence_id, schedule_id, scheduled_for_utc,
+                           scheduled_for_local, schedule_generation, job_id,
+                           materialized_at, status
+                    FROM scheduled_occurrences WHERE occurrence_id = ?
+                    """,
+                    (occurrence_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                return self._row_to_occurrence(row)
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_occurrences(
+        self, schedule_id: Optional[str] = None, limit: int = 100
+    ) -> List[ScheduledOccurrence]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                query = """
+                    SELECT occurrence_id, schedule_id, scheduled_for_utc,
+                           scheduled_for_local, schedule_generation, job_id,
+                           materialized_at, status
+                    FROM scheduled_occurrences
+                """
+                params: List[Any] = []
+                if schedule_id is not None:
+                    query += " WHERE schedule_id = ?"
+                    params.append(schedule_id)
+                query += " ORDER BY scheduled_for_utc DESC, occurrence_id DESC LIMIT ?"
+                params.append(limit)
+                cursor.execute(query, params)
+                return [self._row_to_occurrence(r) for r in cursor.fetchall()]
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    # --------------------------------------------------------------------------
+    # Row Mappers
+    # --------------------------------------------------------------------------
+
+    @staticmethod
+    def _row_to_job(row: sqlite3.Row) -> Job:
+        summary_raw = row["payload_summary_json"]
+        summary = json.loads(summary_raw) if summary_raw else {}
+        control_intent_str = row["control_intent"] if "control_intent" in row.keys() else "none"
+        control_gen = row["control_generation"] if "control_generation" in row.keys() else 0
+        timeout_secs = row["timeout_seconds"] if "timeout_seconds" in row.keys() else None
+        timeout_at = row["timeout_at"] if "timeout_at" in row.keys() else None
+        prior_status = (
+            JobStatus(row["prior_status_before_pause"])
+            if "prior_status_before_pause" in row.keys() and row["prior_status_before_pause"]
+            else None
+        )
+        return Job(
+            job_id=row["job_id"],
+            job_type=row["job_type"],
+            status=JobStatus(row["status"]),
+            payload_reference=row["payload_reference"],
+            payload_summary=summary,
+            created_by=row["created_by"],
+            project_id=row["project_id"],
+            schedule_id=row["schedule_id"],
+            policy_context_id=row["policy_context_id"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            completed_at=row["completed_at"],
+            control_intent=ControlIntent(control_intent_str),
+            control_generation=control_gen,
+            timeout_seconds=timeout_secs,
+            timeout_at=timeout_at,
+            prior_status_before_pause=prior_status,
+        )
+
+    @staticmethod
+    def _row_to_attempt(row: sqlite3.Row) -> JobAttempt:
+        worker_id = row["worker_id"] if "worker_id" in row.keys() else None
+        lease_gen = row["lease_generation"] if "lease_generation" in row.keys() else None
+        return JobAttempt(
+            attempt_id=row["attempt_id"],
+            job_id=row["job_id"],
+            attempt_number=row["attempt_number"],
+            execution_id=row["execution_id"],
+            status=JobAttemptStatus(row["status"]),
+            worker_id=worker_id,
+            lease_generation=lease_gen,
+            started_at=row["started_at"],
+            finished_at=row["finished_at"],
+            failure_classification=row["failure_classification"],
+            failure_message=row["failure_message"],
+        )
+
+    @staticmethod
+    def _row_to_event(row: sqlite3.Row) -> JobEvent:
+        meta_raw = row["metadata_json"]
+        meta = json.loads(meta_raw) if meta_raw else {}
+        seq = row["sequence_number"] if "sequence_number" in row.keys() else 0
+        return JobEvent(
+            event_id=row["event_id"],
+            job_id=row["job_id"],
+            attempt_id=row["attempt_id"],
+            event_type=JobEventType(row["event_type"]),
+            sequence_number=seq,
+            timestamp=row["timestamp"],
+            metadata=meta,
+        )
+
+    @staticmethod
+    def _row_to_dependency(row: sqlite3.Row) -> JobDependency:
+        return JobDependency(
+            dependency_id=row["dependency_id"],
+            job_id=row["job_id"],
+            depends_on_job_id=row["depends_on_job_id"],
+            dependency_type=JobDependencyType(row["dependency_type"]),
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _row_to_artifact(row: sqlite3.Row) -> JobArtifact:
+        return JobArtifact(
+            job_artifact_id=row["job_artifact_id"],
+            job_id=row["job_id"],
+            artifact_id=row["artifact_id"],
+            role=row["role"],
+            created_at=row["created_at"],
+        )
+
+    @staticmethod
+    def _row_to_schedule(row: sqlite3.Row) -> JobSchedule:
+        row_keys = row.keys()
+        summary_raw = row["payload_summary_json"] if "payload_summary_json" in row_keys else "{}"
+        summary = json.loads(summary_raw) if summary_raw else {}
+        generation = row["schedule_generation"] if "schedule_generation" in row_keys else 1
+        missed_policy_val = row["missed_run_policy"] if "missed_run_policy" in row_keys else "skip"
+        created_by_val = row["created_by"] if "created_by" in row_keys else "authority:local_user"
+        project_id_val = row["project_id"] if "project_id" in row_keys else None
+        timeout_secs = row["timeout_seconds"] if "timeout_seconds" in row_keys else None
+        next_run = row["next_run_at"] if "next_run_at" in row_keys else None
+        last_run = row["last_run_at"] if "last_run_at" in row_keys else None
+
+        return JobSchedule(
+            schedule_id=row["schedule_id"],
+            job_template_id=row["job_template_id"],
+            job_type=row["job_type"],
+            cron_expression=row["cron_expression"],
+            timezone=row["timezone"],
+            enabled=bool(row["enabled"]),
+            schedule_generation=generation,
+            missed_run_policy=MissedRunPolicy(missed_policy_val),
+            payload_reference=row["payload_reference"],
+            payload_summary=summary,
+            created_by=created_by_val,
+            project_id=project_id_val,
+            timeout_seconds=timeout_secs,
+            next_run_at=next_run,
+            last_run_at=last_run,
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _row_to_occurrence(row: sqlite3.Row) -> ScheduledOccurrence:
+        return ScheduledOccurrence(
+            occurrence_id=row["occurrence_id"],
+            schedule_id=row["schedule_id"],
+            scheduled_for_utc=row["scheduled_for_utc"],
+            scheduled_for_local=row["scheduled_for_local"],
+            schedule_generation=row["schedule_generation"],
+            job_id=row["job_id"],
+            materialized_at=row["materialized_at"],
+            status=OccurrenceStatus(row["status"]),
+        )

@@ -192,6 +192,40 @@ class AuditLogRecord:
         }
 
 
+@dataclass
+class ApprovalRecord:
+    approval_id: str
+    capability: str
+    operation_digest: str
+    token_verifier: str
+    issued_at: float
+    expires_at: float
+    execution_id: Optional[str] = None
+    actor: str = "local_operator"
+    digest_version: int = 1
+    decision: str = "approved"
+    status: str = "pending"
+    consumed_at: Optional[float] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "approval_id": self.approval_id,
+            "execution_id": self.execution_id,
+            "actor": self.actor,
+            "capability": self.capability,
+            "operation_digest": self.operation_digest,
+            "digest_version": self.digest_version,
+            "token_verifier": self.token_verifier,
+            "issued_at": self.issued_at,
+            "expires_at": self.expires_at,
+            "decision": self.decision,
+            "status": self.status,
+            "consumed_at": self.consumed_at,
+            "metadata": self.metadata,
+        }
+
+
 class StorageBackend(ABC):
     """Abstract base repository for all Agent Engine persistent state."""
 
@@ -432,11 +466,241 @@ class StorageBackend(ABC):
     def list_audit_logs(
         self,
         limit: int = 50,
+        offset: int = 0,
         decision: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        tool_name: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Retrieve recent safety audit logs."""
+        """Retrieve recent safety audit logs with filtering and pagination."""
         pass
+
+    @abstractmethod
+    def count_audit_logs(
+        self,
+        decision: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        tool_name: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> int:
+        """Count total matching safety audit logs."""
+        pass
+
+    # --- 8. SCHEDULED TASKS ---
+    def create_scheduled_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        """Create and persist a scheduled task."""
+        return task
+
+    def get_scheduled_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Get a scheduled task by ID."""
+        return None
+
+    def list_scheduled_tasks(self) -> List[Dict[str, Any]]:
+        """List all scheduled tasks."""
+        return []
+
+    def update_scheduled_task_status(self, task_id: str, status: str) -> Optional[Dict[str, Any]]:
+        """Update the status of a scheduled task."""
+        return None
+
+    def delete_scheduled_task(self, task_id: str) -> bool:
+        """Delete a scheduled task by ID."""
+        return False
+
+    # --- 9. COLLABORATIVE ROOMS ---
+    def create_room(self, room: Dict[str, Any]) -> Dict[str, Any]:
+        """Create and persist a collaborative room."""
+        return room
+
+    def get_room(self, room_id: str) -> Optional[Dict[str, Any]]:
+        """Get a collaborative room by ID."""
+        return None
+
+    def list_rooms(
+        self, project_id: Optional[str] = None, status: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """List collaborative rooms, optionally filtered by project or status."""
+        return []
+
+    def update_room(self, room_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update a collaborative room."""
+        return None
+
+    def delete_room(self, room_id: str) -> bool:
+        """Delete or archive a collaborative room."""
+        return False
+
+    def add_room_participant(self, participant: Dict[str, Any]) -> Dict[str, Any]:
+        """Add or update a room participant."""
+        return participant
+
+    def get_room_participant(self, room_id: str, participant_id: str) -> Optional[Dict[str, Any]]:
+        """Get a participant in a room."""
+        return None
+
+    def list_room_participants(self, room_id: str) -> List[Dict[str, Any]]:
+        """List all participants in a room."""
+        return []
+
+    def update_room_participant(
+        self, room_id: str, participant_id: str, updates: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Update participant role or metadata."""
+        return None
+
+    def remove_room_participant(self, room_id: str, participant_id: str) -> bool:
+        """Remove a participant from a room."""
+        return False
+
+    def create_room_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        """Create and persist a task in a collaborative room."""
+        return task
+
+    def get_room_task(self, room_id: str, task_id: str) -> Optional[Dict[str, Any]]:
+        """Get a room task by ID."""
+        return None
+
+    def list_room_tasks(
+        self,
+        room_id: str,
+        status: Optional[str] = None,
+        assigned_to: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List tasks in a room, optionally filtered by status or assignee."""
+        return []
+
+    def update_room_task(
+        self, room_id: str, task_id: str, updates: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Update a room task."""
+        return None
+
+    def delete_room_task(self, room_id: str, task_id: str) -> bool:
+        """Delete a room task."""
+        return False
+
+    # --- 13. CANONICAL EXECUTIONS (R1.1) ---
+
+    def create_execution(self, execution: Dict[str, Any]) -> Dict[str, Any]:
+        """Create and persist an execution record."""
+        return execution
+
+    def get_execution(self, execution_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve an execution record by primary key."""
+        return None
+
+    def update_execution(
+        self, execution_id: str, updates: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Update an execution record."""
+        return None
+
+    def list_executions(
+        self,
+        project_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """List executions filtered by project, session, or status."""
+        return []
+
+    def record_execution_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist an append-only execution event."""
+        return event
+
+    def get_execution_events(
+        self, execution_id: str, after_sequence_num: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Retrieve ordered event stream for an execution."""
+        return []
+
+    # --- 14. CANONICAL PROJECTS (R1.6) ---
+
+    def create_project(self, project: Dict[str, Any]) -> Dict[str, Any]:
+        """Create and persist a canonical project."""
+        return project
+
+    def get_project(self, project_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve a project by primary key."""
+        return None
+
+    def get_default_project(self) -> Optional[Dict[str, Any]]:
+        """Retrieve the canonical default project."""
+        return None
+
+    def update_project(self, project_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update an existing project."""
+        return None
+
+    def list_projects(self, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+        """List canonical projects with pagination."""
+        return []
+
+    def delete_project(self, project_id: str) -> bool:
+        """Delete a project by primary key."""
+        return False
+
+    # --- 15. CANONICAL ARTIFACTS (R1.10) ---
+
+    def create_artifact(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist a canonical artifact metadata record."""
+        return artifact
+
+    def get_artifact(self, artifact_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve artifact metadata by primary key."""
+        return None
+
+    def list_artifacts_by_execution(
+        self, execution_id: str, include_deleted: bool = False
+    ) -> List[Dict[str, Any]]:
+        """List all artifacts produced or referenced by an execution."""
+        return []
+
+    def list_artifacts_by_project(
+        self, project_id: str, include_deleted: bool = False
+    ) -> List[Dict[str, Any]]:
+        """List all artifacts belonging to a project."""
+        return []
+
+    def update_artifact(
+        self, artifact_id: str, updates: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Update artifact metadata."""
+        return None
+
+    def delete_artifact(self, artifact_id: str) -> bool:
+        """Mark an artifact as deleted and preserve tombstone."""
+        return False
+
+    # --- 16. CANONICAL APPROVALS (R2.4) ---
+
+    def save_approval(self, approval: Dict[str, Any]) -> None:
+        """Persist or update an exact-operation approval record."""
+        pass
+
+    def get_approval(self, approval_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve an approval record by primary key."""
+        return None
+
+    def get_approval_by_verifier(self, token_verifier: str) -> Optional[Dict[str, Any]]:
+        """Retrieve an approval record by token verifier digest."""
+        return None
+
+    def atomic_consume_approval(self, approval_id: str, token_verifier: str, now: float) -> bool:
+        """Atomically transition approval from 'approved' to 'consumed'.
+
+        Returns True if exactly one matching unexpired record was consumed,
+        False if expired, already consumed, mismatched verifier, or missing.
+        """
+        return False
+
+    def list_approvals(
+        self, status: Optional[str] = None, execution_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """List persisted approval records."""
+        return []
 
 
 # Backward-compatible and semantic alias

@@ -17,6 +17,7 @@ from core.storage.base import (
     StorageBackend,
     UserRecord,
 )
+from core.storage.paths import get_private_data_dir
 from core.storage.postgres import PostgresBackend
 from core.storage.sqlite import DEFAULT_SQLITE_PATH, SQLiteBackend
 
@@ -82,6 +83,7 @@ __all__ = [
     "AuditLogRecord",
     "get_storage_backend",
     "get_storage",
+    "get_private_data_dir",
     "reset_storage_backend",
     "DEFAULT_SQLITE_PATH",
     "StorageRepository",

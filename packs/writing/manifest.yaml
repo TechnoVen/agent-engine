@@ -1,0 +1,64 @@
+schema_version: "1.0.0"
+id: "pack-writing"
+name: "Writing Pack"
+version: "0.5.0"
+description: "Structured article authoring pipeline from source notes to outline, draft, style review, claim review, and persistent document artifacts."
+category: "authoring"
+author: "TechnoVen"
+
+permissions:
+  - scope: "fs:read"
+    paths:
+      - "${PROJECT_ROOT}/**"
+    description: "Read project workspace notes, sources, and context files"
+  - scope: "execution:run"
+    description: "Execute model inferences via ExecutionCoordinator"
+  - scope: "artifacts:manage"
+    description: "Persist and retrieve article outlines, drafts, review reports, and final document artifacts via ArtifactService"
+  - scope: "workflows:execute"
+    description: "Orchestrate multi-stage structured article authoring pipeline"
+
+capabilities:
+  - id: "writing_outline"
+    name: "Article Outline Generation"
+    description: "Synthesize source notes and requirements into a structured thesis and section outline"
+    canonical_binding: "core.writing.workflow.ArticleWorkflowService"
+    requires_approval: false
+
+  - id: "writing_draft"
+    name: "Article Draft Generation"
+    description: "Generate comprehensive markdown prose draft aligned with approved outline"
+    canonical_binding: "core.writing.workflow.ArticleWorkflowService"
+    requires_approval: false
+
+  - id: "writing_style_review"
+    name: "Editorial Style Review"
+    description: "Audit draft for clarity, structure, repetition, tone, phrasing, and verbosity"
+    canonical_binding: "core.writing.workflow.ArticleWorkflowService"
+    requires_approval: false
+
+  - id: "writing_draft_revision"
+    name: "Draft Revision"
+    description: "Incorporate accepted style findings into a polished revised draft"
+    canonical_binding: "core.writing.workflow.ArticleWorkflowService"
+    requires_approval: false
+
+  - id: "writing_claim_review"
+    name: "Factual & Claim Review"
+    description: "Audit material assertions against source notes and classify support status"
+    canonical_binding: "core.writing.workflow.ArticleWorkflowService"
+    requires_approval: false
+
+  - id: "writing_article_pipeline"
+    name: "End-to-End Article Pipeline"
+    description: "Full canonical writing pipeline from notes to final verified document artifact"
+    canonical_binding: "core.writing.workflow.ArticleWorkflowService"
+    requires_approval: false
+
+skills: []
+
+workflows: []
+
+evaluations:
+  test_suite: "tests/test_r5_2_writing_pack.py"
+  min_pass_rate: 1.0

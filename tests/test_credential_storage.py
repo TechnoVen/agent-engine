@@ -132,13 +132,13 @@ def test_encrypted_vault_custom_seed(tmp_path):
     """Test that custom AGENT_ENGINE_VAULT_KEY seed secures the vault."""
     vault_file = tmp_path / "custom_seed.vault"
 
-    with patch.dict(os.environ, {"AGENT_ENGINE_VAULT_KEY": "passphrase-alpha"}):
+    with patch.dict(os.environ, {"AGENT_ENGINE_VAULT_KEY": "pass:passphrase-alpha"}):
         vault1 = EncryptedVaultBackend(vault_path=vault_file)
         vault1.set("service", "key", "secret-with-seed-alpha")
         assert vault1.get("service", "key") == "secret-with-seed-alpha"
 
     # Attempt to read with different key seed must fail
-    with patch.dict(os.environ, {"AGENT_ENGINE_VAULT_KEY": "wrong-passphrase"}):
+    with patch.dict(os.environ, {"AGENT_ENGINE_VAULT_KEY": "pass:wrong-passphrase"}):
         vault2 = EncryptedVaultBackend(vault_path=vault_file)
         with pytest.raises(VaultIntegrityError):
             vault2.get("service", "key")
@@ -286,12 +286,10 @@ def test_api_credentials_crud(test_client):
     assert get_data["value"] is None
     assert get_data["revealed"] is False
 
-    # 5. Get credential with reveal=true
+    # 5. Get credential with reveal=true returns 403 Forbidden (reveal eliminated)
     get_rev_res = test_client.get("/v1/credentials/llm/OPENAI_API_KEY?reveal=true")
-    assert get_rev_res.status_code == 200
-    rev_data = get_rev_res.json()
-    assert rev_data["value"] == "sk-proj-supersecretkey9999"
-    assert rev_data["revealed"] is True
+    assert get_rev_res.status_code == 403
+    assert "disabled" in get_rev_res.json()["detail"].lower()
 
     # 6. Delete credential
     del_res = test_client.delete("/v1/credentials/llm/OPENAI_API_KEY")

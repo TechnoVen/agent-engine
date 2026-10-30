@@ -3,7 +3,7 @@ PYTEST ?= .venv/bin/pytest
 RUFF ?= .venv/bin/ruff
 UV ?= uv
 
-.PHONY: all bootstrap verify test lint format clean help desktop-install desktop-build desktop-dev desktop-tauri-dev desktop-bundle-sidecar desktop-sign-sidecar desktop-verify-sidecar
+.PHONY: all bootstrap verify test lint format clean help desktop-install desktop-build desktop-dev desktop-tauri-dev desktop-bundle-sidecar desktop-sign-sidecar desktop-verify-sidecar dev-dashboard
 
 all: verify
 
@@ -15,6 +15,7 @@ help:
 	@echo "  make lint        - Check code formatting and style with ruff"
 	@echo "  make format      - Auto-format code with ruff"
 	@echo "  make clean       - Remove cached files and build artifacts"
+	@echo "  make dev-dashboard          - Start internal developer diagnostic dashboard (tools/dev_dashboard.py)"
 	@echo "  make desktop-install        - Install Tauri/React desktop app dependencies"
 	@echo "  make desktop-build          - Build Tauri/React desktop app frontend"
 	@echo "  make desktop-dev            - Start Vite dev server for desktop app"
@@ -29,8 +30,8 @@ bootstrap:
 	@if [ ! -d ".venv" ]; then \
 		$(UV) venv .venv; \
 	fi
-	@echo "==> Checking dependencies via uv pip..."
-	@$(UV) pip list --python $(PYTHON) > /dev/null 2>&1 || true
+	@echo "==> Syncing dependencies from lockfile via uv sync..."
+	@$(UV) sync --frozen || $(UV) pip install -e .
 	@echo "==> Checking Node / pnpm status..."
 	@which pnpm > /dev/null 2>&1 && echo "pnpm is available: $$(pnpm --version)" || echo "[INFO] pnpm is not installed in current environment; JS packages will build when pnpm is available."
 	@echo "==> Checking Rust / Cargo status..."
@@ -46,11 +47,23 @@ test:
 
 lint:
 	@echo "==> Running ruff lint checks..."
-	@which $(RUFF) > /dev/null 2>&1 && $(RUFF) check . || $(PYTHON) -m ruff check . || echo "[WARN] ruff not found, skipping lint"
+	@if [ -x "$(RUFF)" ]; then \
+		$(RUFF) check . && $(RUFF) format --check .; \
+	elif which ruff > /dev/null 2>&1; then \
+		ruff check . && ruff format --check .; \
+	else \
+		$(PYTHON) -m ruff check . && $(PYTHON) -m ruff format --check .; \
+	fi
 
 format:
 	@echo "==> Running ruff formatting..."
-	@which $(RUFF) > /dev/null 2>&1 && $(RUFF) format . && $(RUFF) check --fix . || echo "[WARN] ruff not found, skipping format"
+	@if [ -x "$(RUFF)" ]; then \
+		$(RUFF) format . && $(RUFF) check --fix .; \
+	elif which ruff > /dev/null 2>&1; then \
+		ruff format . && ruff check --fix .; \
+	else \
+		$(PYTHON) -m ruff format . && $(PYTHON) -m ruff check --fix .; \
+	fi
 
 clean:
 	@echo "==> Cleaning cache and temporary files..."
@@ -95,4 +108,9 @@ desktop-update-manifest:
 desktop-update-server:
 	@echo "==> Starting local mock update feed server..."
 	$(PYTHON) infra/update-server/serve_feed.py --port 8088 --dir dist/updates
+
+dev-dashboard:
+	@echo "==> Starting internal developer diagnostic dashboard (Streamlit)..."
+	@echo "⚠️  NOTE: Developer diagnostic tool only. The sole official user-facing UI is the Tauri Desktop application."
+	$(PYTHON) -m streamlit run tools/dev_dashboard.py
 

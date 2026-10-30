@@ -8,8 +8,19 @@ set -e
 
 CONTEXT_SIZE=${1:-4096}
 PORT=${2:-8080}
-MODEL_PATH="/home/nadir/agent_engine/models/qwen2.5-coder-3b-instruct-q4_k_m.gguf"
-SERVER_BIN="/home/nadir/.local/lib/ollama/llama-server"
+
+PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+MODEL_PATH="${AGENT_ENGINE_MODEL_PATH:-$PROJECT_DIR/models/qwen2.5-coder-3b-instruct-q4_k_m.gguf}"
+
+SERVER_BIN="${LLAMA_SERVER_BIN:-}"
+
+if [ -z "$SERVER_BIN" ]; then
+    SERVER_BIN="$(command -v llama-server 2>/dev/null || true)"
+fi
+
+if [ -z "$SERVER_BIN" ] && [ -x "$HOME/.local/lib/ollama/llama-server" ]; then
+    SERVER_BIN="$HOME/.local/lib/ollama/llama-server"
+fi
 
 echo "⚡ Starting standalone llama-server on port $PORT (Context: $CONTEXT_SIZE tokens)..."
 

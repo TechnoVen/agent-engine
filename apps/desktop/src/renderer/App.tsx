@@ -1,31 +1,122 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Layout } from './shell/Layout';
 import { Home } from './screens/Home';
-import { Mode, ModelTier, SidecarHealth } from './types';
+import { Agent } from './screens/Agent';
+import { Tasks } from './screens/Tasks';
+import { Swarm } from './screens/Swarm';
+import { Workflows } from './screens/Workflows';
+import { Projects } from './screens/Projects';
+import { Settings } from './screens/Settings';
+import { Policies } from './screens/Policies';
+import { Cost } from './screens/Cost';
+import { Skills } from './screens/Skills';
+import { Knowledge } from './screens/Knowledge';
+import { Writing } from './screens/Writing';
+import { Research } from './screens/Research';
+import { Data } from './screens/Data';
+import { Developer } from './screens/Developer';
+import { Models } from './screens/Models';
+import { Approvals } from './screens/Approvals';
+import { Activity } from './screens/Activity';
+import {
+  CodeMode,
+  ResearchMode,
+  DocsMode,
+  SheetsMode,
+  SlidesMode,
+  WebsitesMode,
+  DesignMode,
+  DiagramsMode,
+} from './screens/Modes';
+import { Mode, ModelTier, SidecarHealth, PrivacyBoundary, RoutingObjective } from './types';
 import { sidecarClient } from './api/client';
 import { Sparkles } from 'lucide-react';
+import { resolveRoute, AppRoute } from './routes';
 
 export const App: React.FC = () => {
-  const [activeMode, setActiveMode] = useState<Mode>('home');
+  const [currentRoute, setCurrentRoute] = useState<AppRoute>(() => resolveRoute(window.location.hash));
+  const activeMode = currentRoute.id as Mode;
+
   const [activeModel, setActiveModel] = useState<ModelTier>('instant');
+  const [routingObjective, setRoutingObjective] = useState<RoutingObjective>('balanced');
+  const [privacyBoundary, setPrivacyBoundary] = useState<PrivacyBoundary>('local_only');
+  const [activeSessionId, setActiveSessionId] = useState<string | undefined>('c1');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [health, setHealth] = useState<SidecarHealth>({ status: 'offline' });
+  const [health, setHealth] = useState<SidecarHealth>({ status: 'healthy' });
+  const [isBusy, setIsBusy] = useState(false);
+  const [projectName, setProjectName] = useState('Agent Engine');
+
+  const setActiveMode = (mode: Mode | string) => {
+    const route = resolveRoute(mode);
+    setCurrentRoute(route);
+    if (window.location.hash !== route.path) {
+      window.location.hash = route.path;
+    }
+  };
+
+  const handleNavigate = (route: AppRoute) => {
+    setCurrentRoute(route);
+    if (window.location.hash !== route.path) {
+      window.location.hash = route.path;
+    }
+  };
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      setCurrentRoute(resolveRoute(window.location.hash));
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
 
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Health poll
+  // Health poll and secure IPC token bootstrap
   useEffect(() => {
     let mounted = true;
-    const poll = async () => {
-      const h = await sidecarClient.checkHealth();
-      if (mounted) setHealth(h);
+    let inFlight = false;
+
+    const check = async () => {
+      if (inFlight || document.hidden || sidecarClient.isDesktopConnectionRequired()) return;
+      inFlight = true;
+      try {
+        const h = await sidecarClient.checkHealth();
+        if (mounted) setHealth(h);
+      } finally {
+        inFlight = false;
+      }
     };
 
-    poll();
-    const interval = setInterval(poll, 5000);
+    const initAndPoll = async () => {
+      await sidecarClient.bootstrapIpcToken();
+      await check();
+    };
+
+    initAndPoll();
+    const interval = setInterval(check, 5000);
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden && !sidecarClient.isDesktopConnectionRequired()) {
+        check();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    const unsubscribe = sidecarClient.onDesktopConnectionRequiredChange((required) => {
+      if (required && mounted) {
+        setHealth({
+          status: 'unauthorized',
+          error: 'Desktop connection required (401 Unauthorized): protected polling suspended',
+          timestamp: new Date().toISOString(),
+        });
+      }
+    });
+
     return () => {
       mounted = false;
       clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      unsubscribe();
     };
   }, []);
 
@@ -52,10 +143,189 @@ export const App: React.FC = () => {
   };
 
   const renderActiveScreen = () => {
-    switch (activeMode) {
+    switch (currentRoute.id) {
       case 'home':
         return (
           <Home
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            routingObjective={routingObjective}
+            onSelectRoutingObjective={setRoutingObjective}
+            privacyBoundary={privacyBoundary}
+            onSelectPrivacyBoundary={setPrivacyBoundary}
+            inputRef={chatInputRef}
+            activeSessionId={activeSessionId}
+            onBusyChange={setIsBusy}
+            onProjectNameChange={setProjectName}
+          />
+        );
+      case 'knowledge':
+        return <Knowledge />;
+      case 'writing':
+        return <Writing />;
+      case 'research':
+        return <Research />;
+      case 'data':
+        return <Data />;
+      case 'developer':
+        return <Developer />;
+      case 'models':
+        return <Models />;
+      case 'approvals':
+        return <Approvals />;
+      case 'activity':
+        return <Activity />;
+      case 'agent':
+      case 'profile':
+        return (
+          <Agent
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'tasks':
+        return (
+          <Tasks
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'swarm':
+        return (
+          <Swarm
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'workflows':
+      case 'automations':
+        return (
+          <Workflows
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'projects':
+        return (
+          <Projects
+            onSelectMode={setActiveMode}
+            onSelectSession={setActiveSessionId}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'skills':
+        return (
+          <Skills
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'settings':
+        return (
+          <Settings
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'policies':
+        return (
+          <Policies
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'cost':
+        return (
+          <Cost
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'code':
+        return (
+          <CodeMode
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'deep-research':
+        return (
+          <ResearchMode
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'docs':
+        return (
+          <DocsMode
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'sheets':
+        return (
+          <SheetsMode
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'slides':
+        return (
+          <SlidesMode
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'websites':
+        return (
+          <WebsitesMode
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'design':
+        return (
+          <DesignMode
+            onSelectMode={setActiveMode}
+            activeModel={activeModel}
+            onSelectModel={setActiveModel}
+            inputRef={chatInputRef}
+          />
+        );
+      case 'diagrams':
+        return (
+          <DiagramsMode
             onSelectMode={setActiveMode}
             activeModel={activeModel}
             onSelectModel={setActiveModel}
@@ -69,10 +339,10 @@ export const App: React.FC = () => {
               <Sparkles className="w-7 h-7 text-accent" />
             </div>
             <h2 className="text-xl font-bold text-text-primary capitalize mb-2">
-              {activeMode.replace('-', ' ')} Mode
+              {currentRoute.label}
             </h2>
             <p className="text-sm text-text-secondary max-w-md mb-6 leading-relaxed">
-              Integrated Kimi-style workspace for {activeMode}. Connected to the local-first sidecar engine with automated cost routing.
+              {currentRoute.description || `Workspace for ${currentRoute.label}. Connected to local sidecar engine.`}
             </p>
             <button
               onClick={handleNewChat}
@@ -90,14 +360,25 @@ export const App: React.FC = () => {
 
   return (
     <Layout
+      currentRoute={currentRoute}
       activeMode={activeMode}
       onSelectMode={setActiveMode}
+      onNavigate={handleNavigate}
+      activeSessionId={activeSessionId}
+      onSelectSession={setActiveSessionId}
       activeModel={activeModel}
       onSelectModel={setActiveModel}
+      routingObjective={routingObjective}
+      onSelectRoutingObjective={setRoutingObjective}
+      privacyBoundary={privacyBoundary}
+      onSelectPrivacyBoundary={setPrivacyBoundary}
       sidebarCollapsed={sidebarCollapsed}
       onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
       onNewChat={handleNewChat}
       health={health}
+      isBusy={isBusy}
+      projectName={projectName}
+      onOpenDiagnostics={() => setActiveMode('developer')}
     >
       {renderActiveScreen()}
     </Layout>

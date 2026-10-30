@@ -297,8 +297,20 @@ class PostgresBackend(StorageBackend):
 
             file_path = row._mapping["file_path"]
             patched_code = row._mapping["patched_code"]
+            original_code = row._mapping["original_code"]
 
             if file_path and patched_code is not None:
+                # Stale patch verification (remediates F05):
+                # Prevent destroying intervening edits if file content has changed on disk
+                if os.path.exists(file_path) and original_code is not None:
+                    try:
+                        with open(file_path, "r", encoding="utf-8") as f:
+                            current_content = f.read()
+                        if current_content != original_code:
+                            return False
+                    except Exception:
+                        return False
+
                 os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(patched_code)
@@ -991,22 +1003,31 @@ class PostgresBackend(StorageBackend):
     def list_audit_logs(
         self,
         limit: int = 50,
+        offset: int = 0,
         decision: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        tool_name: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         with self.engine.connect() as conn:
             query = "SELECT * FROM audit_logs"
             conditions = []
-            params: Dict[str, Any] = {"limit": limit}
+            params: Dict[str, Any] = {"limit": limit, "offset": offset}
             if decision:
                 conditions.append("decision = :decision")
                 params["decision"] = decision
+            if risk_level:
+                conditions.append("risk_level = :risk_level")
+                params["risk_level"] = risk_level
+            if tool_name:
+                conditions.append("tool_name ILIKE :tool_name")
+                params["tool_name"] = f"%{tool_name}%"
             if session_id:
                 conditions.append("session_id = :session_id")
                 params["session_id"] = session_id
             if conditions:
                 query += " WHERE " + " AND ".join(conditions)
-            query += " ORDER BY id DESC LIMIT :limit"
+            query += " ORDER BY id DESC LIMIT :limit OFFSET :offset"
 
             result = conn.execute(text(query), params)
             results = []
@@ -1015,3 +1036,32 @@ class PostgresBackend(StorageBackend):
                 data["tool_args"] = json.loads(data.get("tool_args") or "{}")
                 results.append(data)
             return results
+
+    def count_audit_logs(
+        self,
+        decision: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        tool_name: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> int:
+        with self.engine.connect() as conn:
+            query = "SELECT COUNT(*) as count FROM audit_logs"
+            conditions = []
+            params: Dict[str, Any] = {}
+            if decision:
+                conditions.append("decision = :decision")
+                params["decision"] = decision
+            if risk_level:
+                conditions.append("risk_level = :risk_level")
+                params["risk_level"] = risk_level
+            if tool_name:
+                conditions.append("tool_name ILIKE :tool_name")
+                params["tool_name"] = f"%{tool_name}%"
+            if session_id:
+                conditions.append("session_id = :session_id")
+                params["session_id"] = session_id
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+
+            row = conn.execute(text(query), params).fetchone()
+            return int(row.count) if row and row.count else 0

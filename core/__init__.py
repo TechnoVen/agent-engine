@@ -53,10 +53,25 @@ from core.eval import (
     ModelRanking,
     get_golden_dataset,
 )
-from core.templates import SkillTemplate, TemplateManager, load_template_agent
+from core.providers import (
+    ProviderCapabilities,
+    ProviderConfiguration,
+    ProviderDefinition,
+    ProviderHealth,
+    ProviderHealthStatus,
+    ProviderRegistry,
+    get_provider_registry,
+)
 
 
 __all__ = [
+    "ProviderRegistry",
+    "get_provider_registry",
+    "ProviderDefinition",
+    "ProviderCapabilities",
+    "ProviderConfiguration",
+    "ProviderHealth",
+    "ProviderHealthStatus",
     "LowCodeAgent",
     "NodeConfig",
     "DynamicSignatureBuilder",
@@ -100,4 +115,7 @@ __all__ = [
     "RatioAudit",
     "audit_pipeline",
     "profiled_step",
+    "AgentAdapter",
+    "AdapterRegistry",
+    "get_adapter_registry",
 ]

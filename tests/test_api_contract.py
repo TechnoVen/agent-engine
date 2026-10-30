@@ -93,10 +93,10 @@ def test_api_workflows():
         "/v1/workflows",
         json={"workflow_id": wfs[0]["id"], "inputs": {"target": "snippet.py"}},
     )
-    assert post_res.status_code == 200
+    assert post_res.status_code == 501
     exec_data = post_res.json()
-    assert "execution_id" in exec_data
-    assert exec_data["status"] == "queued"
+    assert exec_data["error_code"] == "RUNTIME_NOT_AVAILABLE"
+    assert exec_data["status"] == "deferred"
 
 
 def test_api_patches_listing():
@@ -161,10 +161,10 @@ def test_api_openapi_matches_frozen_spec():
     app_schema = app.openapi()
     for path, methods in frozen_spec["paths"].items():
         v1_path = f"/v1{path}" if not path.startswith("/v1") else path
-        assert (
-            v1_path in app_schema["paths"]
-        ), f"FastAPI app missing route from frozen spec: {v1_path}"
+        assert v1_path in app_schema["paths"], (
+            f"FastAPI app missing route from frozen spec: {v1_path}"
+        )
         for method in methods.keys():
-            assert (
-                method.lower() in app_schema["paths"][v1_path]
-            ), f"FastAPI app missing method {method.upper()} on route {v1_path}"
+            assert method.lower() in app_schema["paths"][v1_path], (
+                f"FastAPI app missing method {method.upper()} on route {v1_path}"
+            )

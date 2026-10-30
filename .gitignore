@@ -27,6 +27,12 @@ data/*.db*
 data/chroma/
 data/*.json
 data/*.vault
+data/*.key
+data/*.token
+data/artifacts/
+data/skills/
+*.token
+*.key
 workspace/
 models/*.gguf
 *.enc
@@ -58,3 +64,6 @@ target/
 **/src-tauri/keys/
 apps/desktop/src-tauri/keys/
 
+
+# Machine-generated local configuration
+generated/

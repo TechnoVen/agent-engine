@@ -49,6 +49,7 @@ class RouterConfigFile:
     circuit_breaker: CircuitBreakerConfig = field(default_factory=CircuitBreakerConfig)
     health_check: HealthCheckConfig = field(default_factory=HealthCheckConfig)
     cost_ceiling: CostCeilingConfig = field(default_factory=CostCeilingConfig)
+    default_objective: str = "balanced"
 
 
 def load_router_config(config_path: Path | str | None = None) -> RouterConfigFile:
@@ -120,10 +121,14 @@ def load_router_config(config_path: Path | str | None = None) -> RouterConfigFil
         enforce_ceiling=bool(cc_data.get("enforce_ceiling", False)),
     )
 
+    # Routing objective
+    default_obj = os.getenv("ROUTING_OBJECTIVE", data.get("default_objective", "balanced"))
+
     return RouterConfigFile(
         default_priority=default_priority,
         task_preferences=task_prefs,
         circuit_breaker=cb_config,
         health_check=hc_config,
         cost_ceiling=cc_config,
+        default_objective=default_obj,
     )

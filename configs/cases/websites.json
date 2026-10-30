@@ -1,0 +1,98 @@
+{
+  "mode": "websites",
+  "title": "Websites & Apps",
+  "tagline": "Scaffold modern web apps, accessible landing pages, and responsive components",
+  "badge": "Web Engine",
+  "pipeline": "code_fix",
+  "categories": [
+    "All",
+    "Landing Pages",
+    "Dashboards",
+    "Component Libraries",
+    "Full Stack"
+  ],
+  "cases": [
+    {
+      "id": "web-1",
+      "title": "High-Converting Dark-Mode Landing Page",
+      "category": "Landing Pages",
+      "description": "Generate a modern Tailwind CSS + React landing page with hero, social proof, feature grid, and pricing.",
+      "mode": "websites",
+      "icon_name": "globe",
+      "est_cost": "$0.0022 (Mid Model)",
+      "tags": [
+        "Tailwind",
+        "React",
+        "LandingPage"
+      ],
+      "prompt": "Generate a modern dark-mode landing page in React and Tailwind CSS featuring a hero banner, animated feature cards, and clean typography.",
+      "expected_tools": [
+        "react_scaffolder",
+        "tailwind_styler",
+        "a11y_auditor"
+      ],
+      "sample_output": "```tsx\nexport const HeroSection = () => (\n  <div className=\"min-h-screen bg-[#0a0a0a] text-white flex flex-col items-center justify-center px-6\">\n    <h1 className=\"text-5xl font-extrabold tracking-tight\">Local AI. Zero Cloud Leaks.</h1>\n  </div>\n);\n```"
+    },
+    {
+      "id": "web-2",
+      "title": "Analytics Dashboard with Real-Time Charts",
+      "category": "Dashboards",
+      "description": "Construct an interactive dashboard layout with metric cards, latency gauges, and Recharts integration.",
+      "mode": "websites",
+      "icon_name": "globe",
+      "est_cost": "$0.0025 (Mid Model)",
+      "tags": [
+        "Dashboard",
+        "Recharts",
+        "Analytics"
+      ],
+      "prompt": "Build a responsive analytics dashboard in React with metric summary tiles, token throughput chart, and dark mode design tokens.",
+      "expected_tools": [
+        "react_scaffolder",
+        "recharts_generator"
+      ],
+      "sample_output": "Dashboard component created with 4 KPI cards (Tokens/sec, Cost saved, Cache hit rate, Active nodes) and responsive chart containers."
+    },
+    {
+      "id": "web-3",
+      "title": "Accessible WCAG 2.1 Component Library",
+      "category": "Component Libraries",
+      "description": "Create accessible UI components (Modal, Dropdown, Tabs) with ARIA roles and keyboard traps.",
+      "mode": "websites",
+      "icon_name": "globe",
+      "est_cost": "$0.0016 (Small Model)",
+      "tags": [
+        "A11y",
+        "ARIA",
+        "Components"
+      ],
+      "prompt": "Implement an accessible Modal dialog in React with focus-trapping, Esc keyboard listener, and proper ARIA dialog attributes.",
+      "expected_tools": [
+        "a11y_auditor",
+        "component_tester"
+      ],
+      "sample_output": "Accessible Modal implemented: handles Escape key, restores activeElement focus upon close, role='dialog' and aria-modal='true'."
+    },
+    {
+      "id": "web-4",
+      "title": "Full-Stack Local SQLite + FastAPI Interface",
+      "category": "Full Stack",
+      "description": "Scaffold a complete local CRUD interface connecting React frontend to Python FastAPI endpoints.",
+      "mode": "websites",
+      "icon_name": "globe",
+      "est_cost": "$0.0030 (Mid Model)",
+      "tags": [
+        "FullStack",
+        "FastAPI",
+        "React"
+      ],
+      "prompt": "Scaffold a full-stack CRUD view for managing background tasks, featuring optimistic UI updates and FastAPI backend routes.",
+      "expected_tools": [
+        "fastapi_scaffolder",
+        "react_scaffolder",
+        "type_generator"
+      ],
+      "sample_output": "Full-stack module scaffolded: FastAPI router with Pydantic validation and React custom hook with optimistic UI cache."
+    }
+  ]
+}

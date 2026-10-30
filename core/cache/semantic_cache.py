@@ -17,11 +17,15 @@ import os
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 import chromadb
 
 logger = logging.getLogger(__name__)
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_CHROMA_DIR = str(PROJECT_ROOT / "data" / "chroma")
 
 # Default TTL policies per task type (in seconds)
 DEFAULT_TASK_TYPE_TTLS: Dict[str, int] = {
@@ -166,7 +170,7 @@ class SemanticCache:
             self.client = chromadb.EphemeralClient()
         else:
             self.persist_directory = persist_directory or os.getenv(
-                "CHROMA_PERSIST_DIR", "/home/nadir/agent_engine/data/chroma"
+                "CHROMA_PERSIST_DIR", DEFAULT_CHROMA_DIR
             )
             os.makedirs(self.persist_directory, exist_ok=True)
             self.client = chromadb.PersistentClient(path=self.persist_directory)

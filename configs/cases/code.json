@@ -1,0 +1,100 @@
+{
+  "mode": "code",
+  "title": "Code Studio",
+  "tagline": "Architect, refactor, and test software with AST precision and zero-trust safety",
+  "badge": "Code Engine",
+  "pipeline": "code_fix",
+  "categories": [
+    "All",
+    "Refactoring",
+    "Testing",
+    "Architecture",
+    "Security"
+  ],
+  "cases": [
+    {
+      "id": "code-1",
+      "title": "AST Refactor & Clean Architecture",
+      "category": "Refactoring",
+      "description": "Eliminate duplicate types, optimize imports, and enforce clean layered interfaces across modules.",
+      "mode": "code",
+      "icon_name": "code",
+      "est_cost": "$0.0008 (CODE Tier)",
+      "tags": [
+        "AST",
+        "TypeScript",
+        "Refactor"
+      ],
+      "prompt": "Analyze current TypeScript modules, identify coupling antipatterns, and propose an AST-safe refactoring diff with zero runtime regression.",
+      "expected_tools": [
+        "ast_grep",
+        "file_patcher",
+        "typescript_linter"
+      ],
+      "sample_output": "```diff\n@@ -12,4 +12,6 @@\n-import { OldHelper } from './legacy';\n+import { CleanInterface } from '../interfaces';\n+import { SafeAdapter } from './adapter';\n```\nRefactoring plan executed. Coupling reduced by 35% with 0 circular dependencies."
+    },
+    {
+      "id": "code-2",
+      "title": "Generate Pytest Suite with Boundaries",
+      "category": "Testing",
+      "description": "Synthesize comprehensive unit and regression tests with 100% boundary assertion coverage.",
+      "mode": "code",
+      "icon_name": "code",
+      "est_cost": "$0.0012 (Small Model)",
+      "tags": [
+        "Pytest",
+        "Coverage",
+        "Mocks"
+      ],
+      "prompt": "Write a comprehensive pytest test suite for the current module covering edge cases, empty payloads, and exception branches.",
+      "expected_tools": [
+        "pytest_runner",
+        "coverage_analyzer",
+        "mock_synthesizer"
+      ],
+      "sample_output": "```python\nimport pytest\nfrom core.service import DataProcessor\n\ndef test_process_empty_payload_raises():\n    with pytest.raises(ValueError, match='Payload cannot be empty'):\n        DataProcessor().process({})\n```\nGenerated 8 test cases with 100% boundary coverage."
+    },
+    {
+      "id": "code-3",
+      "title": "Zero-Trust Security & Vuln Audit",
+      "category": "Security",
+      "description": "Static AST audit to scan for arbitrary command injection, SSRF, and credential leaks.",
+      "mode": "code",
+      "icon_name": "shield",
+      "est_cost": "$0.0018 (Mid Model)",
+      "tags": [
+        "Security",
+        "CVE",
+        "Audit"
+      ],
+      "prompt": "Run a security audit on all API route handlers, verify authorization guards, and check for unsanitized subprocess calls.",
+      "expected_tools": [
+        "semgrep_audit",
+        "credential_scanner",
+        "policy_engine"
+      ],
+      "sample_output": "Audit complete: 0 critical vulnerabilities found. 2 warnings addressed: sanitized user input in shell subprocess execution."
+    },
+    {
+      "id": "code-4",
+      "title": "High-Throughput Concurrency Review",
+      "category": "Architecture",
+      "description": "Diagnose deadlocks, race conditions, and memory leaks in asynchronous execution loops.",
+      "mode": "code",
+      "icon_name": "cpu",
+      "est_cost": "$0.0025 (Mid Model)",
+      "tags": [
+        "Async",
+        "Concurrency",
+        "Tokio"
+      ],
+      "prompt": "Review async worker pipelines for lock contention, thread starvation, and backpressure handling under 10k req/s load.",
+      "expected_tools": [
+        "profiler_agent",
+        "concurrency_modeler",
+        "bench_runner"
+      ],
+      "sample_output": "Identified lock contention on GlobalStateMutex. Migrated to lock-free channels with bounded queues."
+    }
+  ]
+}

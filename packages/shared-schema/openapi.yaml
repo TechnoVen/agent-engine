@@ -84,6 +84,386 @@ paths:
               schema:
                 $ref: '#/components/schemas/ExecuteSkillResponse'
 
+  /skills/validate:
+    post:
+      summary: Validate skill content or frontmatter
+      operationId: validateSkillContent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidateSkillRequest'
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidateSkillResponse'
+
+  /skills/create:
+    post:
+      summary: Create a new skill
+      operationId: createSkill
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSkillRequest'
+      responses:
+        '200':
+          description: Created skill info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillInfo'
+
+  /skills/search:
+    get:
+      summary: Full-text search across discovered skills
+      operationId: searchSkills
+      parameters:
+        - name: q
+          in: query
+          schema:
+            type: string
+        - name: source
+          in: query
+          schema:
+            type: string
+        - name: tag
+          in: query
+          schema:
+            type: string
+        - name: category
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Search results with relevance scores
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SkillSearchResult'
+
+  /skills/collections:
+    get:
+      summary: List all skill collections
+      operationId: listSkillCollections
+      parameters:
+        - name: tag
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of skill collections
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SkillCollectionInfo'
+    post:
+      summary: Create a new skill collection
+      operationId: createSkillCollection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSkillCollectionRequest'
+      responses:
+        '200':
+          description: Created collection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillCollectionInfo'
+
+  /skills/collections/{collection_id}:
+    get:
+      summary: Get details of a skill collection
+      operationId: getSkillCollection
+      parameters:
+        - name: collection_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Collection details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillCollectionInfo'
+    put:
+      summary: Update a skill collection
+      operationId: updateSkillCollection
+      parameters:
+        - name: collection_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSkillCollectionRequest'
+      responses:
+        '200':
+          description: Updated collection
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillCollectionInfo'
+    delete:
+      summary: Delete a skill collection
+      operationId: deleteSkillCollection
+      parameters:
+        - name: collection_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Deletion confirmation
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /skills/collections/{collection_id}/skills:
+    get:
+      summary: List member skills of a collection
+      operationId: getCollectionMemberSkills
+      parameters:
+        - name: collection_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Member skills
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SkillInfo'
+    post:
+      summary: Add a skill to a collection
+      operationId: addSkillToCollection
+      parameters:
+        - name: collection_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddSkillToCollectionRequest'
+      responses:
+        '200':
+          description: Confirmation
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /skills/collections/{collection_id}/skills/{skill_id}:
+    delete:
+      summary: Remove a skill from a collection
+      operationId: removeSkillFromCollection
+      parameters:
+        - name: collection_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: skill_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Removal confirmation
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /skills/registry:
+    get:
+      summary: List available registry skills
+      operationId: listRegistrySkills
+      parameters:
+        - name: query
+          in: query
+          schema:
+            type: string
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: tag
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Registry packages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SkillRegistryPackageInfo'
+
+  /skills/registry/install:
+    post:
+      summary: Install a skill from registry
+      operationId: installRegistrySkill
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InstallSkillPackageRequest'
+      responses:
+        '200':
+          description: Installed package info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillRegistryPackageInfo'
+
+  /skills/registry/uninstall:
+    post:
+      summary: Uninstall a skill from registry
+      operationId: uninstallRegistrySkill
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UninstallSkillPackageRequest'
+      responses:
+        '200':
+          description: Deletion result
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /skills/remote/discover:
+    post:
+      summary: Discover skills on remote host or manifest
+      operationId: discoverRemoteSkills
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RemoteSkillDiscoverRequest'
+      responses:
+        '200':
+          description: List of discovered remote skills
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SkillInfo'
+
+  /skills/remote/import:
+    post:
+      summary: Import and persist a remote skill locally
+      operationId: importRemoteSkill
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RemoteSkillImportRequest'
+      responses:
+        '200':
+          description: Imported skill info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillInfo'
+
+  /skills/{skill_id}:
+    get:
+      summary: Get details and content of a skill
+      operationId: getSkill
+      parameters:
+        - name: skill_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Skill details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillInfo'
+    put:
+      summary: Update a skill in place
+      operationId: updateSkill
+      parameters:
+        - name: skill_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSkillRequest'
+      responses:
+        '200':
+          description: Updated skill info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillInfo'
+    delete:
+      summary: Delete a skill
+      operationId: deleteSkill
+      parameters:
+        - name: skill_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Deletion confirmation
+          content:
+            application/json:
+              schema:
+                type: object
+
   /workflows:
     get:
       summary: List registered workflows
@@ -113,6 +493,384 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/WorkflowExecutionResponse'
+
+  /workflows/validate:
+    post:
+      summary: Validate a workflow definition
+      operationId: validateWorkflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                definition_yaml:
+                  type: string
+                definition_json:
+                  type: object
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                  errors:
+                    type: array
+                    items:
+                      type: string
+                  node_count:
+                    type: integer
+                  edge_count:
+                    type: integer
+
+  /workflows/gates/pending:
+    get:
+      summary: List active runs waiting for gate approval
+      operationId: listPendingWorkflowGates
+      responses:
+        '200':
+          description: Pending gates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /workflows/{workflow_id}:
+    get:
+      summary: Get workflow definition by ID
+      operationId: getWorkflow
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Workflow definition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowInfo'
+    put:
+      summary: Update workflow definition
+      operationId: updateWorkflow
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Updated workflow definition
+          content:
+            application/json:
+              schema:
+                type: object
+    delete:
+      summary: Delete workflow
+      operationId: deleteWorkflow
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Deletion status
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /workflows/{workflow_id}/dry-run:
+    post:
+      summary: Dry run workflow execution
+      operationId: dryRunWorkflow
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                inputs:
+                  type: object
+      responses:
+        '200':
+          description: Dry run result
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /workflows/{workflow_id}/run:
+    post:
+      summary: Execute workflow
+      operationId: executeWorkflow
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                inputs:
+                  type: object
+                dry_run:
+                  type: boolean
+      responses:
+        '200':
+          description: Execution result
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /workflows/{workflow_id}/runs:
+    get:
+      summary: List workflow execution runs
+      operationId: listWorkflowRuns
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: List of execution runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /workflows/{workflow_id}/runs/{run_id}:
+    get:
+      summary: Get workflow run details
+      operationId: getWorkflowRun
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Run details
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /workflows/{workflow_id}/runs/{run_id}/approve:
+    post:
+      summary: Approve workflow gate
+      operationId: approveWorkflowGate
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reviewer:
+                  type: string
+      responses:
+        '200':
+          description: Resumed run
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /workflows/{workflow_id}/runs/{run_id}/reject:
+    post:
+      summary: Reject workflow gate
+      operationId: rejectWorkflowGate
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reviewer:
+                  type: string
+      responses:
+        '200':
+          description: Resumed or cancelled run
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /workflows/{workflow_id}/runs/{run_id}/redirect:
+    post:
+      summary: Redirect workflow gate to target node
+      operationId: redirectWorkflowGate
+      parameters:
+        - name: workflow_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - target_node_id
+              properties:
+                target_node_id:
+                  type: string
+                reviewer:
+                  type: string
+                input_overrides:
+                  type: object
+      responses:
+        '200':
+          description: Resumed run redirected to target node
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /swarm/cases:
+    get:
+      summary: List featured swarm team cases
+      operationId: listSwarmCases
+      responses:
+        '200':
+          description: Featured swarm cases
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+
+  /swarm/estimate:
+    post:
+      summary: Estimate swarm execution cost
+      operationId: estimateSwarmCost
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                case_id:
+                  type: string
+                model_tier:
+                  type: string
+                agents:
+                  type: array
+                  items:
+                    type: object
+      responses:
+        '200':
+          description: Cost estimate
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /swarm/run:
+    post:
+      summary: Run parallel multi-agent swarm
+      operationId: runSwarm
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - prompt
+              properties:
+                prompt:
+                  type: string
+                case_id:
+                  type: string
+                model_tier:
+                  type: string
+                agents:
+                  type: array
+                  items:
+                    type: object
+      responses:
+        '200':
+          description: Aggregated swarm execution result
+          content:
+            application/json:
+              schema:
+                type: object
 
   /pipelines:
     get:
@@ -335,6 +1093,581 @@ paths:
               schema:
                 $ref: '#/components/schemas/TelemetryResponse'
 
+  /telemetry/hardware:
+    get:
+      summary: Get detailed real-time hardware telemetry and local model tokens/sec
+      operationId: getHardwareTelemetry
+      responses:
+        '200':
+          description: Hardware telemetry
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HardwareTelemetryResponse'
+
+  /telemetry/record-speed:
+    post:
+      summary: Record local model inference throughput (tokens/sec)
+      operationId: recordInferenceSpeed
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SpeedRecordRequest'
+      responses:
+        '200':
+          description: Speed recording result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  tokens_per_second:
+                    type: number
+                  tokens:
+                    type: integer
+                  elapsed_seconds:
+                    type: number
+                  model:
+                    type: string
+                  runtime:
+                    type: string
+
+  /settings/config:
+    get:
+      summary: Retrieve current application configuration decrypted from encrypted vault
+      operationId: getAppSettingsConfig
+      responses:
+        '200':
+          description: Application configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppSettingsConfig'
+    post:
+      summary: Update and persist application configuration into local encrypted vault
+      operationId: updateAppSettingsConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Updated configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppSettingsConfig'
+
+  /diagnostics/export:
+    get:
+      summary: Export complete diagnostics bundle (.zip or JSON)
+      operationId: exportDiagnostics
+      parameters:
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [zip, json]
+            default: zip
+      responses:
+        '200':
+          description: Diagnostics export bundle
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiagnosticsBundleResponse'
+
+  /adapters:
+    get:
+      summary: List all registered agent adapters
+      operationId: listAdapters
+      parameters:
+        - name: include_health
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: List of agent adapters
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AdapterMetadata'
+
+  /adapters/{adapter_id}:
+    get:
+      summary: Retrieve adapter metadata and health status
+      operationId: getAdapter
+      parameters:
+        - name: adapter_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Adapter details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdapterMetadata'
+
+  /adapters/{adapter_id}/execute:
+    post:
+      summary: Execute prompt through agent adapter
+      operationId: executeAdapter
+      parameters:
+        - name: adapter_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdapterExecutionPayload'
+      responses:
+        '200':
+          description: Adapter execution response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdapterExecutionResponse'
+
+  /adapters/{adapter_id}/stream:
+    post:
+      summary: Stream tokens from agent adapter via SSE
+      operationId: streamAdapter
+      parameters:
+        - name: adapter_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdapterExecutionPayload'
+      responses:
+        '200':
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+  /adapters/{adapter_id}/test:
+    post:
+      summary: Probe adapter connectivity and health
+      operationId: testAdapter
+      parameters:
+        - name: adapter_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Adapter health probe results
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /channels/slack/events:
+    post:
+      summary: Incoming webhook for Slack Events API and Socket Mode verification
+      operationId: slackEventsWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Event processed or URL challenge answered
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /channels/teams/activities:
+    post:
+      summary: Incoming webhook for Microsoft Teams Bot Framework Activities
+      operationId: teamsActivitiesWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Bot activity received and normalized
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /channels/discord/interactions:
+    post:
+      summary: Incoming webhook for Discord Interactions and slash commands
+      operationId: discordInteractionsWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Interaction processed or Ping acknowledged
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /channels/mattermost/hooks:
+    post:
+      summary: Incoming webhook for Mattermost slash commands, outgoing webhooks, and events
+      operationId: mattermostHooksWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Event or hook received and normalized
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /rooms:
+    post:
+      summary: Create collaborative room
+      operationId: createRoom
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRoomRequest'
+      responses:
+        '201':
+          description: Created collaborative room
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollaborativeRoom'
+    get:
+      summary: List collaborative rooms
+      operationId: listRooms
+      parameters:
+        - name: project_id
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of collaborative rooms
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CollaborativeRoom'
+
+  /rooms/{room_id}:
+    get:
+      summary: Get room details
+      operationId: getRoom
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Collaborative room details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollaborativeRoom'
+    patch:
+      summary: Update room
+      operationId: updateRoom
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRoomRequest'
+      responses:
+        '200':
+          description: Updated collaborative room
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CollaborativeRoom'
+    delete:
+      summary: Delete room
+      operationId: deleteRoom
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Room deleted
+
+  /rooms/{room_id}/context:
+    get:
+      summary: Build ADR-014 dynamic context overlay
+      operationId: getRoomContext
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: prompt
+          in: query
+          schema:
+            type: string
+        - name: project_instructions
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Context overlay object
+
+  /rooms/{room_id}/participants:
+    post:
+      summary: Add participant to room
+      operationId: addRoomParticipant
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddRoomParticipantRequest'
+      responses:
+        '201':
+          description: Added participant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomParticipant'
+    get:
+      summary: List participants in room
+      operationId: listRoomParticipants
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of participants
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RoomParticipant'
+
+  /rooms/{room_id}/participants/{participant_id}:
+    delete:
+      summary: Remove participant from room
+      operationId: removeRoomParticipant
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: participant_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: requested_by
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Participant removed
+
+  /rooms/{room_id}/tasks:
+    post:
+      summary: Create workflow task in room
+      operationId: createRoomTask
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRoomTaskRequest'
+      responses:
+        '201':
+          description: Created task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomTask'
+    get:
+      summary: List workflow tasks in room
+      operationId: listRoomTasks
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: assigned_to
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of workflow tasks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RoomTask'
+
+  /rooms/{room_id}/tasks/{task_id}:
+    get:
+      summary: Get task details
+      operationId: getRoomTask
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Task details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomTask'
+    patch:
+      summary: Update task status or result
+      operationId: updateRoomTask
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRoomTaskRequest'
+      responses:
+        '200':
+          description: Updated task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomTask'
+
+  /rooms/{room_id}/tasks/{task_id}/claim:
+    post:
+      summary: Claim task for execution
+      operationId: claimRoomTask
+      parameters:
+        - name: room_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: task_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClaimRoomTaskRequest'
+      responses:
+        '200':
+          description: Claimed task
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RoomTask'
+
   /telemetry/cost:
     get:
       summary: Get token usage and cost metrics
@@ -422,6 +1755,38 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/BudgetConfigResponse'
+
+  /telemetry/distillation-candidates:
+    get:
+      summary: List high-volume tasks eligible for local model distillation
+      operationId: listDistillationCandidates
+      responses:
+        '200':
+          description: Distillation candidates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DistillationCandidate'
+
+  /telemetry/distill:
+    post:
+      summary: Trigger task distillation workflow to local model
+      operationId: triggerDistillation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DistillTriggerRequest'
+      responses:
+        '200':
+          description: Distillation pipeline response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResult'
 
   /auth/session:
     get:
@@ -570,6 +1935,275 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AuditLogInfo'
+
+  /safety/operations:
+    get:
+      summary: List pending operations awaiting human operator approval
+      operationId: listPendingOperations
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: session_id
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of pending operations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PendingOperationInfo'
+    post:
+      summary: Register a new pending operation with 60s expiration
+      operationId: registerPendingOperation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterOperationRequest'
+      responses:
+        '200':
+          description: Registered pending operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingOperationInfo'
+
+  /safety/operations/{operation_id}:
+    get:
+      summary: Get details of a pending operation
+      operationId: getPendingOperation
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Pending operation details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingOperationInfo'
+
+  /safety/operations/{operation_id}/approve:
+    post:
+      summary: Approve a pending operation and issue single-use execution token
+      operationId: approvePendingOperation
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveOperationRequest'
+      responses:
+        '200':
+          description: Approved operation with execution token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingOperationInfo'
+
+  /safety/operations/{operation_id}/reject:
+    post:
+      summary: Reject a pending operation with explicit reason
+      operationId: rejectPendingOperation
+      parameters:
+        - name: operation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RejectOperationRequest'
+      responses:
+        '200':
+          description: Rejected operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PendingOperationInfo'
+
+  /safety/operations/batch:
+    post:
+      summary: Batch approve or reject pending operations
+      operationId: batchOperations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchOperationRequest'
+      responses:
+        '200':
+          description: Batch result
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PendingOperationInfo'
+
+  /safety/verify-execution:
+    post:
+      summary: Verify single-use execution token and burn it upon verification
+      operationId: verifyExecution
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyExecutionRequest'
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyExecutionResponse'
+
+  /safety/policies/yaml:
+    get:
+      summary: Retrieve raw safety policy YAML
+      operationId: getSafetyPolicyYaml
+      responses:
+        '200':
+          description: Raw YAML content and rule count
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyYamlResponse'
+    post:
+      summary: Validate and hot-reload safety policies from YAML
+      operationId: updateSafetyPolicyYaml
+      security:
+        - IPCTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyYamlUpdateRequest'
+      responses:
+        '200':
+          description: Policies successfully updated and hot-reloaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActionResult'
+
+  /safety/policies/dry-run:
+    post:
+      summary: Simulate safety policy evaluation without logging to audit trail
+      operationId: dryRunSafetyPolicy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DryRunRequest'
+      responses:
+        '200':
+          description: Simulated evaluation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SafetyEvaluationResponse'
+
+  /safety/audit-logs:
+    get:
+      summary: Paginated query of safety audit logs
+      operationId: listSafetyAuditLogsPaginated
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: decision
+          in: query
+          schema:
+            type: string
+        - name: risk_level
+          in: query
+          schema:
+            type: string
+        - name: tool_name
+          in: query
+          schema:
+            type: string
+        - name: session_id
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paginated audit logs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAuditLogsResponse'
+
+  /safety/audit-logs/export:
+    get:
+      summary: Export safety audit logs as CSV or JSON
+      operationId: exportSafetyAuditLogs
+      parameters:
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [csv, json]
+            default: csv
+        - name: decision
+          in: query
+          schema:
+            type: string
+        - name: risk_level
+          in: query
+          schema:
+            type: string
+        - name: tool_name
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 1000
+      responses:
+        '200':
+          description: Exported audit logs
+          content:
+            text/csv:
+              schema:
+                type: string
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AuditLogInfo'
 
   /sessions:
     post:
@@ -1255,6 +2889,242 @@ components:
         results:
           type: object
 
+    CreateSkillRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        content:
+          type: string
+        skill_id:
+          type: string
+        source:
+          type: string
+        author:
+          type: string
+        version:
+          type: string
+        category:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        inputs:
+          type: array
+          items:
+            type: string
+        outputs:
+          type: array
+          items:
+            type: string
+        tools:
+          type: array
+          items:
+            type: string
+        format:
+          type: string
+
+    UpdateSkillRequest:
+      type: object
+      properties:
+        content:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        version:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        inputs:
+          type: array
+          items:
+            type: string
+        outputs:
+          type: array
+          items:
+            type: string
+        tools:
+          type: array
+          items:
+            type: string
+        category:
+          type: string
+
+    ValidateSkillRequest:
+      type: object
+      required: [content]
+      properties:
+        content:
+          type: string
+        format:
+          type: string
+
+    ValidateSkillResponse:
+      type: object
+      required: [valid]
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: string
+        warnings:
+          type: array
+          items:
+            type: string
+        parsed_metadata:
+          type: object
+
+    SkillCollectionInfo:
+      type: object
+      required: [id, name, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        skill_ids:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+        updated_at:
+          type: string
+
+    CreateSkillCollectionRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        skill_ids:
+          type: array
+          items:
+            type: string
+        collection_id:
+          type: string
+
+    UpdateSkillCollectionRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+
+    AddSkillToCollectionRequest:
+      type: object
+      required: [skill_id]
+      properties:
+        skill_id:
+          type: string
+
+    SkillSearchResult:
+      type: object
+      required: [skill, score]
+      properties:
+        skill:
+          $ref: '#/components/schemas/SkillInfo'
+        score:
+          type: number
+
+    SkillRegistryPackageInfo:
+      type: object
+      required: [id, name, version]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        version:
+          type: string
+        description:
+          type: string
+        author:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        category:
+          type: string
+        sha256:
+          type: string
+        verified:
+          type: boolean
+        installs:
+          type: integer
+        is_installed:
+          type: boolean
+        installed_path:
+          type: string
+
+    InstallSkillPackageRequest:
+      type: object
+      required: [package_id]
+      properties:
+        package_id:
+          type: string
+        force:
+          type: boolean
+
+    UninstallSkillPackageRequest:
+      type: object
+      required: [package_id]
+      properties:
+        package_id:
+          type: string
+
+    RemoteSkillDiscoverRequest:
+      type: object
+      required: [endpoint_url]
+      properties:
+        endpoint_url:
+          type: string
+        api_token:
+          type: string
+
+    RemoteSkillImportRequest:
+      type: object
+      required: [endpoint_url, skill_id]
+      properties:
+        endpoint_url:
+          type: string
+        skill_id:
+          type: string
+        api_token:
+          type: string
+        target_tool:
+          type: string
+        force:
+          type: boolean
+
     WorkflowInfo:
       type: object
       required: [id, name, steps]
@@ -1437,6 +3307,269 @@ components:
           type: boolean
         indexed_memory_documents:
           type: integer
+        gpu_detected:
+          type: boolean
+        gpu_model:
+          type: string
+        gpu_vendor:
+          type: string
+        vram_used_percent:
+          type: number
+        vram_used_gb:
+          type: number
+        vram_total_gb:
+          type: number
+        vram_free_gb:
+          type: number
+        vram_warning:
+          type: boolean
+        tokens_per_second:
+          type: number
+        local_runtime_active:
+          type: boolean
+
+    HardwareTelemetryResponse:
+      type: object
+      required: [cpu_usage_percent, cpu_cores_logical, cpu_cores_physical, ram_used_percent, ram_used_gb, ram_total_gb, ram_available_gb, gpu_detected, gpu_model, gpu_vendor, vram_used_percent, vram_used_gb, vram_total_gb, vram_free_gb, vram_warning, tokens_per_second]
+      properties:
+        cpu_usage_percent:
+          type: number
+        cpu_cores_logical:
+          type: integer
+        cpu_cores_physical:
+          type: integer
+        ram_used_percent:
+          type: number
+        ram_used_gb:
+          type: number
+        ram_total_gb:
+          type: number
+        ram_available_gb:
+          type: number
+        gpu_detected:
+          type: boolean
+        gpu_model:
+          type: string
+        gpu_vendor:
+          type: string
+        vram_used_percent:
+          type: number
+        vram_used_gb:
+          type: number
+        vram_total_gb:
+          type: number
+        vram_free_gb:
+          type: number
+        vram_warning:
+          type: boolean
+        vram_warning_threshold:
+          type: number
+          default: 95.0
+        tokens_per_second:
+          type: number
+        recent_inference_runtime:
+          type: string
+          nullable: true
+        recent_inference_model:
+          type: string
+          nullable: true
+        ollama_active:
+          type: boolean
+        llamacpp_active:
+          type: boolean
+        local_runtime_active:
+          type: boolean
+        timestamp:
+          type: string
+
+    SpeedRecordRequest:
+      type: object
+      required: [tokens, elapsed_seconds]
+      properties:
+        tokens:
+          type: integer
+        elapsed_seconds:
+          type: number
+        model:
+          type: string
+        runtime:
+          type: string
+
+    AppSettingsConfig:
+      type: object
+      properties:
+        models:
+          type: object
+        local_runtime:
+          type: object
+        adapters:
+          type: object
+        channels:
+          type: object
+        storage:
+          type: object
+        security:
+          type: object
+        appearance:
+          type: object
+        version:
+          type: string
+        updated_at:
+          type: string
+
+    DiagnosticsBundleResponse:
+      type: object
+      properties:
+        system_info:
+          type: object
+        schema_versions:
+          type: object
+        config:
+          type: object
+        logs:
+          type: array
+          items:
+            type: string
+
+    AdapterMetadata:
+      type: object
+      properties:
+        adapter_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        protocol:
+          type: string
+        version:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: string
+        enabled:
+          type: boolean
+        initialized:
+          type: boolean
+        health:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [healthy, degraded, unavailable]
+            message:
+              type: string
+            latency_ms:
+              type: number
+            version:
+              type: string
+            details:
+              type: object
+
+    AdapterExecutionPayload:
+      type: object
+      required:
+        - prompt
+      properties:
+        prompt:
+          type: string
+        session_id:
+          type: string
+        context:
+          type: object
+        tools:
+          type: array
+          items:
+            type: object
+        model:
+          type: string
+        temperature:
+          type: number
+        max_tokens:
+          type: integer
+        timeout_seconds:
+          type: number
+        metadata:
+          type: object
+
+    AdapterExecutionResponse:
+      type: object
+      properties:
+        adapter_id:
+          type: string
+        content:
+          type: string
+        tool_calls:
+          type: array
+          items:
+            type: object
+        finish_reason:
+          type: string
+        usage:
+          type: object
+          properties:
+            prompt_tokens:
+              type: integer
+            completion_tokens:
+              type: integer
+            total_tokens:
+              type: integer
+        latency_ms:
+          type: number
+        metadata:
+          type: object
+
+    TierSplitInfo:
+      type: object
+      properties:
+        deterministic_cache_local_pct:
+          type: number
+        mid_tier_pct:
+          type: number
+        frontier_pct:
+          type: number
+        code_cache_calls:
+          type: integer
+        mid_tier_calls:
+          type: integer
+        frontier_calls:
+          type: integer
+
+    DistillationCandidate:
+      type: object
+      required: [candidate_id, task_name, teacher_model, student_model, monthly_calls, current_cost_usd, distilled_cost_usd, monthly_savings_usd, accuracy_score, status]
+      properties:
+        candidate_id:
+          type: string
+        task_name:
+          type: string
+        teacher_model:
+          type: string
+        student_model:
+          type: string
+        monthly_calls:
+          type: integer
+        current_cost_usd:
+          type: number
+        distilled_cost_usd:
+          type: number
+        monthly_savings_usd:
+          type: number
+        accuracy_score:
+          type: number
+        status:
+          type: string
+
+    DistillTriggerRequest:
+      type: object
+      required: [candidate_id]
+      properties:
+        candidate_id:
+          type: string
+        target_student_model:
+          type: string
+          default: qwen2.5-coder
 
     CostMetricsResponse:
       type: object
@@ -1450,6 +3583,18 @@ components:
           type: integer
         total_tokens:
           type: integer
+        month_spend_usd:
+          type: number
+        day_spend_usd:
+          type: number
+        cache_hit_rate:
+          type: number
+        tier_split:
+          $ref: '#/components/schemas/TierSplitInfo'
+        cost_per_task:
+          type: array
+          items:
+            type: object
         breakdown:
           type: array
           items:
@@ -1689,6 +3834,133 @@ components:
           type: string
         audit_id:
           type: integer
+        operation_id:
+          type: string
+
+    PendingOperationInfo:
+      type: object
+      required: [operation_id, tool_name, tool_args, args_hash, risk_level, risk_score, status, created_at, expires_at]
+      properties:
+        operation_id:
+          type: string
+        tool_name:
+          type: string
+        tool_args:
+          type: object
+        args_hash:
+          type: string
+        risk_level:
+          type: string
+        risk_score:
+          type: number
+        status:
+          type: string
+        created_at:
+          type: number
+        expires_at:
+          type: number
+        session_id:
+          type: string
+        reason:
+          type: string
+        suggestion:
+          type: string
+        diff:
+          type: object
+        approval_token:
+          type: string
+        actor:
+          type: string
+        decision_reason:
+          type: string
+
+    RegisterOperationRequest:
+      type: object
+      required: [tool_name, tool_args]
+      properties:
+        tool_name:
+          type: string
+        tool_args:
+          type: object
+        risk_level:
+          type: string
+          default: high
+        risk_score:
+          type: number
+          default: 0.85
+        session_id:
+          type: string
+        reason:
+          type: string
+        suggestion:
+          type: string
+        diff:
+          type: object
+        ttl_seconds:
+          type: number
+          default: 60.0
+
+    ApproveOperationRequest:
+      type: object
+      properties:
+        actor:
+          type: string
+          default: operator
+        modified_args:
+          type: object
+
+    RejectOperationRequest:
+      type: object
+      properties:
+        actor:
+          type: string
+          default: operator
+        reason:
+          type: string
+          default: Rejected by operator
+
+    BatchOperationRequest:
+      type: object
+      required: [operation_ids, action]
+      properties:
+        operation_ids:
+          type: array
+          items:
+            type: string
+        action:
+          type: string
+          enum: [approve, reject]
+        actor:
+          type: string
+          default: operator
+        reason:
+          type: string
+
+    VerifyExecutionRequest:
+      type: object
+      required: [approval_token, tool_name, tool_args]
+      properties:
+        approval_token:
+          type: string
+        tool_name:
+          type: string
+        tool_args:
+          type: object
+
+    VerifyExecutionResponse:
+      type: object
+      required: [authorized, operation_id, tool_name, actor, message]
+      properties:
+        authorized:
+          type: boolean
+        operation_id:
+          type: string
+        tool_name:
+          type: string
+        actor:
+          type: string
+        message:
+          type: string
 
     AuditLogInfo:
       type: object
@@ -1742,6 +4014,48 @@ components:
           type: string
         operator:
           type: string
+
+    PolicyYamlResponse:
+      type: object
+      required: [yaml_content, rules_count]
+      properties:
+        yaml_content:
+          type: string
+        rules_count:
+          type: integer
+
+    PolicyYamlUpdateRequest:
+      type: object
+      required: [yaml_content]
+      properties:
+        yaml_content:
+          type: string
+
+    DryRunRequest:
+      type: object
+      required: [tool_name]
+      properties:
+        tool_name:
+          type: string
+        tool_args:
+          type: object
+        context:
+          type: object
+
+    PaginatedAuditLogsResponse:
+      type: object
+      required: [total, limit, offset, items]
+      properties:
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditLogInfo'
 
     ToolCallInfo:
       type: object
@@ -2458,6 +4772,222 @@ components:
           type: string
         sha256:
           type: string
+
+    CollaborativeRoom:
+      type: object
+      required: [room_id, project_id, name, status, created_at, updated_at]
+      properties:
+        room_id:
+          type: string
+        project_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        topic:
+          type: string
+        status:
+          type: string
+        policy_id:
+          type: string
+          nullable: true
+        active_adapters:
+          type: array
+          items:
+            type: string
+        session_ids:
+          type: array
+          items:
+            type: string
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        metadata:
+          type: object
+
+    CreateRoomRequest:
+      type: object
+      required: [project_id, name]
+      properties:
+        project_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        topic:
+          type: string
+        policy_id:
+          type: string
+        active_adapters:
+          type: array
+          items:
+            type: string
+        metadata:
+          type: object
+
+    UpdateRoomRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        topic:
+          type: string
+        status:
+          type: string
+        policy_id:
+          type: string
+        active_adapters:
+          type: array
+          items:
+            type: string
+        metadata:
+          type: object
+
+    RoomParticipant:
+      type: object
+      required: [room_id, participant_id, name, role, participant_type, joined_at]
+      properties:
+        room_id:
+          type: string
+        participant_id:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+          enum: [admin, member, viewer, agent]
+        participant_type:
+          type: string
+          enum: [human, agent]
+        adapter_type:
+          type: string
+          nullable: true
+        permissions:
+          type: array
+          items:
+            type: string
+        joined_at:
+          type: string
+        metadata:
+          type: object
+
+    AddRoomParticipantRequest:
+      type: object
+      required: [participant_id]
+      properties:
+        participant_id:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+          default: member
+        participant_type:
+          type: string
+          default: human
+        adapter_type:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+        metadata:
+          type: object
+
+    RoomTask:
+      type: object
+      required: [task_id, room_id, title, status, priority, created_by, created_at, updated_at]
+      properties:
+        task_id:
+          type: string
+        room_id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [pending, in_progress, completed, blocked, failed, cancelled]
+        priority:
+          type: string
+          enum: [low, medium, high, urgent]
+        assigned_to:
+          type: string
+          nullable: true
+        assigned_adapter:
+          type: string
+          nullable: true
+        parent_task_id:
+          type: string
+          nullable: true
+        dependencies:
+          type: array
+          items:
+            type: string
+        created_by:
+          type: string
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        result:
+          type: object
+          nullable: true
+        metadata:
+          type: object
+
+    CreateRoomTaskRequest:
+      type: object
+      required: [title]
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        priority:
+          type: string
+          default: medium
+        assigned_to:
+          type: string
+        assigned_adapter:
+          type: string
+        parent_task_id:
+          type: string
+        dependencies:
+          type: array
+          items:
+            type: string
+        created_by:
+          type: string
+          default: human
+        metadata:
+          type: object
+
+    UpdateRoomTaskRequest:
+      type: object
+      properties:
+        status:
+          type: string
+        result:
+          type: object
+        updated_by:
+          type: string
+
+    ClaimRoomTaskRequest:
+      type: object
+      required: [participant_id]
+      properties:
+        participant_id:
+          type: string
+        adapter_type:
+          type: string
+
 
 
 

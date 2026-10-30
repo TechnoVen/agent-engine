@@ -197,9 +197,9 @@ def test_tauri_conf_external_bin_configuration():
     bundle_cfg = conf.get("bundle", {})
     external_bin = bundle_cfg.get("externalBin", [])
     assert isinstance(external_bin, list)
-    assert any(
-        "agent-engine-sidecar" in bin_entry for bin_entry in external_bin
-    ), f"externalBin must include agent-engine-sidecar, found: {external_bin}"
+    assert any("agent-engine-sidecar" in bin_entry for bin_entry in external_bin), (
+        f"externalBin must include agent-engine-sidecar, found: {external_bin}"
+    )
 
 
 def test_tauri_capability_permissions():

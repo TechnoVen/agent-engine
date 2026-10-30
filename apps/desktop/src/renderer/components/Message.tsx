@@ -4,15 +4,11 @@ import {
   User,
   Copy,
   Check,
-  Zap,
-  Brain,
   FileCode,
-  Clock,
-  Coins,
-  Gauge,
 } from 'lucide-react';
 import { ChatMessage } from '../types';
 import { ApprovalCard } from './ApprovalCard';
+import { ExecutionInspector } from './ExecutionInspector';
 
 export interface MessageProps {
   message: ChatMessage;
@@ -298,62 +294,54 @@ export const Message: React.FC<MessageProps> = ({
           </div>
         )}
 
-        {/* Assistant Metrics & Controls Strip */}
+        {/* Assistant Execution Inspector & Action Strip */}
         {!isUser && !message.isStreaming && (
-          <div className="flex items-center gap-3 mt-1.5 px-1 text-[10px] font-mono text-text-tertiary select-none">
-            {/* Model Tier */}
-            {message.metadata?.modelTier && (
-              <span className="flex items-center gap-1 text-text-secondary">
-                {message.metadata.modelTier === 'instant' && <Zap className="w-3 h-3 text-warning" />}
-                {message.metadata.modelTier === 'swarm' && <Sparkles className="w-3 h-3 text-accent" />}
-                {message.metadata.modelTier === 'reasoning' && <Brain className="w-3 h-3 text-success" />}
-                <span className="capitalize">{message.metadata.modelTier}</span>
-              </span>
-            )}
+          <div className="w-full mt-2 space-y-1.5">
+            {/* Real Execution Provenance Inspector */}
+            <ExecutionInspector
+              provenance={
+                message.metadata?.execution || {
+                  executionId: message.metadata?.executionId,
+                  status: message.metadata?.isError ? 'FAILED' : 'COMPLETED',
+                  error: message.metadata?.error,
+                  failureClassification: message.metadata?.errorCode,
+                  provider: message.metadata?.provider,
+                  model: message.metadata?.modelName,
+                  isLocal: message.metadata?.isLocal,
+                  effectivePrivacy: message.metadata?.effectivePrivacy,
+                  routingObjective: message.metadata?.routingObjective,
+                  routingExplanation: message.metadata?.routingExplanation,
+                  latencyMs: message.metadata?.latencyMs,
+                  tokensPerSec: message.metadata?.tokensPerSec,
+                  totalTokens: message.metadata?.tokenCount,
+                  costUsd: message.metadata?.costUsd,
+                  estCost: message.metadata?.estCost,
+                  policyStatus: message.metadata?.policyStatus,
+                }
+              }
+            />
 
-            {/* Token Speed */}
-            {message.metadata?.tokensPerSec && (
-              <span className="flex items-center gap-0.5">
-                <Gauge className="w-3 h-3" />
-                {message.metadata.tokensPerSec} t/s
-              </span>
-            )}
-
-            {/* Latency */}
-            {message.metadata?.latencyMs && (
-              <span className="flex items-center gap-0.5">
-                <Clock className="w-3 h-3" />
-                {message.metadata.latencyMs}ms
-              </span>
-            )}
-
-            {/* Cost */}
-            {message.metadata?.estCost && (
-              <span className="flex items-center gap-0.5 text-success">
-                <Coins className="w-3 h-3" />
-                {message.metadata.estCost}
-              </span>
-            )}
-
-            {/* Copy button */}
-            <button
-              type="button"
-              onClick={handleCopyMessage}
-              className="ml-auto hover:text-text-primary flex items-center gap-1 transition-colors"
-              title="Copy message"
-            >
-              {copied ? (
-                <>
-                  <Check className="w-3 h-3 text-success" />
-                  <span className="text-success">Copied</span>
-                </>
-              ) : (
-                <>
-                  <Copy className="w-3 h-3" />
-                  <span>Copy</span>
-                </>
-              )}
-            </button>
+            {/* Quick Actions Strip */}
+            <div className="flex items-center justify-end px-1 text-[10px] text-text-tertiary select-none">
+              <button
+                type="button"
+                onClick={handleCopyMessage}
+                className="hover:text-text-primary flex items-center gap-1 transition-colors px-1.5 py-0.5 rounded hover:bg-bg-hover"
+                title="Copy response"
+              >
+                {copied ? (
+                  <>
+                    <Check className="w-3 h-3 text-success" />
+                    <span className="text-success font-medium">Copied</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3 h-3" />
+                    <span>Copy</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         )}
       </div>

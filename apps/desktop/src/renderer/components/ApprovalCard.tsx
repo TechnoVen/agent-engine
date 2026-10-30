@@ -411,7 +411,7 @@ export const ApprovalCard: React.FC<ApprovalCardProps> = ({
               value={rejectReason}
               onChange={(e) => setRejectReason(e.target.value)}
               placeholder="e.g. Unverified target environment, potential data loss"
-              className="w-full px-3 py-1.5 rounded bg-bg-base border border-danger/30 text-xs text-text-primary outline-none focus:border-danger"
+              className="w-full px-3 py-1.5 rounded-lg bg-bg-base border border-danger/30 text-xs text-text-primary outline-none focus:border-danger"
             />
             <div className="flex items-center justify-end gap-2 pt-1">
               <button

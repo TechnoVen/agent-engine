@@ -8,19 +8,23 @@ import json
 import os
 import sqlite3
 import threading
+import time
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.storage.base import StorageBackend
 
-DEFAULT_SQLITE_PATH = "/home/nadir/agent_engine/data/agent_engine.db"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_SQLITE_PATH = str(PROJECT_ROOT / "data" / "agent_engine.db")
 
 
 class SQLiteBackend(StorageBackend):
     """Local SQLite repository implementation."""
 
-    def __init__(self, db_path: str = DEFAULT_SQLITE_PATH):
-        self.db_path = db_path
+    def __init__(self, db_path: Optional[str] = None):
+        self.db_path = db_path or os.getenv("SQLITE_DB_PATH") or DEFAULT_SQLITE_PATH
         self._is_memory = db_path == ":memory:"
         self._lock = threading.RLock()
         self._memory_conn: Optional[sqlite3.Connection] = None
@@ -139,8 +143,289 @@ class SQLiteBackend(StorageBackend):
                     );
                     CREATE INDEX IF NOT EXISTS idx_audit_logs_decision ON audit_logs(decision);
                     CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp);
+
+                    CREATE TABLE IF NOT EXISTS scheduled_tasks (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        description TEXT NOT NULL DEFAULT '',
+                        cron TEXT NOT NULL,
+                        cron_human TEXT NOT NULL DEFAULT '',
+                        agent_persona TEXT NOT NULL DEFAULT 'Senior Engineer',
+                        model TEXT NOT NULL DEFAULT 'instant',
+                        status TEXT NOT NULL DEFAULT 'active',
+                        last_run TEXT,
+                        next_run TEXT,
+                        cost_per_run REAL NOT NULL DEFAULT 0.0012,
+                        monthly_estimate REAL NOT NULL DEFAULT 0.036,
+                        is_off_peak INTEGER NOT NULL DEFAULT 1,
+                        notification_channel TEXT NOT NULL DEFAULT 'slack',
+                        prompt TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_status ON scheduled_tasks(status);
+
+                    CREATE TABLE IF NOT EXISTS collaborative_rooms (
+                        room_id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        description TEXT NOT NULL DEFAULT '',
+                        topic TEXT NOT NULL DEFAULT '',
+                        status TEXT NOT NULL DEFAULT 'active',
+                        policy_id TEXT,
+                        active_adapters TEXT NOT NULL DEFAULT '[]',
+                        session_ids TEXT NOT NULL DEFAULT '[]',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        metadata TEXT NOT NULL DEFAULT '{}'
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_rooms_project ON collaborative_rooms(project_id);
+                    CREATE INDEX IF NOT EXISTS idx_rooms_status ON collaborative_rooms(status);
+
+                    CREATE TABLE IF NOT EXISTS room_participants (
+                        room_id TEXT NOT NULL,
+                        participant_id TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        role TEXT NOT NULL,
+                        participant_type TEXT NOT NULL DEFAULT 'human',
+                        adapter_type TEXT,
+                        permissions TEXT NOT NULL DEFAULT '[]',
+                        joined_at TEXT NOT NULL,
+                        metadata TEXT NOT NULL DEFAULT '{}',
+                        PRIMARY KEY (room_id, participant_id),
+                        FOREIGN KEY (room_id) REFERENCES collaborative_rooms(room_id) ON DELETE CASCADE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_participants_room ON room_participants(room_id);
+                    CREATE INDEX IF NOT EXISTS idx_participants_role ON room_participants(role);
+
+                    CREATE TABLE IF NOT EXISTS room_tasks (
+                        task_id TEXT PRIMARY KEY,
+                        room_id TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        description TEXT NOT NULL DEFAULT '',
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        priority TEXT NOT NULL DEFAULT 'medium',
+                        assigned_to TEXT,
+                        assigned_adapter TEXT,
+                        parent_task_id TEXT,
+                        dependencies TEXT NOT NULL DEFAULT '[]',
+                        created_by TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        result TEXT,
+                        metadata TEXT NOT NULL DEFAULT '{}',
+                        FOREIGN KEY (room_id) REFERENCES collaborative_rooms(room_id) ON DELETE CASCADE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_tasks_room_status ON room_tasks(room_id, status);
+                    CREATE INDEX IF NOT EXISTS idx_tasks_parent ON room_tasks(parent_task_id);
+
+                    CREATE TABLE IF NOT EXISTS skill_collections (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        description TEXT NOT NULL DEFAULT '',
+                        tags TEXT NOT NULL DEFAULT '[]',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+
+                    CREATE TABLE IF NOT EXISTS collection_skills (
+                        collection_id TEXT NOT NULL,
+                        skill_id TEXT NOT NULL,
+                        added_at TEXT NOT NULL,
+                        PRIMARY KEY (collection_id, skill_id),
+                        FOREIGN KEY (collection_id) REFERENCES skill_collections(id) ON DELETE CASCADE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_collection_skills_skill ON collection_skills(skill_id);
+
+                    CREATE TABLE IF NOT EXISTS executions (
+                        id TEXT PRIMARY KEY,
+                        session_id TEXT REFERENCES sessions(session_id) ON DELETE SET NULL,
+                        project_id TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        request_json TEXT NOT NULL,
+                        provider TEXT,
+                        model TEXT,
+                        routing_tier TEXT,
+                        input_tokens INTEGER DEFAULT 0,
+                        output_tokens INTEGER DEFAULT 0,
+                        total_cost_usd REAL DEFAULT 0.0,
+                        is_cost_estimated INTEGER NOT NULL DEFAULT 0,
+                        cost_provenance TEXT,
+                        started_at TEXT,
+                        completed_at TEXT,
+                        error_code TEXT,
+                        error_message TEXT,
+                        created_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_executions_project ON executions(project_id);
+                    CREATE INDEX IF NOT EXISTS idx_executions_session ON executions(session_id);
+                    CREATE INDEX IF NOT EXISTS idx_executions_status ON executions(status);
+
+                    CREATE TABLE IF NOT EXISTS execution_events (
+                        id TEXT PRIMARY KEY,
+                        execution_id TEXT NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
+                        sequence_num INTEGER NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        event_type TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        UNIQUE(execution_id, sequence_num)
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_events_execution ON execution_events(execution_id);
+
+                    CREATE TABLE IF NOT EXISTS projects (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        description TEXT,
+                        root_path TEXT NOT NULL UNIQUE,
+                        instructions TEXT NOT NULL DEFAULT '',
+                        settings_json TEXT NOT NULL DEFAULT '{}',
+                        is_default INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_projects_name ON projects(name);
+
+                    CREATE TABLE IF NOT EXISTS artifacts (
+                        id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                        execution_id TEXT NOT NULL REFERENCES executions(id) ON DELETE CASCADE,
+                        name TEXT NOT NULL,
+                        type TEXT NOT NULL DEFAULT 'file',
+                        mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+                        storage_kind TEXT NOT NULL DEFAULT 'filesystem',
+                        file_path TEXT,
+                        inline_content TEXT,
+                        sha256_hash TEXT NOT NULL,
+                        size_bytes INTEGER NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'ready',
+                        lineage_json TEXT NOT NULL DEFAULT '{}',
+                        created_by TEXT,
+                        created_at TEXT NOT NULL,
+                        deleted_at TEXT
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_artifacts_project ON artifacts(project_id);
+                    CREATE INDEX IF NOT EXISTS idx_artifacts_execution ON artifacts(execution_id);
+                    CREATE INDEX IF NOT EXISTS idx_artifacts_type ON artifacts(type);
+                    CREATE INDEX IF NOT EXISTS idx_artifacts_status ON artifacts(status);
+
+                    CREATE TABLE IF NOT EXISTS approvals (
+                        approval_id TEXT PRIMARY KEY,
+                        execution_id TEXT,
+                        actor TEXT NOT NULL DEFAULT 'local_operator',
+                        capability TEXT NOT NULL,
+                        operation_digest TEXT NOT NULL,
+                        digest_version INTEGER NOT NULL DEFAULT 1,
+                        token_verifier TEXT NOT NULL,
+                        issued_at REAL NOT NULL,
+                        expires_at REAL NOT NULL,
+                        decision TEXT NOT NULL DEFAULT 'approved',
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        consumed_at REAL,
+                        metadata_json TEXT NOT NULL DEFAULT '{}'
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_approvals_token_verifier ON approvals(token_verifier);
+                    CREATE INDEX IF NOT EXISTS idx_approvals_execution_id ON approvals(execution_id);
+                    CREATE INDEX IF NOT EXISTS idx_approvals_status ON approvals(status);
                 """)
                 conn.commit()
+
+                # Migration check: ensure 'deleted_at' column exists in artifacts
+                cursor.execute("PRAGMA table_info(artifacts)")
+                existing_art_cols = [row[1] for row in cursor.fetchall()]
+                if "deleted_at" not in existing_art_cols and "id" in existing_art_cols:
+                    cursor.execute("ALTER TABLE artifacts ADD COLUMN deleted_at TEXT")
+                    conn.commit()
+
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_artifacts_deleted_at ON artifacts(deleted_at)"
+                )
+                conn.commit()
+
+                # Migration check: ensure 'is_default' column exists before indexing and inserting
+                cursor.execute("PRAGMA table_info(projects)")
+                existing_proj_cols = [row[1] for row in cursor.fetchall()]
+                if "is_default" not in existing_proj_cols:
+                    cursor.execute(
+                        "ALTER TABLE projects ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0"
+                    )
+                    conn.commit()
+
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_projects_is_default ON projects(is_default)"
+                )
+                # Migrate any legacy 'default' or 'proj_default' project records to a canonical proj_<hex12> ID
+                cursor.execute("SELECT id FROM projects WHERE id IN ('default', 'proj_default')")
+                legacy_rows = cursor.fetchall()
+                if legacy_rows:
+                    legacy_ids = [row[0] for row in legacy_rows]
+                    cursor.execute(
+                        "SELECT id FROM projects WHERE is_default = 1 AND id NOT IN ('default', 'proj_default') LIMIT 1"
+                    )
+                    existing_canonical_default = cursor.fetchone()
+                    if existing_canonical_default:
+                        canonical_default_id = existing_canonical_default[0]
+                        for lid in legacy_ids:
+                            cursor.execute(
+                                "UPDATE executions SET project_id = ? WHERE project_id = ?",
+                                (canonical_default_id, lid),
+                            )
+                            cursor.execute(
+                                "UPDATE cost_records SET project = ? WHERE project = ?",
+                                (canonical_default_id, lid),
+                            )
+                            cursor.execute("DELETE FROM projects WHERE id = ?", (lid,))
+                    else:
+                        canonical_default_id = f"proj_{uuid.uuid4().hex[:12]}"
+                        first_lid = legacy_ids[0]
+                        cursor.execute(
+                            "UPDATE projects SET id = ?, is_default = 1 WHERE id = ?",
+                            (canonical_default_id, first_lid),
+                        )
+                        cursor.execute(
+                            "UPDATE executions SET project_id = ? WHERE project_id = ?",
+                            (canonical_default_id, first_lid),
+                        )
+                        cursor.execute(
+                            "UPDATE cost_records SET project = ? WHERE project = ?",
+                            (canonical_default_id, first_lid),
+                        )
+                        for other_lid in legacy_ids[1:]:
+                            cursor.execute(
+                                "UPDATE executions SET project_id = ? WHERE project_id = ?",
+                                (canonical_default_id, other_lid),
+                            )
+                            cursor.execute(
+                                "UPDATE cost_records SET project = ? WHERE project = ?",
+                                (canonical_default_id, other_lid),
+                            )
+                            cursor.execute("DELETE FROM projects WHERE id = ?", (other_lid,))
+                    conn.commit()
+
+                # Cascade any executions or cost records still referencing legacy aliases to the canonical default project
+                cursor.execute(
+                    "SELECT id FROM projects WHERE is_default = 1 ORDER BY created_at ASC LIMIT 1"
+                )
+                def_row = cursor.fetchone()
+                if def_row:
+                    target_def_id = def_row[0]
+                    cursor.execute(
+                        "UPDATE executions SET project_id = ? WHERE project_id IN ('default', 'proj_default')",
+                        (target_def_id,),
+                    )
+                    cursor.execute(
+                        "UPDATE cost_records SET project = ? WHERE project IN ('default', 'proj_default')",
+                        (target_def_id,),
+                    )
+                    conn.commit()
+                else:
+                    canonical_default_id = f"proj_{uuid.uuid4().hex[:12]}"
+                    cursor.execute(
+                        """
+                        INSERT INTO projects (id, name, description, root_path, instructions, settings_json, is_default, created_at, updated_at)
+                        VALUES (?, 'Default Project', 'Default workspace project', '/workspace', '', '{}', 1, '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00')
+                    """,
+                        (canonical_default_id,),
+                    )
+                    conn.commit()
 
                 # Migration check: ensure 'project' column exists in existing database
                 cursor.execute("PRAGMA table_info(cost_records)")
@@ -179,6 +464,13 @@ class SQLiteBackend(StorageBackend):
                     "CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id)"
                 )
                 conn.commit()
+
+                # Migration check: ensure cost_provenance exists in executions
+                cursor.execute("PRAGMA table_info(executions)")
+                existing_exec_cols = [row[1] for row in cursor.fetchall()]
+                if "cost_provenance" not in existing_exec_cols:
+                    cursor.execute("ALTER TABLE executions ADD COLUMN cost_provenance TEXT")
+                    conn.commit()
             finally:
                 if not self._is_memory:
                     conn.close()
@@ -266,8 +558,20 @@ class SQLiteBackend(StorageBackend):
 
                 file_path = row["file_path"]
                 patched_code = row["patched_code"]
+                original_code = row["original_code"]
 
                 if file_path and patched_code is not None:
+                    # Stale patch verification (remediates F05):
+                    # Prevent destroying intervening edits if file content has changed on disk
+                    if os.path.exists(file_path) and original_code is not None:
+                        try:
+                            with open(file_path, "r", encoding="utf-8") as f:
+                                current_content = f.read()
+                            if current_content != original_code:
+                                return False
+                        except Exception:
+                            return False
+
                     os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
                     with open(file_path, "w", encoding="utf-8") as f:
                         f.write(patched_code)
@@ -1028,7 +1332,10 @@ class SQLiteBackend(StorageBackend):
     def list_audit_logs(
         self,
         limit: int = 50,
+        offset: int = 0,
         decision: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        tool_name: Optional[str] = None,
         session_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         with self._lock:
@@ -1041,13 +1348,19 @@ class SQLiteBackend(StorageBackend):
                 if decision:
                     conditions.append("decision = ?")
                     params.append(decision)
+                if risk_level:
+                    conditions.append("risk_level = ?")
+                    params.append(risk_level)
+                if tool_name:
+                    conditions.append("tool_name LIKE ?")
+                    params.append(f"%{tool_name}%")
                 if session_id:
                     conditions.append("session_id = ?")
                     params.append(session_id)
                 if conditions:
                     query += " WHERE " + " AND ".join(conditions)
-                query += " ORDER BY id DESC LIMIT ?"
-                params.append(limit)
+                query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+                params.extend([limit, offset])
 
                 cursor.execute(query, tuple(params))
                 results = []
@@ -1056,6 +1369,1561 @@ class SQLiteBackend(StorageBackend):
                     data["tool_args"] = json.loads(data.get("tool_args") or "{}")
                     results.append(data)
                 return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def count_audit_logs(
+        self,
+        decision: Optional[str] = None,
+        risk_level: Optional[str] = None,
+        tool_name: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> int:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                query = "SELECT COUNT(*) FROM audit_logs"
+                conditions = []
+                params: List[Any] = []
+                if decision:
+                    conditions.append("decision = ?")
+                    params.append(decision)
+                if risk_level:
+                    conditions.append("risk_level = ?")
+                    params.append(risk_level)
+                if tool_name:
+                    conditions.append("tool_name LIKE ?")
+                    params.append(f"%{tool_name}%")
+                if session_id:
+                    conditions.append("session_id = ?")
+                    params.append(session_id)
+                if conditions:
+                    query += " WHERE " + " AND ".join(conditions)
+
+                cursor.execute(query, tuple(params))
+                row = cursor.fetchone()
+                return row[0] if row else 0
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    # --- 8. SCHEDULED TASKS PERSISTENCE ---
+
+    def create_scheduled_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                task_id = task.get("id") or f"task-{int(time.time() * 1000)}"
+                created_at = task.get("created_at") or datetime.now(timezone.utc).isoformat()
+                cursor.execute(
+                    """
+                    INSERT INTO scheduled_tasks (
+                        id, name, description, cron, cron_human, agent_persona,
+                        model, status, last_run, next_run, cost_per_run,
+                        monthly_estimate, is_off_peak, notification_channel,
+                        prompt, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        task_id,
+                        task["name"],
+                        task.get("description", ""),
+                        task["cron"],
+                        task.get("cron_human", task["cron"]),
+                        task.get("agent_persona", "Senior Engineer"),
+                        task.get("model", "instant"),
+                        task.get("status", "active"),
+                        task.get("last_run"),
+                        task.get("next_run", "Tonight, 02:00 AM (Off-peak)"),
+                        float(task.get("cost_per_run", 0.0012)),
+                        float(task.get("monthly_estimate", 0.036)),
+                        1 if task.get("is_off_peak", True) else 0,
+                        task.get("notification_channel", "slack"),
+                        task["prompt"],
+                        created_at,
+                    ),
+                )
+                conn.commit()
+                res = self.get_scheduled_task(task_id)
+                return res if res is not None else task
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_scheduled_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM scheduled_tasks WHERE id = ?", (task_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                d = dict(row)
+                d["is_off_peak"] = bool(d.get("is_off_peak", 1))
+                return d
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_scheduled_tasks(self) -> List[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM scheduled_tasks ORDER BY created_at ASC")
+                rows = cursor.fetchall()
+                if not rows:
+                    # Seed default tasks if table is empty
+                    default_tasks = [
+                        {
+                            "id": "task-1",
+                            "name": "Daily Inbox Digest",
+                            "description": "Summarizes critical emails, mentions, and urgent unread threads at 8 AM.",
+                            "cron": "0 8 * * *",
+                            "cron_human": "Every day at 8:00 AM",
+                            "agent_persona": "Executive Drafter",
+                            "model": "instant",
+                            "status": "active",
+                            "last_run": "Today, 08:00 AM",
+                            "next_run": "Tomorrow, 08:00 AM",
+                            "cost_per_run": 0.0008,
+                            "monthly_estimate": 0.024,
+                            "is_off_peak": False,
+                            "notification_channel": "slack",
+                            "prompt": "Summarize all high-priority unread emails and draft responses for urgent items.",
+                            "created_at": "2026-03-01",
+                        },
+                        {
+                            "id": "task-2",
+                            "name": "Weekly Expense & Spend Audit",
+                            "description": "Generates weekly financial reconciliation and token budget usage Sunday at 6 PM.",
+                            "cron": "0 18 * * 0",
+                            "cron_human": "Every Sunday at 6:00 PM",
+                            "agent_persona": "Deep Researcher",
+                            "model": "instant",
+                            "status": "active",
+                            "last_run": "Sun, Mar 8, 06:00 PM",
+                            "next_run": "Sun, Mar 15, 06:00 PM",
+                            "cost_per_run": 0.0025,
+                            "monthly_estimate": 0.010,
+                            "is_off_peak": False,
+                            "notification_channel": "slack",
+                            "prompt": "Compile weekly expenditure report and verify zero 90/9/1 budget breaches.",
+                            "created_at": "2026-03-02",
+                        },
+                        {
+                            "id": "task-3",
+                            "name": "Off-Peak Security & AST Audit",
+                            "description": "Runs zero-trust safety checks, AST sanitization, and dependency vulnerabilities overnight.",
+                            "cron": "0 2 * * *",
+                            "cron_human": "Every day at 2:00 AM (Off-peak)",
+                            "agent_persona": "Security Auditor",
+                            "model": "reasoning",
+                            "status": "active",
+                            "last_run": "Today, 02:00 AM",
+                            "next_run": "Tomorrow, 02:00 AM (Off-peak)",
+                            "cost_per_run": 0.0064,
+                            "monthly_estimate": 0.192,
+                            "is_off_peak": True,
+                            "notification_channel": "webhook",
+                            "prompt": "Inspect AST diffs, detect dangerous shell patterns, and review staged patches.",
+                            "created_at": "2026-03-05",
+                        },
+                    ]
+                    for t in default_tasks:
+                        cursor.execute(
+                            """
+                            INSERT OR IGNORE INTO scheduled_tasks (
+                                id, name, description, cron, cron_human, agent_persona,
+                                model, status, last_run, next_run, cost_per_run,
+                                monthly_estimate, is_off_peak, notification_channel,
+                                prompt, created_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                t["id"],
+                                t["name"],
+                                t["description"],
+                                t["cron"],
+                                t["cron_human"],
+                                t["agent_persona"],
+                                t["model"],
+                                t["status"],
+                                t.get("last_run"),
+                                t.get("next_run"),
+                                t["cost_per_run"],
+                                t["monthly_estimate"],
+                                1 if t["is_off_peak"] else 0,
+                                t["notification_channel"],
+                                t["prompt"],
+                                t["created_at"],
+                            ),
+                        )
+                    conn.commit()
+                    cursor.execute("SELECT * FROM scheduled_tasks ORDER BY created_at ASC")
+                    rows = cursor.fetchall()
+
+                result = []
+                for row in rows:
+                    d = dict(row)
+                    d["is_off_peak"] = bool(d.get("is_off_peak", 1))
+                    result.append(d)
+                return result
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def update_scheduled_task_status(self, task_id: str, status: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE scheduled_tasks SET status = ? WHERE id = ?",
+                    (status, task_id),
+                )
+                conn.commit()
+                return self.get_scheduled_task(task_id)
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def delete_scheduled_task(self, task_id: str) -> bool:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM scheduled_tasks WHERE id = ?", (task_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    # --- 9. COLLABORATIVE ROOMS ---
+
+    def create_room(self, room: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                now_iso = datetime.now(timezone.utc).isoformat()
+                room_id = room.get("room_id") or f"room_{uuid.uuid4().hex[:10]}"
+                created_at = room.get("created_at") or now_iso
+                updated_at = room.get("updated_at") or now_iso
+
+                active_adapters = room.get("active_adapters") or []
+                if not isinstance(active_adapters, str):
+                    active_adapters = json.dumps(active_adapters)
+
+                session_ids = room.get("session_ids") or []
+                if not isinstance(session_ids, str):
+                    session_ids = json.dumps(session_ids)
+
+                meta = room.get("metadata") or {}
+                if not isinstance(meta, str):
+                    meta = json.dumps(meta)
+
+                cursor.execute(
+                    """
+                    INSERT INTO collaborative_rooms (
+                        room_id, project_id, name, description, topic, status,
+                        policy_id, active_adapters, session_ids, created_at, updated_at, metadata
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        room_id,
+                        room.get("project_id", "default"),
+                        room.get("name", "Untitled Room"),
+                        room.get("description", ""),
+                        room.get("topic", ""),
+                        room.get("status", "active"),
+                        room.get("policy_id"),
+                        active_adapters,
+                        session_ids,
+                        created_at,
+                        updated_at,
+                        meta,
+                    ),
+                )
+                conn.commit()
+                return self.get_room(room_id) or room
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_room(self, room_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM collaborative_rooms WHERE room_id = ?", (room_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                data = dict(row)
+                data["active_adapters"] = json.loads(data.get("active_adapters") or "[]")
+                data["session_ids"] = json.loads(data.get("session_ids") or "[]")
+                data["metadata"] = json.loads(data.get("metadata") or "{}")
+                return data
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_rooms(
+        self, project_id: Optional[str] = None, status: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                query = "SELECT * FROM collaborative_rooms"
+                params: List[Any] = []
+                clauses: List[str] = []
+
+                if project_id:
+                    clauses.append("project_id = ?")
+                    params.append(project_id)
+                if status:
+                    clauses.append("status = ?")
+                    params.append(status)
+
+                if clauses:
+                    query += " WHERE " + " AND ".join(clauses)
+                query += " ORDER BY updated_at DESC"
+
+                cursor.execute(query, tuple(params))
+                rows = cursor.fetchall()
+                results = []
+                for row in rows:
+                    data = dict(row)
+                    data["active_adapters"] = json.loads(data.get("active_adapters") or "[]")
+                    data["session_ids"] = json.loads(data.get("session_ids") or "[]")
+                    data["metadata"] = json.loads(data.get("metadata") or "{}")
+                    results.append(data)
+                return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def update_room(self, room_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                set_clauses: List[str] = []
+                params: List[Any] = []
+
+                for k, v in updates.items():
+                    if k in ("room_id", "created_at"):
+                        continue
+                    if k in ("active_adapters", "session_ids", "metadata") and not isinstance(
+                        v, str
+                    ):
+                        v = json.dumps(v)
+                    set_clauses.append(f"{k} = ?")
+                    params.append(v)
+
+                if not set_clauses:
+                    return self.get_room(room_id)
+
+                set_clauses.append("updated_at = ?")
+                params.append(datetime.now(timezone.utc).isoformat())
+                params.append(room_id)
+
+                sql = f"UPDATE collaborative_rooms SET {', '.join(set_clauses)} WHERE room_id = ?"
+                cursor.execute(sql, tuple(params))
+                conn.commit()
+                return self.get_room(room_id)
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def delete_room(self, room_id: str) -> bool:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM collaborative_rooms WHERE room_id = ?", (room_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def add_room_participant(self, participant: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                now_iso = datetime.now(timezone.utc).isoformat()
+                joined_at = participant.get("joined_at") or now_iso
+                perms = participant.get("permissions") or []
+                if not isinstance(perms, str):
+                    perms = json.dumps(perms)
+                meta = participant.get("metadata") or {}
+                if not isinstance(meta, str):
+                    meta = json.dumps(meta)
+
+                cursor.execute(
+                    """
+                    INSERT INTO room_participants (
+                        room_id, participant_id, name, role, participant_type, adapter_type,
+                        permissions, joined_at, metadata
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(room_id, participant_id) DO UPDATE SET
+                        name = excluded.name,
+                        role = excluded.role,
+                        participant_type = excluded.participant_type,
+                        adapter_type = excluded.adapter_type,
+                        permissions = excluded.permissions,
+                        metadata = excluded.metadata
+                    """,
+                    (
+                        participant["room_id"],
+                        participant["participant_id"],
+                        participant.get("name", participant["participant_id"]),
+                        participant.get("role", "member"),
+                        participant.get("participant_type", "human"),
+                        participant.get("adapter_type"),
+                        perms,
+                        joined_at,
+                        meta,
+                    ),
+                )
+                conn.commit()
+                res = self.get_room_participant(
+                    participant["room_id"], participant["participant_id"]
+                )
+                return res if res is not None else participant
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_room_participant(self, room_id: str, participant_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM room_participants WHERE room_id = ? AND participant_id = ?",
+                    (room_id, participant_id),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                data = dict(row)
+                data["permissions"] = json.loads(data.get("permissions") or "[]")
+                data["metadata"] = json.loads(data.get("metadata") or "{}")
+                return data
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_room_participants(self, room_id: str) -> List[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM room_participants WHERE room_id = ? ORDER BY joined_at ASC",
+                    (room_id,),
+                )
+                rows = cursor.fetchall()
+                results = []
+                for row in rows:
+                    data = dict(row)
+                    data["permissions"] = json.loads(data.get("permissions") or "[]")
+                    data["metadata"] = json.loads(data.get("metadata") or "{}")
+                    results.append(data)
+                return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def update_room_participant(
+        self, room_id: str, participant_id: str, updates: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                set_clauses: List[str] = []
+                params: List[Any] = []
+
+                for k, v in updates.items():
+                    if k in ("room_id", "participant_id", "joined_at"):
+                        continue
+                    if k in ("permissions", "metadata") and not isinstance(v, str):
+                        v = json.dumps(v)
+                    set_clauses.append(f"{k} = ?")
+                    params.append(v)
+
+                if not set_clauses:
+                    return self.get_room_participant(room_id, participant_id)
+
+                params.append(room_id)
+                params.append(participant_id)
+                sql = f"UPDATE room_participants SET {', '.join(set_clauses)} WHERE room_id = ? AND participant_id = ?"
+                cursor.execute(sql, tuple(params))
+                conn.commit()
+                return self.get_room_participant(room_id, participant_id)
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def remove_room_participant(self, room_id: str, participant_id: str) -> bool:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "DELETE FROM room_participants WHERE room_id = ? AND participant_id = ?",
+                    (room_id, participant_id),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def create_room_task(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                now_iso = datetime.now(timezone.utc).isoformat()
+                created_at = task.get("created_at") or now_iso
+                updated_at = task.get("updated_at") or now_iso
+                deps = task.get("dependencies") or []
+                if not isinstance(deps, str):
+                    deps = json.dumps(deps)
+                meta = task.get("metadata") or {}
+                if not isinstance(meta, str):
+                    meta = json.dumps(meta)
+                res = task.get("result")
+                if res is not None and not isinstance(res, str):
+                    res = json.dumps(res)
+
+                cursor.execute(
+                    """
+                    INSERT INTO room_tasks (
+                        task_id, room_id, title, description, status, priority,
+                        assigned_to, assigned_adapter, parent_task_id, dependencies,
+                        created_by, created_at, updated_at, result, metadata
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(task_id) DO UPDATE SET
+                        title = excluded.title,
+                        description = excluded.description,
+                        status = excluded.status,
+                        priority = excluded.priority,
+                        assigned_to = excluded.assigned_to,
+                        assigned_adapter = excluded.assigned_adapter,
+                        parent_task_id = excluded.parent_task_id,
+                        dependencies = excluded.dependencies,
+                        updated_at = excluded.updated_at,
+                        result = excluded.result,
+                        metadata = excluded.metadata
+                    """,
+                    (
+                        task["task_id"],
+                        task["room_id"],
+                        task["title"],
+                        task.get("description", ""),
+                        task.get("status", "pending"),
+                        task.get("priority", "medium"),
+                        task.get("assigned_to"),
+                        task.get("assigned_adapter"),
+                        task.get("parent_task_id"),
+                        deps,
+                        task.get("created_by", "human"),
+                        created_at,
+                        updated_at,
+                        res,
+                        meta,
+                    ),
+                )
+                conn.commit()
+                found = self.get_room_task(task["room_id"], task["task_id"])
+                return found if found is not None else task
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_room_task(self, room_id: str, task_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM room_tasks WHERE room_id = ? AND task_id = ?",
+                    (room_id, task_id),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                data = dict(row)
+                data["dependencies"] = json.loads(data.get("dependencies") or "[]")
+                data["metadata"] = json.loads(data.get("metadata") or "{}")
+                if data.get("result"):
+                    try:
+                        data["result"] = json.loads(data["result"])
+                    except Exception:
+                        pass
+                return data
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_room_tasks(
+        self,
+        room_id: str,
+        status: Optional[str] = None,
+        assigned_to: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                sql = "SELECT * FROM room_tasks WHERE room_id = ?"
+                params: List[Any] = [room_id]
+                if status:
+                    sql += " AND status = ?"
+                    params.append(status)
+                if assigned_to:
+                    sql += " AND assigned_to = ?"
+                    params.append(assigned_to)
+                sql += " ORDER BY created_at ASC"
+
+                cursor.execute(sql, tuple(params))
+                rows = cursor.fetchall()
+                results = []
+                for row in rows:
+                    data = dict(row)
+                    data["dependencies"] = json.loads(data.get("dependencies") or "[]")
+                    data["metadata"] = json.loads(data.get("metadata") or "{}")
+                    if data.get("result"):
+                        try:
+                            data["result"] = json.loads(data["result"])
+                        except Exception:
+                            pass
+                    results.append(data)
+                return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def update_room_task(
+        self, room_id: str, task_id: str, updates: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                set_clauses: List[str] = []
+                params: List[Any] = []
+
+                for k, v in updates.items():
+                    if k in ("room_id", "task_id", "created_at", "created_by"):
+                        continue
+                    if (
+                        k in ("dependencies", "metadata", "result")
+                        and v is not None
+                        and not isinstance(v, str)
+                    ):
+                        v = json.dumps(v)
+                    set_clauses.append(f"{k} = ?")
+                    params.append(v)
+
+                if not set_clauses:
+                    return self.get_room_task(room_id, task_id)
+
+                set_clauses.append("updated_at = ?")
+                params.append(datetime.now(timezone.utc).isoformat())
+                params.append(room_id)
+                params.append(task_id)
+
+                sql = f"UPDATE room_tasks SET {', '.join(set_clauses)} WHERE room_id = ? AND task_id = ?"
+                cursor.execute(sql, tuple(params))
+                conn.commit()
+                return self.get_room_task(room_id, task_id)
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def delete_room_task(self, room_id: str, task_id: str) -> bool:
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "DELETE FROM room_tasks WHERE room_id = ? AND task_id = ?",
+                    (room_id, task_id),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    # --- 13. CANONICAL EXECUTIONS (R1.1) ---
+
+    def create_execution(self, execution: Dict[str, Any]) -> Dict[str, Any]:
+        """Create and persist an execution record."""
+        exec_id = execution["id"]
+        session_id = execution.get("session_id")
+        project_id = execution["project_id"]
+        status = execution.get("status", "created")
+        if isinstance(status, str):
+            status_val = status
+        else:
+            status_val = getattr(status, "value", str(status))
+
+        req = execution.get("request") or execution.get("request_json", {})
+        if isinstance(req, str):
+            req_json = req
+        elif hasattr(req, "model_dump_json"):
+            req_json = req.model_dump_json()
+        else:
+            req_json = json.dumps(req, default=str)
+
+        routing_tier = execution.get("routing_tier")
+        if routing_tier is not None and not isinstance(routing_tier, str):
+            routing_tier = getattr(routing_tier, "value", str(routing_tier))
+
+        created_at = execution.get("created_at") or datetime.now(timezone.utc).isoformat()
+
+        if session_id:
+            # Auto-ensure session exists if specified to satisfy relational foreign key
+            if not self.get_session(session_id):
+                try:
+                    self.create_session(
+                        session_id=session_id, user_id="default_user", title="Execution Session"
+                    )
+                except Exception:
+                    pass
+
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO executions (
+                        id, session_id, project_id, status, request_json,
+                        provider, model, routing_tier, input_tokens, output_tokens,
+                        total_cost_usd, is_cost_estimated, cost_provenance, started_at, completed_at,
+                        error_code, error_message, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        exec_id,
+                        session_id,
+                        project_id,
+                        status_val,
+                        req_json,
+                        execution.get("provider"),
+                        execution.get("model"),
+                        routing_tier,
+                        execution.get("input_tokens", 0),
+                        execution.get("output_tokens", 0),
+                        float(execution.get("total_cost_usd", 0.0)),
+                        1 if execution.get("is_cost_estimated") else 0,
+                        execution.get("cost_provenance"),
+                        execution.get("started_at"),
+                        execution.get("completed_at"),
+                        execution.get("error_code"),
+                        execution.get("error_message") or execution.get("error"),
+                        created_at,
+                    ),
+                )
+                conn.commit()
+                found = self.get_execution(exec_id)
+                return found if found is not None else execution
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_execution(self, execution_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve an execution record by primary key."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM executions WHERE id = ?", (execution_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                data = dict(row)
+                data["is_cost_estimated"] = bool(data.get("is_cost_estimated"))
+                if data.get("request_json"):
+                    try:
+                        data["request"] = json.loads(data["request_json"])
+                    except Exception:
+                        data["request"] = data["request_json"]
+                return data
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def update_execution(
+        self, execution_id: str, updates: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Update an execution record."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                set_clauses: List[str] = []
+                params: List[Any] = []
+
+                valid_columns = {
+                    "session_id",
+                    "project_id",
+                    "status",
+                    "request_json",
+                    "provider",
+                    "model",
+                    "routing_tier",
+                    "input_tokens",
+                    "output_tokens",
+                    "total_cost_usd",
+                    "is_cost_estimated",
+                    "started_at",
+                    "completed_at",
+                    "error_code",
+                    "error_message",
+                    "cost_provenance",
+                }
+
+                for k, v in updates.items():
+                    if k in ("id", "created_at"):
+                        continue
+                    if k == "error":
+                        k = "error_message"
+                    if k in ("request", "request_json"):
+                        k = "request_json"
+                        if not isinstance(v, str):
+                            try:
+                                v = (
+                                    v.model_dump_json()
+                                    if hasattr(v, "model_dump_json")
+                                    else json.dumps(v, default=str)
+                                )
+                            except Exception:
+                                if hasattr(v, "model_dump"):
+                                    v = json.dumps(v.model_dump(), default=str)
+                                else:
+                                    v = json.dumps(v, default=str)
+                    if k not in valid_columns:
+                        continue
+                    if k == "status" and hasattr(v, "value"):
+                        v = v.value
+                    elif k == "routing_tier" and hasattr(v, "value"):
+                        v = v.value
+                    elif k == "is_cost_estimated":
+                        v = 1 if v else 0
+                    set_clauses.append(f"{k} = ?")
+                    params.append(v)
+
+                if not set_clauses:
+                    return self.get_execution(execution_id)
+
+                params.append(execution_id)
+                sql = f"UPDATE executions SET {', '.join(set_clauses)} WHERE id = ?"
+                cursor.execute(sql, tuple(params))
+                conn.commit()
+                return self.get_execution(execution_id)
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_executions(
+        self,
+        project_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """List executions filtered by project, session, or status."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                sql = "SELECT * FROM executions WHERE 1=1"
+                params: List[Any] = []
+                if project_id:
+                    sql += " AND project_id = ?"
+                    params.append(project_id)
+                if session_id:
+                    sql += " AND session_id = ?"
+                    params.append(session_id)
+                if status:
+                    if hasattr(status, "value"):
+                        status = status.value
+                    sql += " AND status = ?"
+                    params.append(status)
+                sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                params.extend([limit, offset])
+
+                cursor.execute(sql, tuple(params))
+                rows = cursor.fetchall()
+                results = []
+                for row in rows:
+                    data = dict(row)
+                    data["is_cost_estimated"] = bool(data.get("is_cost_estimated"))
+                    if data.get("request_json"):
+                        try:
+                            data["request"] = json.loads(data["request_json"])
+                        except Exception:
+                            data["request"] = data["request_json"]
+                    results.append(data)
+                return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def record_execution_event(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist an append-only execution event."""
+        evt_id = event["id"]
+        execution_id = event["execution_id"]
+        seq_num = event["sequence_num"]
+        timestamp = event.get("timestamp") or datetime.now(timezone.utc).isoformat()
+        evt_type = event["event_type"]
+        if hasattr(evt_type, "value"):
+            evt_type = evt_type.value
+
+        payload = event.get("payload") if "payload" in event else event.get("payload_json", {})
+        if isinstance(payload, str):
+            payload_json = payload
+        elif hasattr(payload, "model_dump_json"):
+            payload_json = payload.model_dump_json()
+        else:
+            payload_json = json.dumps(payload)
+
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                if seq_num is not None:
+                    cursor.execute(
+                        "SELECT 1 FROM execution_events WHERE execution_id = ? AND sequence_num = ?",
+                        (execution_id, seq_num),
+                    )
+                    if cursor.fetchone() is not None:
+                        # Collision: advance to next available sequence number
+                        cursor.execute(
+                            "SELECT COALESCE(MAX(sequence_num), -1) + 1 FROM execution_events WHERE execution_id = ?",
+                            (execution_id,),
+                        )
+                        actual_seq = cursor.fetchone()[0]
+                    else:
+                        actual_seq = seq_num
+                else:
+                    cursor.execute(
+                        "SELECT COALESCE(MAX(sequence_num), -1) + 1 FROM execution_events WHERE execution_id = ?",
+                        (execution_id,),
+                    )
+                    actual_seq = cursor.fetchone()[0]
+                cursor.execute(
+                    """
+                    INSERT INTO execution_events (id, execution_id, sequence_num, timestamp, event_type, payload_json)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (evt_id, execution_id, actual_seq, timestamp, evt_type, payload_json),
+                )
+                conn.commit()
+                event["sequence_num"] = actual_seq
+                return event
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_execution_events(
+        self, execution_id: str, after_sequence_num: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
+        """Retrieve ordered event stream for an execution by execution_id or request_id."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                sql = "SELECT * FROM execution_events WHERE execution_id = ?"
+                params: List[Any] = [execution_id]
+                if after_sequence_num is not None:
+                    sql += " AND sequence_num > ?"
+                    params.append(after_sequence_num)
+                sql += " ORDER BY sequence_num ASC"
+
+                cursor.execute(sql, tuple(params))
+                rows = cursor.fetchall()
+                results = []
+                for row in rows:
+                    data = dict(row)
+                    if data.get("payload_json"):
+                        try:
+                            data["payload"] = json.loads(data["payload_json"])
+                        except Exception:
+                            data["payload"] = data["payload_json"]
+                    results.append(data)
+                return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    # --- 14. CANONICAL PROJECTS (R1.6) ---
+
+    def create_project(self, project: Dict[str, Any]) -> Dict[str, Any]:
+        """Create and persist a canonical project."""
+        proj_id = project.get("id") or f"proj_{uuid.uuid4().hex[:12]}"
+        name = project["name"]
+        description = project.get("description")
+        root_path = project.get("root_path", f"/workspace/{proj_id}")
+        instructions = project.get("instructions", "")
+        settings = project.get("settings", {})
+        if hasattr(settings, "model_dump"):
+            settings = settings.model_dump()
+        settings_json = json.dumps(settings) if isinstance(settings, dict) else str(settings)
+        is_default = 1 if project.get("is_default") else 0
+        now_iso = datetime.now(timezone.utc).isoformat()
+        created_at = project.get("created_at") or now_iso
+        updated_at = project.get("updated_at") or now_iso
+
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                if is_default:
+                    cursor.execute("UPDATE projects SET is_default = 0 WHERE is_default = 1")
+                cursor.execute(
+                    """
+                    INSERT INTO projects (id, name, description, root_path, instructions, settings_json, is_default, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        proj_id,
+                        name,
+                        description,
+                        root_path,
+                        instructions,
+                        settings_json,
+                        is_default,
+                        created_at,
+                        updated_at,
+                    ),
+                )
+                conn.commit()
+                found = self.get_project(proj_id)
+                return found if found is not None else project
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_project(self, project_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve a project by canonical primary key or resolve backward-compatible aliases."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                if project_id in ("default", "proj_default"):
+                    cursor.execute(
+                        "SELECT * FROM projects WHERE is_default = 1 ORDER BY created_at ASC LIMIT 1"
+                    )
+                else:
+                    cursor.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                data = dict(row)
+                data["is_default"] = bool(data.get("is_default", 0))
+                if data.get("settings_json"):
+                    try:
+                        data["settings"] = json.loads(data["settings_json"])
+                    except Exception:
+                        data["settings"] = {}
+                else:
+                    data["settings"] = {}
+                return data
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_default_project(self) -> Optional[Dict[str, Any]]:
+        """Retrieve the canonical default project (where is_default = 1)."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM projects WHERE is_default = 1 ORDER BY created_at ASC LIMIT 1"
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                data = dict(row)
+                data["is_default"] = bool(data.get("is_default", 0))
+                if data.get("settings_json"):
+                    try:
+                        data["settings"] = json.loads(data["settings_json"])
+                    except Exception:
+                        data["settings"] = {}
+                else:
+                    data["settings"] = {}
+                return data
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def update_project(self, project_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update an existing project."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                if updates.get("is_default"):
+                    cursor.execute(
+                        "UPDATE projects SET is_default = 0 WHERE is_default = 1 AND id != ?",
+                        (project_id,),
+                    )
+                set_clauses: List[str] = []
+                params: List[Any] = []
+
+                for k, v in updates.items():
+                    if k in ("id", "created_at"):
+                        continue
+                    if k == "settings":
+                        k = "settings_json"
+                        if hasattr(v, "model_dump"):
+                            v = v.model_dump()
+                        v = json.dumps(v) if isinstance(v, dict) else str(v)
+                    elif k == "settings_json" and isinstance(v, dict):
+                        v = json.dumps(v)
+                    set_clauses.append(f"{k} = ?")
+                    params.append(v)
+
+                if "updated_at" not in updates:
+                    set_clauses.append("updated_at = ?")
+                    params.append(datetime.now(timezone.utc).isoformat())
+
+                if not set_clauses:
+                    return self.get_project(project_id)
+
+                params.append(project_id)
+                sql = f"UPDATE projects SET {', '.join(set_clauses)} WHERE id = ?"
+                cursor.execute(sql, tuple(params))
+                conn.commit()
+                return self.get_project(project_id)
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_projects(self, limit: int = 50, offset: int = 0) -> List[Dict[str, Any]]:
+        """List canonical projects with pagination."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM projects ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (limit, offset),
+                )
+                rows = cursor.fetchall()
+                results = []
+                for row in rows:
+                    data = dict(row)
+                    if data.get("settings_json"):
+                        try:
+                            data["settings"] = json.loads(data["settings_json"])
+                        except Exception:
+                            data["settings"] = {}
+                    else:
+                        data["settings"] = {}
+                    data["is_default"] = bool(data.get("is_default", 0))
+                    results.append(data)
+                return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def delete_project(self, project_id: str) -> bool:
+        """Delete a project by primary key."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    # --- 15. CANONICAL ARTIFACTS (R1.10) ---
+
+    def create_artifact(self, artifact: Dict[str, Any]) -> Dict[str, Any]:
+        """Persist a canonical artifact metadata record."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                lineage_str = (
+                    json.dumps(artifact.get("lineage", {}))
+                    if isinstance(artifact.get("lineage"), (dict, list))
+                    else str(artifact.get("lineage", "{}"))
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO artifacts (
+                        id, project_id, execution_id, name, type, mime_type,
+                        storage_kind, file_path, inline_content, sha256_hash,
+                        size_bytes, status, lineage_json, created_by, created_at,
+                        deleted_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        artifact["id"],
+                        artifact["project_id"],
+                        artifact["execution_id"],
+                        artifact["name"],
+                        artifact.get("type", "file"),
+                        artifact.get("mime_type", "application/octet-stream"),
+                        artifact.get("storage_kind", "filesystem"),
+                        artifact.get("file_path"),
+                        artifact.get("inline_content"),
+                        artifact["sha256_hash"],
+                        artifact["size_bytes"],
+                        artifact.get("status", "ready"),
+                        lineage_str,
+                        artifact.get("created_by"),
+                        artifact.get("created_at", datetime.now(timezone.utc).isoformat()),
+                        artifact.get("deleted_at"),
+                    ),
+                )
+                conn.commit()
+                return artifact
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_artifact(self, artifact_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve artifact metadata by primary key."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM artifacts WHERE id = ?", (artifact_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                data = dict(row)
+                if data.get("lineage_json"):
+                    try:
+                        data["lineage"] = json.loads(data["lineage_json"])
+                    except Exception:
+                        data["lineage"] = {}
+                else:
+                    data["lineage"] = {}
+                return data
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_artifacts_by_execution(
+        self, execution_id: str, include_deleted: bool = False
+    ) -> List[Dict[str, Any]]:
+        """List all artifacts produced or referenced by an execution."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                if include_deleted:
+                    sql = "SELECT * FROM artifacts WHERE execution_id = ? ORDER BY created_at ASC"
+                else:
+                    sql = (
+                        "SELECT * FROM artifacts WHERE execution_id = ? AND status != 'deleted' "
+                        "ORDER BY created_at ASC"
+                    )
+                cursor.execute(sql, (execution_id,))
+                rows = cursor.fetchall()
+                results = []
+                for row in rows:
+                    data = dict(row)
+                    if data.get("lineage_json"):
+                        try:
+                            data["lineage"] = json.loads(data["lineage_json"])
+                        except Exception:
+                            data["lineage"] = {}
+                    else:
+                        data["lineage"] = {}
+                    results.append(data)
+                return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_artifacts_by_project(
+        self, project_id: str, include_deleted: bool = False
+    ) -> List[Dict[str, Any]]:
+        """List all artifacts belonging to a project."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                if include_deleted:
+                    sql = "SELECT * FROM artifacts WHERE project_id = ? ORDER BY created_at DESC"
+                else:
+                    sql = (
+                        "SELECT * FROM artifacts WHERE project_id = ? AND status != 'deleted' "
+                        "ORDER BY created_at DESC"
+                    )
+                cursor.execute(sql, (project_id,))
+                rows = cursor.fetchall()
+                results = []
+                for row in rows:
+                    data = dict(row)
+                    if data.get("lineage_json"):
+                        try:
+                            data["lineage"] = json.loads(data["lineage_json"])
+                        except Exception:
+                            data["lineage"] = {}
+                    else:
+                        data["lineage"] = {}
+                    results.append(data)
+                return results
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def update_artifact(
+        self, artifact_id: str, updates: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Update artifact metadata."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                set_clauses = []
+                params = []
+                for key, val in updates.items():
+                    if key == "lineage":
+                        set_clauses.append("lineage_json = ?")
+                        params.append(
+                            json.dumps(val) if isinstance(val, (dict, list)) else str(val)
+                        )
+                    elif key in (
+                        "name",
+                        "type",
+                        "mime_type",
+                        "storage_kind",
+                        "file_path",
+                        "inline_content",
+                        "sha256_hash",
+                        "size_bytes",
+                        "status",
+                        "created_by",
+                        "deleted_at",
+                    ):
+                        set_clauses.append(f"{key} = ?")
+                        params.append(val)
+                if not set_clauses:
+                    return self.get_artifact(artifact_id)
+                params.append(artifact_id)
+                sql = f"UPDATE artifacts SET {', '.join(set_clauses)} WHERE id = ?"
+                cursor.execute(sql, tuple(params))
+                conn.commit()
+                return self.get_artifact(artifact_id)
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def delete_artifact(self, artifact_id: str) -> bool:
+        """Mark an artifact record as DELETED and clear payload references (tombstone preservation)."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                now_iso = datetime.now(timezone.utc).isoformat()
+                cursor.execute(
+                    """
+                    UPDATE artifacts
+                    SET status = 'deleted',
+                        deleted_at = ?,
+                        file_path = NULL,
+                        inline_content = NULL
+                    WHERE id = ? AND status != 'deleted'
+                    """,
+                    (now_iso, artifact_id),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    # --- 16. CANONICAL APPROVALS (R2.4) ---
+
+    def _row_to_approval(self, row: sqlite3.Row) -> Dict[str, Any]:
+        data = dict(row)
+        if "metadata_json" in data:
+            try:
+                data["metadata"] = json.loads(data.pop("metadata_json"))
+            except Exception:
+                data["metadata"] = {}
+        return data
+
+    def save_approval(self, approval: Dict[str, Any]) -> None:
+        """Persist or update an exact-operation approval record."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                metadata_json = json.dumps(approval.get("metadata", {}))
+                cursor.execute(
+                    """
+                    INSERT INTO approvals (
+                        approval_id, execution_id, actor, capability, operation_digest,
+                        digest_version, token_verifier, issued_at, expires_at, decision,
+                        status, consumed_at, metadata_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(approval_id) DO UPDATE SET
+                        execution_id = excluded.execution_id,
+                        actor = excluded.actor,
+                        capability = excluded.capability,
+                        operation_digest = excluded.operation_digest,
+                        digest_version = excluded.digest_version,
+                        token_verifier = excluded.token_verifier,
+                        issued_at = excluded.issued_at,
+                        expires_at = excluded.expires_at,
+                        decision = excluded.decision,
+                        status = excluded.status,
+                        consumed_at = excluded.consumed_at,
+                        metadata_json = excluded.metadata_json
+                    """,
+                    (
+                        approval["approval_id"],
+                        approval.get("execution_id"),
+                        approval.get("actor", "local_operator"),
+                        approval["capability"],
+                        approval["operation_digest"],
+                        approval.get("digest_version", 1),
+                        approval["token_verifier"],
+                        float(approval["issued_at"]),
+                        float(approval["expires_at"]),
+                        approval.get("decision", "approved"),
+                        approval.get("status", "pending"),
+                        float(approval["consumed_at"])
+                        if approval.get("consumed_at") is not None
+                        else None,
+                        metadata_json,
+                    ),
+                )
+                conn.commit()
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_approval(self, approval_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve an approval record by primary key."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM approvals WHERE approval_id = ?", (approval_id,))
+                row = cursor.fetchone()
+                return self._row_to_approval(row) if row else None
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def get_approval_by_verifier(self, token_verifier: str) -> Optional[Dict[str, Any]]:
+        """Retrieve an approval record by token verifier digest."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM approvals WHERE token_verifier = ?", (token_verifier,)
+                )
+                row = cursor.fetchone()
+                return self._row_to_approval(row) if row else None
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def atomic_consume_approval(self, approval_id: str, token_verifier: str, now: float) -> bool:
+        """Atomically transition approval from 'approved' to 'consumed' in SQLite."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    UPDATE approvals
+                    SET status = 'consumed', consumed_at = ?
+                    WHERE approval_id = ?
+                      AND token_verifier = ?
+                      AND status = 'approved'
+                      AND expires_at > ?
+                    """,
+                    (now, approval_id, token_verifier, now),
+                )
+                conn.commit()
+                return cursor.rowcount == 1
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def atomic_consume_approval_exact(
+        self, approval_id: str, expected_digest: str, now: float
+    ) -> bool:
+        """Atomically transition approval from 'approved' to 'consumed' matching exact digest."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    UPDATE approvals
+                    SET status = 'consumed', consumed_at = ?
+                    WHERE approval_id = ?
+                      AND operation_digest = ?
+                      AND status = 'approved'
+                      AND expires_at > ?
+                    """,
+                    (now, approval_id, expected_digest, now),
+                )
+                conn.commit()
+                return cursor.rowcount == 1
+            finally:
+                if not self._is_memory:
+                    conn.close()
+
+    def list_approvals(
+        self, status: Optional[str] = None, execution_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """List persisted approval records."""
+        with self._lock:
+            conn = self._get_connection()
+            try:
+                cursor = conn.cursor()
+                query = "SELECT * FROM approvals WHERE 1=1"
+                params = []
+                if status:
+                    query += " AND status = ?"
+                    params.append(status)
+                if execution_id:
+                    query += " AND execution_id = ?"
+                    params.append(execution_id)
+                query += " ORDER BY issued_at DESC"
+                cursor.execute(query, tuple(params))
+                rows = cursor.fetchall()
+                return [self._row_to_approval(r) for r in rows]
             finally:
                 if not self._is_memory:
                     conn.close()

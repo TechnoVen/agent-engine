@@ -1,0 +1,100 @@
+{
+  "mode": "deep-research",
+  "title": "Deep Research",
+  "tagline": "Autonomous multi-source deep inquiry, citation synthesis, and evidence cross-validation",
+  "badge": "Research Swarm",
+  "pipeline": "deep_research",
+  "categories": [
+    "All",
+    "Market Analysis",
+    "Academic Review",
+    "Competitor Intel",
+    "Technical Deep-Dive"
+  ],
+  "cases": [
+    {
+      "id": "research-1",
+      "title": "Autonomous Agent Swarm Comparison",
+      "category": "Technical Deep-Dive",
+      "description": "Synthesize comparative analysis of hierarchical swarms vs peer gossip topologies with latency/cost trade-offs.",
+      "mode": "deep-research",
+      "icon_name": "search",
+      "est_cost": "$0.0042 (Swarm Tier)",
+      "tags": [
+        "Multi-Agent",
+        "Swarm",
+        "Consensus"
+      ],
+      "prompt": "Investigate architectural differences between hierarchical orchestrator swarms and peer-to-peer consensus agent meshes, citing recent papers and benchmarks.",
+      "expected_tools": [
+        "web_search",
+        "academic_arxiv",
+        "citation_ranker",
+        "report_synthesizer"
+      ],
+      "sample_output": "### Executive Summary\nHierarchical topologies demonstrate 40% lower message overhead for deterministic pipelines, while peer-to-peer meshes provide superior resilience for open-ended exploration.\n\n**Key Citations:**\n1. Google DeepMind (2025) *Multi-Agent Consensus in Local Contexts*\n2. Stanford AI Lab (2024) *Benchmarking Agent Communication Graphs*"
+    },
+    {
+      "id": "research-2",
+      "title": "Local-First LLM Runtime Landscape",
+      "category": "Market Analysis",
+      "description": "Comprehensive benchmark evaluation of llama.cpp, vLLM, Ollama, and Candle on Apple Silicon and Linux GPUs.",
+      "mode": "deep-research",
+      "icon_name": "search",
+      "est_cost": "$0.0035 (Mid Model)",
+      "tags": [
+        "Local-First",
+        "Inference",
+        "Benchmarks"
+      ],
+      "prompt": "Provide a comprehensive report on local LLM runtimes (vLLM, Ollama, llama.cpp, Candle) comparing tok/sec, memory footprint, and FP8 quantization efficiency.",
+      "expected_tools": [
+        "web_search",
+        "benchmark_indexer",
+        "markdown_table_formatter"
+      ],
+      "sample_output": "| Runtime | VRAM Footprint | Q4_K_M tok/s | FP8 Support |\n|---|---|---|---|\n| llama.cpp | 4.8 GB | 62.4 | Yes |\n| vLLM | 7.2 GB | 89.1 | Yes (CUDA) |\n| Ollama | 5.1 GB | 58.0 | Yes |"
+    },
+    {
+      "id": "research-3",
+      "title": "Postgres vs SQLite for Vector Embeddings",
+      "category": "Technical Deep-Dive",
+      "description": "Examine vector search throughput, memory indexing, and cold-start latency between pgvector and sqlite-vec.",
+      "mode": "deep-research",
+      "icon_name": "database",
+      "est_cost": "$0.0028 (Small Model)",
+      "tags": [
+        "VectorDB",
+        "sqlite-vec",
+        "pgvector"
+      ],
+      "prompt": "Evaluate sqlite-vec vs pgvector for local desktop applications storing under 500k 768-dim embeddings, focusing on startup time and RAM usage.",
+      "expected_tools": [
+        "vector_benchmarker",
+        "database_profiler"
+      ],
+      "sample_output": "sqlite-vec is optimal for desktop agents: zero background daemon, <5ms cold start, and 45MB RAM footprint vs 250MB for PostgreSQL."
+    },
+    {
+      "id": "research-4",
+      "title": "Competitor Analysis: Enterprise Agent Platforms",
+      "category": "Competitor Intel",
+      "description": "Assess security postures, data isolation guarantees, and pricing models across tier-1 enterprise agent platforms.",
+      "mode": "deep-research",
+      "icon_name": "shield",
+      "est_cost": "$0.0040 (Swarm Tier)",
+      "tags": [
+        "Enterprise",
+        "Pricing",
+        "Security"
+      ],
+      "prompt": "Compare top 3 enterprise agent platforms on data privacy (zero data retention), self-hosting capability, and per-seat vs usage pricing.",
+      "expected_tools": [
+        "web_search",
+        "pricing_calculator",
+        "matrix_generator"
+      ],
+      "sample_output": "Enterprise comparison matrix compiled across 14 security criteria. Agent Engine leads in local-first data isolation and zero-trust credential custody."
+    }
+  ]
+}

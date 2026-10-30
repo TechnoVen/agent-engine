@@ -10,6 +10,15 @@
 
 ---
 
+### 📚 Documentation Quicklinks
+- 📘 [**User Guide & Operational Manual**](docs/USER_GUIDE.md) — End-to-end guide for launching, screens, modes, and keyboard shortcuts.
+- 🧭 [**GUI Specifications & Screen Gallery**](docs/GUI.md) — Design tokens, component contracts, and visual verification gallery.
+- 🗺️ [**Master Roadmap**](docs/ROADMAP.md) — Phases 0–14 execution plan (Phases 0–3 complete, 240/240 tests passing).
+- 🧠 [**Engineering Memory**](MEMORY.md) — Architectural memory, state snapshot, and upcoming Phase 4 tasks.
+- 💰 [**Cost Optimization Guide**](docs/COST_OPTIMIZATION_GUIDE.md) — The 90/9/1 token optimization framework.
+
+---
+
 ## 📖 Overview
 
 **Agent Engine** is a **cross-platform, local-first, multi-agent studio** that lets anyone (developer, author, business owner, enterprise) build, run, supervise, and deploy AI agents — locally or in the cloud — with safety, memory, workflow orchestration, cost discipline, and human approval built in.
@@ -36,8 +45,7 @@ Think of it as **VS Code for agents**:
 | **Security Auditing Sentry** | 3‑stage pipeline: *SecurityAuditor* → *CodeLinter* → *CodeFixer*. Catches SQL injection, XSS, hardcoded secrets, and style violations. |
 | **Infinite‑Loop Breaker** | Prevents recursive auto‑editing by locking files after 3 changes in 15 seconds. |
 | **Vector Memory** | Ingest API docs, READMEs, and coding guidelines into ChromaDB for semantic search. |
-| **Hardware Telemetry** | Real‑time RAM, CPU, and (optional) NVIDIA VRAM usage graphs in the dashboard and sidecar API. |
-| **Interactive DSPy Sandbox** | Streamlit-based sandbox with 1-click AST auto-repair for naked returns and secure execution. |
+| **Interactive DSPy Sandbox** | Internal developer testing tool (`tools/dev_dashboard.py`, `make dev-dashboard`) with 1-click AST auto-repair. |
 | **Storage Repository Pattern** | Abstract storage layer supporting local SQLite (WAL) and enterprise PostgreSQL with migrations. |
 | **Feature Flag System** | Configurable via environment variables and runtime admin endpoints (`/v1/flags`). |
 | **Encrypted Git Backups** | Daily automated commits of encrypted SQLite databases and financial ledgers via Fernet AES-256. |
@@ -108,7 +116,8 @@ agent_engine/
 │   └── templates.py           # Skill template schema and CRUD engine
 ├── configs/                   # Templates catalog and provider configs
 │   └── templates/             # 12+ pre-built JSON skill templates
-├── server/                    # FastMCP server, watcher daemon, and Streamlit dashboard
+├── server/                    # FastMCP server and Sentry watcher daemon
+├── tools/                     # Internal developer tools and diagnostic dashboard
 ├── skills/                    # Discovered & omnichannel skill adapters
 ├── tests/                     # Test suite (pytest: unit, contract, integration)
 ├── docs/                      # Architecture docs, ADRs, cost guide, and master ROADMAP.md
@@ -162,8 +171,9 @@ Formats all Python files using `ruff format`.
 
 | Command | Purpose |
 |---|---|
+| `make desktop-tauri-dev` | Launch official Agent Engine Tauri native desktop application |
 | `.venv/bin/python main.py status` | Check model router health and local providers |
-| `.venv/bin/python main.py dashboard` | Launch Streamlit control center (`http://localhost:8501`) |
+| `.venv/bin/python main.py dev-dashboard` | Launch internal developer diagnostic dashboard (`make dev-dashboard`) |
 | `.venv/bin/python main.py watch` | Start Code Sentry filesystem watcher |
 | `.venv/bin/python main.py staged` | List pending staged patches in storage repository |
 | `.venv/bin/python main.py apply <id>` | Apply a staged patch to disk |
@@ -200,9 +210,9 @@ Exposed MCP Tools:
 
 ## 📡 Local API Contract
 
-The communication contract between the desktop shell and the Python sidecar is defined under [`packages/shared-schema/`](file:///home/nadir/agent_engine/packages/shared-schema):
-- [`packages/shared-schema/openapi.yaml`](file:///home/nadir/agent_engine/packages/shared-schema/openapi.yaml): OpenAPI 3.1.0 specification for `/v1/...` REST endpoints.
-- [`packages/shared-schema/events.schema.json`](file:///home/nadir/agent_engine/packages/shared-schema/events.schema.json): Schema for streaming SSE events (`token`, `tool_call`, `approval_request`, `patch_staged`, `cost_update`, `agent_status`).
+The communication contract between the desktop shell and the Python sidecar is defined under [`packages/shared-schema/`](packages/shared-schema):
+- [`packages/shared-schema/openapi.yaml`](packages/shared-schema/openapi.yaml): OpenAPI 3.1.0 specification for `/v1/...` REST endpoints.
+- [`packages/shared-schema/events.schema.json`](packages/shared-schema/events.schema.json): Schema for streaming SSE events (`token`, `tool_call`, `approval_request`, `patch_staged`, `cost_update`, `agent_status`).
 
 ---
 
@@ -233,8 +243,8 @@ Key environment variables (`.env`):
 
 ## 🗺️ Implementation Roadmap
 
-Track progress across all milestones and phases in [`docs/ROADMAP.md`](file:///home/nadir/agent_engine/docs/ROADMAP.md).  
-Architectural conflict resolutions and guidelines are documented in [`docs/ADR/README.md`](file:///home/nadir/agent_engine/docs/ADR/README.md).
+Track progress across all milestones and phases in [`docs/ROADMAP.md`](docs/ROADMAP.md).  
+Architectural conflict resolutions and guidelines are documented in [`docs/ADR/README.md`](docs/ADR/README.md).
 
 ---
 

@@ -1,0 +1,97 @@
+{
+  "mode": "sheets",
+  "title": "Data & Sheets",
+  "tagline": "Automate financial models, statistical transformations, and complex formulas",
+  "badge": "Data Engine",
+  "pipeline": "data_analysis",
+  "categories": [
+    "All",
+    "Financial Modeling",
+    "Data Analysis",
+    "Formulas",
+    "Cleaning"
+  ],
+  "cases": [
+    {
+      "id": "sheets-1",
+      "title": "SaaS Unit Economics & Cohort Retention",
+      "category": "Financial Modeling",
+      "description": "Calculate CAC payback, LTV, net revenue retention (NRR), and churn curves across customer cohorts.",
+      "mode": "sheets",
+      "icon_name": "table",
+      "est_cost": "$0.0014 (CODE Tier)",
+      "tags": [
+        "SaaS",
+        "Financials",
+        "Cohorts"
+      ],
+      "prompt": "Build a SaaS unit economics model with formulas for LTV/CAC ratio, payback months, and quarterly retention cohorts.",
+      "expected_tools": [
+        "python_pandas",
+        "formula_validator",
+        "chart_synthesizer"
+      ],
+      "sample_output": "| Cohort | Initial MRR | Month 3 NRR | Month 6 NRR | CAC Payback |\n|---|---|---|---|---|\n| 2025-Q1 | $24,500 | 108% | 114% | 7.2 mo |\n| 2025-Q2 | $31,200 | 105% | 112% | 6.8 mo |"
+    },
+    {
+      "id": "sheets-2",
+      "title": "Automate Dynamic Excel/Sheets Formulas",
+      "category": "Formulas",
+      "description": "Generate resilient XLOOKUP, INDEX/MATCH, and dynamic array formulas with nested error handling.",
+      "mode": "sheets",
+      "icon_name": "table",
+      "est_cost": "$0.0006 (CODE Tier)",
+      "tags": [
+        "Excel",
+        "Formulas",
+        "XLOOKUP"
+      ],
+      "prompt": "Construct an Excel formula using XLOOKUP and LET to match multi-condition transactions and fallback to fuzzy search.",
+      "expected_tools": [
+        "formula_engine",
+        "syntax_checker"
+      ],
+      "sample_output": "```excel\n=LET(\n  match_val, XLOOKUP(1, (Orders!A:A=A2)*(Orders!B:B=B2), Orders!C:C, \"\"),\n  IF(match_val=\"\", XLOOKUP(\"\"&A2&\"*\", Orders!A:A, Orders!C:C, \"Not Found\", 2), match_val)\n)\n```"
+    },
+    {
+      "id": "sheets-3",
+      "title": "Data Pipeline Outlier Cleaning & Normalization",
+      "category": "Cleaning",
+      "description": "Detect data anomalies, impute missing values, and normalize skewed distributions using robust z-scores.",
+      "mode": "sheets",
+      "icon_name": "table",
+      "est_cost": "$0.0010 (Small Model)",
+      "tags": [
+        "DataCleaning",
+        "ZScore",
+        "Pandas"
+      ],
+      "prompt": "Generate a Python data cleaning script to normalize raw transaction logs, remove outliers via IQR, and export validated CSV.",
+      "expected_tools": [
+        "python_pandas",
+        "csv_streamer"
+      ],
+      "sample_output": "Outlier detection script executed: 42 records flagged outside 3.0 IQR threshold. Imputed null timestamps and formatted currency fields."
+    },
+    {
+      "id": "sheets-4",
+      "title": "Multi-Scenario DCF Valuation Model",
+      "category": "Financial Modeling",
+      "description": "Perform discounted cash flow valuation across bull, base, and bear macroeconomic conditions.",
+      "mode": "sheets",
+      "icon_name": "coins",
+      "est_cost": "$0.0020 (Mid Model)",
+      "tags": [
+        "DCF",
+        "Valuation",
+        "WACC"
+      ],
+      "prompt": "Create a DCF valuation model with variable WACC (8%-12%) and terminal growth rates (2%-4%) across 3 economic scenarios.",
+      "expected_tools": [
+        "python_pandas",
+        "financial_modeler"
+      ],
+      "sample_output": "| Scenario | WACC | Terminal Growth | Enterprise Value |\n|---|---|---|---|\n| Bull | 8.5% | 3.5% | $145M |\n| Base | 10.0% | 2.5% | $112M |\n| Bear | 12.0% | 1.5% | $82M |"
+    }
+  ]
+}

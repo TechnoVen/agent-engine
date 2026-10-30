@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "agent-engine": {
+      "command": "@AGENT_ENGINE_ROOT@/.venv/bin/python",
+      "args": [
+        "@AGENT_ENGINE_ROOT@/server/mcp_server.py"
+      ],
+      "env": {
+        "PYTHONPATH": "@AGENT_ENGINE_ROOT@"
+      }
+    }
+  }
+}

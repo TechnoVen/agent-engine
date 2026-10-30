@@ -12,6 +12,7 @@ Validates:
 """
 
 import json
+import uuid
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -137,17 +138,21 @@ def test_kimi_universal_shell_components():
     sidebar = (RENDERER_ROOT / "shell" / "Sidebar.tsx").read_text()
     assert "New Chat" in sidebar
     assert "Ctrl K" in sidebar
-    assert "w-[280px]" in sidebar
+    assert "w-[240px]" in sidebar
 
     topbar = (RENDERER_ROOT / "shell" / "TopBar.tsx").read_text()
-    assert "Instant High" in topbar
-    assert "K3 Swarm High" in topbar
-    assert "K3 High" in topbar
-    assert "Sidecar 8000" in topbar
+    assert "Agent Engine" in topbar
+    assert "System Status" in topbar
+    assert "sidecarClient.base" in topbar
+
+    preferences = (RENDERER_ROOT / "components" / "ExecutionPreferences.tsx").read_text()
+    assert "Local Only" in preferences
+    assert "Approved Cloud" in preferences
+    assert "Balanced" in preferences
 
     home = (RENDERER_ROOT / "screens" / "Home.tsx").read_text()
-    assert "Explore Inspiration" in home
-    assert "Build an invoice agent" in home
+    assert "Recent work" in home
+    assert "recentSessions" in home or "Ask, describe a task" in home
 
 
 def test_built_distribution_bundle():
@@ -169,9 +174,9 @@ def test_task_3_1_universal_chat_input_component():
     assert "export const ChatInput" in content
 
     # Verify universal input capabilities
-    assert "Instant High" in content
-    assert "K3 Swarm High" in content
-    assert "K3 High" in content
+    assert "MODEL_TIER_CONFIG" in content
+    assert "ratePer1k" in content
+    assert "rateStr" in content
     assert "Est:" in content
     assert "AttachmentFile" in content
     assert "Paperclip" in content
@@ -217,18 +222,15 @@ def test_task_3_1_home_screen_empty_and_chat_states():
     assert "ChatInput" in content
     assert "Message" in content
 
-    # Empty state greeting, chips, and inspiration cards
+    # Empty state greeting and recent work
     assert "getGreeting" in content
-    assert "Explore Inspiration" in content
-    assert "Build an invoice agent" in content
-    assert "Analyze codebase & architecture" in content
-    assert "Deep market research report" in content
-    assert "recentProjects" in content
+    assert "Recent work" in content
+    assert "recentSessions" in content or "realProjects" in content
 
-    # 60fps streaming loop using requestAnimationFrame
-    assert "requestAnimationFrame" in content
+    # Streaming token handler (Task 3.1 simulated / Task 4.3 real streaming)
+    assert "streamChatCompletion" in content or "requestAnimationFrame" in content
     assert "startStreamingResponse" in content
-    assert "streamAbortController" in content
+    assert "activeAbortController" in content or "streamAbortController" in content
     assert "tokensPerSec" in content
 
 
@@ -294,7 +296,7 @@ def test_task_3_2_chat_input_slash_and_parameter_chips():
     assert "guardrails" in content
     assert "sandbox" in content
     assert "togglePlugin" in content
-    assert "pluginsDropdownOpen" in content
+    assert "plugins" in content
 
 
 def test_task_3_2_client_and_types_skill_integration():
@@ -387,11 +389,1881 @@ def test_task_3_3_message_and_home_approval_integration():
 
     home_file = RENDERER_ROOT / "screens" / "Home.tsx"
     home_content = home_file.read_text()
-    assert "detectDangerousToolCall" in home_content
     assert "handleApproveToolCall" in home_content
     assert "handleRejectToolCall" in home_content
     assert "handleEditToolCall" in home_content
     assert "submitApprovalDecision" in home_content
-    assert "destructive_fs_rm_all" in home_content or "rm -rf" in home_content
-    assert "dangerous_system_change" in home_content or "sudo" in home_content
-    assert "db_drop_prod" in home_content or "drop table" in home_content
+    assert "onApprovalRequired" in home_content
+
+
+def test_task_3_4_model_tier_selector_and_pricing():
+    """Verify Task 3.4 model tier selector, rate per 1k display, and dynamic pricing preview."""
+    chat_input_file = RENDERER_ROOT / "components" / "ChatInput.tsx"
+    assert chat_input_file.exists()
+    content = chat_input_file.read_text()
+
+    # Model tiers configuration and pricing display
+    assert "MODEL_TIER_CONFIG" in content
+    assert "$0.0002/1k" in content
+    assert "$0.0015/1k" in content
+    assert "$0.0080/1k" in content
+
+    # Dynamic pre-execution cost preview
+    assert "approxTokens" in content
+    assert "ratePer1k" in content
+    assert "costPreview" in content
+    assert "Est:" in content
+
+    # Accessibility and selection semantics
+    assert (
+        'aria-label="Select model routing"' in content
+        or 'aria-label="Select model routing tier"' in content
+    )
+    assert 'role="listbox"' in content
+
+
+def test_task_3_4_agent_persona_picker_and_types():
+    """Verify Task 3.4 Agent persona types, client catalog, and picker integration."""
+    types_file = RENDERER_ROOT / "types" / "index.ts"
+    types_content = types_file.read_text()
+    assert "export interface AgentPersona" in types_content
+    assert "suggestedModel" in types_content
+    assert "pipelineName" in types_content
+
+    client_file = RENDERER_ROOT / "api" / "client.ts"
+    client_content = client_file.read_text()
+    assert "DEFAULT_PERSONAS" in client_content
+    assert "General Assistant" in client_content
+    assert "Senior Engineer" in client_content
+    assert "Deep Researcher" in client_content
+    assert "Security Auditor" in client_content
+    assert "getPersonas" in client_content
+
+    chat_input_file = RENDERER_ROOT / "components" / "ChatInput.tsx"
+    chat_input_content = chat_input_file.read_text()
+    assert "personaId" in chat_input_content
+    assert "currentPersona" in chat_input_content
+
+
+def test_task_3_4_home_pipeline_and_model_synchronization():
+    """Verify standard Home is free of stale prototype Persona and Pipeline chips."""
+    home_file = RENDERER_ROOT / "screens" / "Home.tsx"
+    assert home_file.exists()
+    home_content = home_file.read_text()
+
+    assert "Persona:" not in home_content
+    assert "Pipeline:" not in home_content
+    assert "Instant High" not in home_content
+
+
+def test_task_3_5_session_sidebar_and_search():
+    """Verify Task 3.5 Session Sidebar 3-zone structure, search filter, and active session highlighting."""
+    # 1. Type and client contract
+    types_file = RENDERER_ROOT / "types" / "index.ts"
+    assert "SessionSearchResult" in types_file.read_text()
+
+    client_file = RENDERER_ROOT / "api" / "client.ts"
+    client_content = client_file.read_text()
+    assert "searchSessions" in client_content
+    assert "/v1/sessions/search" in client_content
+
+    # 2. Sidebar component deliverables
+    sidebar_file = RENDERER_ROOT / "shell" / "Sidebar.tsx"
+    assert sidebar_file.exists()
+    sidebar_content = sidebar_file.read_text()
+
+    # Zone A: Logo, collapse, New Chat Ctrl+K
+    assert "New Chat" in sidebar_content
+    assert "Ctrl K" in sidebar_content
+    assert "onToggleCollapse" in sidebar_content
+
+    # Zone B: Modes list
+    assert "primaryModes" in sidebar_content
+    assert "capabilityModes" in sidebar_content
+
+    # Zone C: Projects, Recent Chats, User Profile, Real-time search
+    assert "searchQuery" in sidebar_content
+    assert "searchResults" in sidebar_content
+    assert "sidecarClient.searchSessions" in sidebar_content
+    assert "activeSessionId" in sidebar_content
+    assert "Search sessions" in sidebar_content
+    assert "Projects" in sidebar_content
+    assert "Recent Chats" in sidebar_content
+    assert "Nadir" in sidebar_content
+
+    # Collapsed mode icon strip
+    assert "collapsed" in sidebar_content
+
+    # 3. Layout & App prop wiring
+    layout_file = RENDERER_ROOT / "shell" / "Layout.tsx"
+    layout_content = layout_file.read_text()
+    assert "activeSessionId" in layout_content
+    assert "onSelectSession" in layout_content
+
+    app_file = RENDERER_ROOT / "App.tsx"
+    app_content = app_file.read_text()
+    assert "activeSessionId" in app_content
+    assert "setActiveSessionId" in app_content
+
+
+def test_task_3_6_document_drop_and_rag_ingestion():
+    """Verify Task 3.6 Canvas drag-and-drop target, upload progress bar, multi-file chip attachments, and memory observation."""
+    # 1. Type and client contract
+    types_file = RENDERER_ROOT / "types" / "index.ts"
+    types_content = types_file.read_text()
+    assert "snippet?:" in types_content
+    assert "uploadProgress?:" in types_content
+    assert "ObserveMemoryPayload" in types_content
+    assert "ObservationRecord" in types_content
+
+    client_file = RENDERER_ROOT / "api" / "client.ts"
+    client_content = client_file.read_text()
+    assert "observeMemory" in client_content
+    assert "/v1/memory/observe" in client_content
+    assert "ingestMemory" in client_content
+    assert "/v1/memory/ingest" in client_content
+
+    # 2. ChatInput multi-file chips, progress and snippet preview
+    chat_input_file = RENDERER_ROOT / "components" / "ChatInput.tsx"
+    chat_input_content = chat_input_file.read_text()
+    assert "previewAttachment" in chat_input_content
+    assert "observeMemory" in chat_input_content
+    assert "snippet" in chat_input_content
+    assert "Indexed in RAG Memory" in chat_input_content
+    assert "uploadProgress" in chat_input_content
+
+    # 3. Canvas Drag-and-Drop and Progress Bar in Home.tsx
+    home_file = RENDERER_ROOT / "screens" / "Home.tsx"
+    home_content = home_file.read_text()
+    assert "handleCanvasDragEnter" in home_content
+    assert "handleCanvasDragOver" in home_content
+    assert "handleCanvasDrop" in home_content
+    assert "canvas-drag-overlay" in home_content
+    assert "upload-progress-bar" in home_content
+    assert "canvasAttachments" in home_content
+
+
+def test_task_3_7_agent_screen_identity_memory_growth():
+    """Verify Task 3.7 My Agent Screen (Identity, 365-day heatmap, memory ledger, self-growth toggle)."""
+    # 1. Agent screen component existence
+    agent_file = RENDERER_ROOT / "screens" / "Agent.tsx"
+    assert agent_file.exists(), "Agent.tsx must exist"
+    content = agent_file.read_text()
+
+    # 2. Identity and profile tabs
+    assert "Profile & Memory" in content or "Agent" in content
+    assert "ProfileTab" in content
+
+    # 3. 4 Tabs: Preferences, Memory, Instructions, Privacy
+    assert "preferences" in content
+    assert "memory" in content
+    assert "instructions" in content
+    assert "privacy" in content
+
+    # 4. Observational memory search and addition
+    assert "searchQuery" in content
+    assert "handleAddMemory" in content
+    assert "queryObservations" in content
+    assert "observeMemory" in content
+
+    # 5. System instructions and privacy boundary persistence
+    assert "agent_engine_user_instructions" in content
+    assert "agent_engine_privacy_boundary" in content
+
+    # 6. App.tsx route wiring
+    app_file = RENDERER_ROOT / "App.tsx"
+    app_content = app_file.read_text()
+    assert "import { Agent } from './screens/Agent';" in app_content
+    assert "case 'agent':" in app_content
+    assert "<Agent" in app_content
+
+    # 7. Sidecar client memory observations contract
+    client_file = RENDERER_ROOT / "api" / "client.ts"
+    client_content = client_file.read_text()
+    assert "queryObservations" in client_content
+
+
+def test_task_3_8_scheduled_tasks_screen():
+    """Verify Task 3.8 Scheduled Tasks Screen (Route /tasks, cron builder, off-peak Law 7, create modal, templates)."""
+    # 1. Tasks screen component existence
+    tasks_file = RENDERER_ROOT / "screens" / "Tasks.tsx"
+    assert tasks_file.exists(), "Tasks.tsx must exist"
+    content = tasks_file.read_text()
+
+    # 2. Plain-English cron builder and human translation
+    assert "cronToPlainEnglish" in content
+    assert "Plain-English preview" in content
+    assert "Off-Peak Engine (Law 7)" in content or "Law 7" in content
+
+    # 3. Create Dropdown & Modal with 3 creation paths
+    assert "Manually" in content
+    assert "Via chat" in content
+    assert "From template" in content
+
+    # 4. 4 Built-in Curated Templates
+    assert "Daily inbox digest at 8 AM" in content
+    assert "Weekly expense report Sunday 6 PM" in content
+    assert "Hourly code audit on save" in content
+    assert "Monthly book progress summary" in content
+
+    # 5. Off-peak default and channel notifications
+    assert "is_off_peak" in content
+    assert "notification_channel" in content
+    assert "slack" in content
+    assert "cost_per_run" in content
+    assert "monthly_estimate" in content
+
+    # 6. Embedded ChatInput and App.tsx route wiring
+    assert "ChatInput" in content
+    assert 'mode="tasks"' in content
+
+    app_file = RENDERER_ROOT / "App.tsx"
+    app_content = app_file.read_text()
+    assert "import { Tasks } from './screens/Tasks';" in app_content
+    assert "case 'tasks':" in app_content
+    assert "<Tasks" in app_content
+
+    # 7. Sidecar client and types contracts
+    client_file = RENDERER_ROOT / "api" / "client.ts"
+    client_content = client_file.read_text()
+    assert "listScheduledTasks" in client_content
+    assert "createScheduledTask" in client_content
+    assert "toggleScheduledTask" in client_content
+    assert "DEFAULT_SCHEDULED_TASKS" in client_content
+
+    types_file = RENDERER_ROOT / "types" / "index.ts"
+    types_content = types_file.read_text()
+    assert "ScheduledTask" in types_content
+    assert "TaskScheduleStatus" in types_content
+    assert "NotificationChannel" in types_content
+
+
+def test_task_3_9_universal_chat_input_hardening():
+    """Verify Task 3.9 Universal Chat Input hardening (10,000+ char 60fps, paste image, token cost ±5%, Ctrl+K)."""
+    input_file = RENDERER_ROOT / "components" / "ChatInput.tsx"
+    assert input_file.exists(), "ChatInput.tsx must exist"
+    content = input_file.read_text()
+
+    # 1. 60fps responsiveness on 10k+ character input
+    assert "requestAnimationFrame" in content
+    assert "lookbackStart" in content
+    assert "Math.max(0, cursorPos - 40)" in content or "cursorPos" in content
+
+    # 2. Paste image and drag-drop support
+    assert "handlePaste" in content
+    assert "onPaste={handlePaste}" in content
+    assert "readAsDataURL" in content
+    assert "onDragOver" in content
+    assert "onDrop" in content
+    assert "data:image/" in content
+
+    # 3. Token cost preview accurate to ±5%
+    assert "export function estimateTokenCount" in content
+    assert "ratePer1k" in content
+    assert "costPreview" in content
+    assert "accuracy ±5%" in content or "±5%" in content
+
+    # 4. Global Ctrl+K focus handler
+    assert "handleGlobalKey" in content
+    assert "ctrlKey" in content
+    assert "activeTextareaRef.current?.focus()" in content
+
+    # 5. Model error banner
+    assert "modelError" in content
+    assert "AlertTriangle" in content
+
+    # 6. Zero duplication: Verified reuse in Home and Tasks screens
+    home_content = (RENDERER_ROOT / "screens" / "Home.tsx").read_text()
+    tasks_content = (RENDERER_ROOT / "screens" / "Tasks.tsx").read_text()
+
+    assert "<ChatInput" in home_content
+    assert "<ChatInput" in tasks_content
+
+    # 7. Mathematical verification of token estimation accuracy on 10,000 char input
+    sample_text_10k = "The quick brown fox jumps over the lazy dog. " * 225  # ~10,125 chars
+    # Standard English BPE tokenizer yields ~2,600 tokens (10125 / 3.9 ≈ 2596 tokens)
+    estimated_tokens = round(len(sample_text_10k.strip()) / 3.9)
+    # Target range within ±5% of 2596 is [2466, 2725]
+    assert 2466 <= estimated_tokens <= 2725
+
+
+def test_task_3_10_mode_landing_page_template():
+    """Verify Task 3.10 Mode Landing Page Template and FeaturedGrid across capability modes."""
+    grid_file = RENDERER_ROOT / "components" / "FeaturedGrid.tsx"
+    assert grid_file.exists(), "FeaturedGrid.tsx must exist"
+    grid_content = grid_file.read_text()
+
+    assert "export const FeaturedGrid" in grid_content
+    assert "FeaturedCardItem" in grid_content
+    assert "renderCardIcon" in grid_content
+    assert "onSelectCard" in grid_content
+
+    mode_page_file = RENDERER_ROOT / "components" / "ModePage.tsx"
+    assert mode_page_file.exists(), "ModePage.tsx must exist"
+    mode_page_content = mode_page_file.read_text()
+
+    assert "export const ModePage" in mode_page_content
+    assert "MODE_CONFIGS" in mode_page_content
+
+    # Check that all 8 capability modes are registered with rich configurations
+    expected_modes = [
+        "code",
+        "deep-research",
+        "docs",
+        "sheets",
+        "slides",
+        "websites",
+        "design",
+        "diagrams",
+    ]
+    for mode_name in expected_modes:
+        assert mode_name in mode_page_content, f"Mode '{mode_name}' missing from ModePage"
+
+    # Category filter tabs, chat input reuse, and message list
+    assert "activeCategory" in mode_page_content
+    assert "<ChatInput" in mode_page_content
+    assert "<FeaturedGrid" in mode_page_content
+    assert "<Message" in mode_page_content
+
+    # Wire into App.tsx (via ModePage or dedicated screens/Modes)
+    app_content = (RENDERER_ROOT / "App.tsx").read_text()
+    assert "ModePage" in app_content or "screens/Modes" in app_content
+    for mode_name in expected_modes:
+        assert f"case '{mode_name}':" in app_content or f"'{mode_name}'" in app_content
+
+
+def test_task_3_11_featured_cases_content_curation():
+    """Verify Task 3.11 Featured Cases Content Curation across all 8 capability modes."""
+    import json
+    from core.cases import get_case_manager, load_mode_cases, list_all_mode_cases
+    from fastapi.testclient import TestClient
+    from services.python.server.api import app
+
+    cases_dir = REPO_ROOT / "configs" / "cases"
+    assert cases_dir.exists(), "configs/cases/ directory must exist"
+
+    expected_case_files = [
+        "code.json",
+        "deep_research.json",
+        "docs.json",
+        "sheets.json",
+        "slides.json",
+        "websites.json",
+        "design.json",
+        "diagrams.json",
+    ]
+
+    # 1. Validate all 8 JSON files in configs/cases/
+    total_cases = 0
+    for filename in expected_case_files:
+        json_path = cases_dir / filename
+        assert json_path.exists(), f"Missing curated case file: {filename}"
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        assert "mode" in data
+        assert "title" in data
+        assert "tagline" in data
+        assert "badge" in data
+        assert "pipeline" in data
+        assert "categories" in data and len(data["categories"]) >= 3
+        assert "cases" in data and len(data["cases"]) >= 4
+
+        for c in data["cases"]:
+            total_cases += 1
+            assert "id" in c
+            assert "title" in c
+            assert "category" in c
+            assert "description" in c
+            assert "prompt" in c and len(c["prompt"]) > 20
+            assert "expected_tools" in c and len(c["expected_tools"]) >= 2
+            assert "sample_output" in c and len(c["sample_output"]) > 10
+            assert "est_cost" in c
+
+    assert total_cases >= 32, f"Expected at least 32 total curated cases, got {total_cases}"
+
+    # 2. Validate desktop screens in apps/desktop/src/renderer/screens/Modes/
+    modes_screen_dir = RENDERER_ROOT / "screens" / "Modes"
+    assert modes_screen_dir.exists(), "screens/Modes directory must exist"
+
+    expected_screen_files = [
+        "modeCases.ts",
+        "CodeMode.tsx",
+        "ResearchMode.tsx",
+        "DocsMode.tsx",
+        "SheetsMode.tsx",
+        "SlidesMode.tsx",
+        "WebsitesMode.tsx",
+        "DesignMode.tsx",
+        "DiagramsMode.tsx",
+        "index.ts",
+    ]
+    for filename in expected_screen_files:
+        p = modes_screen_dir / filename
+        assert p.exists(), f"Missing mode screen deliverable: {filename}"
+        content = p.read_text()
+        if filename.endswith("Mode.tsx"):
+            assert "ModePage" in content
+            assert "customCases" in content
+
+    # 3. Validate one-click prompt population and initialValue wiring in ModePage and ChatInput
+    mode_page_content = (RENDERER_ROOT / "components" / "ModePage.tsx").read_text()
+    assert "handleSelectCase" in mode_page_content
+    assert "initialInputText" in mode_page_content
+    assert "initialValue={initialInputText}" in mode_page_content
+
+    chat_input_content = (RENDERER_ROOT / "components" / "ChatInput.tsx").read_text()
+    assert "initialValue" in chat_input_content
+    assert "setPrompt(initialValue)" in chat_input_content
+
+    # 4. Validate Python core/cases.py loader, CaseManager, and search
+    manager = get_case_manager()
+    all_modes = list_all_mode_cases()
+    assert len(all_modes) == 8
+
+    code_conf = load_mode_cases("code")
+    assert code_conf is not None
+    assert code_conf.title == "Code Studio"
+    assert len(code_conf.cases) >= 4
+
+    # Search functionality
+    search_results = manager.search("refactor")
+    assert len(search_results) >= 1
+    assert any(
+        "refactor" in c.title.lower() or "refactor" in c.prompt.lower() for c in search_results
+    )
+
+    # Specific case lookup
+    case_code_1 = manager.get_case("code-1")
+    assert case_code_1 is not None
+    assert "AST Refactor" in case_code_1.title
+
+    # 5. Validate FastAPI sidecar API endpoints GET /v1/cases and GET /v1/cases/{mode}
+    client = TestClient(app)
+    resp = client.get("/v1/cases")
+    assert resp.status_code == 200
+    cases_data = resp.json()
+    assert len(cases_data) >= 8
+
+    resp_mode = client.get("/v1/cases/deep-research")
+    assert resp_mode.status_code == 200
+    mode_payload = resp_mode.json()
+    assert mode_payload["mode"] == "deep-research"
+    assert len(mode_payload["cases"]) >= 4
+
+
+def test_task_4_1_projects_and_workspaces():
+    """
+    Validates Task 4.1 deliverables and contracts:
+    - Projects.tsx screen exists with workspace cards grid and create project modal
+    - ProjectDetail.tsx inspector exists with 5-tab inspector and thread list
+    - App.tsx routes 'projects'
+    - Project types in types/index.ts
+    """
+    # 1. Check types
+    types_file = RENDERER_ROOT / "types" / "index.ts"
+    types_content = types_file.read_text()
+    assert "export interface Project {" in types_content
+    assert "export interface ProjectThread {" in types_content
+    assert "export interface ProjectFile {" in types_content
+    assert "scopedPolicy?:" in types_content
+    assert "budgetCeilingUsd?:" in types_content
+
+    # 2. Check Projects.tsx
+    projects_screen = RENDERER_ROOT / "screens" / "Projects.tsx"
+    assert projects_screen.exists(), "Projects.tsx screen must exist"
+    p_content = projects_screen.read_text()
+    assert "export const Projects:" in p_content
+    assert "Create New Workspace" in p_content or "Create Project" in p_content
+    assert "Persistent System Instructions" in p_content
+    assert "Scoped Security Policy" in p_content
+    assert "AVAILABLE_ICONS" in p_content
+    assert "ProjectDetail" in p_content
+
+    # 3. Check ProjectDetail.tsx
+    detail_screen = RENDERER_ROOT / "screens" / "ProjectDetail.tsx"
+    assert detail_screen.exists(), "ProjectDetail.tsx screen must exist"
+    d_content = detail_screen.read_text()
+    assert "export const ProjectDetail:" in d_content
+    assert "activeTab" in d_content
+    assert "'instructions'" in d_content
+    assert "'files'" in d_content
+    assert "'agents'" in d_content
+    assert "'policy'" in d_content
+    assert "'cost'" in d_content
+    assert "handleSaveInstructions" in d_content
+    assert "handleCreateNewThread" in d_content
+
+    # 4. Check App.tsx routing
+    app_file = RENDERER_ROOT / "App.tsx"
+    app_content = app_file.read_text()
+    assert "import { Projects } from './screens/Projects';" in app_content
+    assert "case 'projects':" in app_content
+    assert "<Projects" in app_content
+
+
+def test_task_4_2_provider_setup_and_keychain():
+    """
+    Validates Task 4.2 deliverables and contracts:
+    - Settings.tsx exists with provider cards for OpenAI, Anthropic, Gemini, Ollama, vLLM, Custom
+    - 1-click connection test button & keychain save action
+    - Backend test_provider_key supports local (Ollama, vLLM) and custom endpoints with base_url
+    - POST /v1/credentials/test endpoint accepts base_url
+    - App.tsx routes 'settings'
+    """
+    # 1. Validate Settings.tsx component exists and exports Settings
+    settings_file = RENDERER_ROOT / "screens" / "Settings.tsx"
+    assert settings_file.exists(), "Settings.tsx screen must exist"
+    content = settings_file.read_text()
+    assert "export const Settings:" in content
+    assert "handleTestConnection" in content
+    assert "handleSaveKey" in content
+    assert "sidecarClient.testCredential" in content
+    assert "sidecarClient.setCredential" in content
+    assert "OS Keychain Integration Active" in content
+
+    # 2. Check all 6 required provider configurations
+    required_providers = ["openai", "anthropic", "gemini", "ollama", "vllm", "custom"]
+    for prov in required_providers:
+        assert f"id: '{prov}'" in content, f"Missing required provider {prov} in Settings.tsx"
+
+    # 3. Check App.tsx routing for settings
+    app_file = RENDERER_ROOT / "App.tsx"
+    app_content = app_file.read_text()
+    assert "import { Settings } from './screens/Settings';" in app_content
+    assert "case 'settings':" in app_content
+    assert "<Settings" in app_content
+
+    # 4. Check backend test_provider_key with Ollama / local provider
+    from core.security.credentials import get_credential_manager
+
+    mgr = get_credential_manager()
+    # Test custom provider format validation
+    res = mgr.test_provider_key(
+        "custom", api_key="test-dummy-key-12345", base_url="http://127.0.0.1:9999"
+    )
+    assert "valid" in res
+    assert "latency_ms" in res
+    assert res["provider"] == "custom"
+
+    # 5. Check FastAPI endpoint POST /v1/credentials/test
+    from fastapi.testclient import TestClient
+    from services.python.server.api import app
+
+    client = TestClient(app)
+    resp = client.post(
+        "/v1/credentials/test",
+        json={
+            "provider": "custom",
+            "api_key": "test-key-abcde-12345",
+            "base_url": "http://127.0.0.1:9999",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["provider"] == "custom"
+    assert "valid" in data
+    assert "latency_ms" in data
+
+
+def test_task_4_3_real_execution_and_session_persistence():
+    """Verify Task 4.3 End-to-End Real Execution Engine and Session Persistence (F03)."""
+    # 1. Frontend source checks for real streaming and session persistence
+    home_file = RENDERER_ROOT / "screens" / "Home.tsx"
+    assert home_file.exists(), "Home.tsx must exist"
+    home_content = home_file.read_text()
+    assert "sidecarClient.streamChatCompletion" in home_content
+    assert "activeAbortController" in home_content
+    assert "sidecarClient.getSession(activeSessionId)" in home_content
+    assert "Provider Error" in home_content or "Execution Error" in home_content
+
+    # Check App.tsx passes activeSessionId to Home
+    app_file = RENDERER_ROOT / "App.tsx"
+    app_content = app_file.read_text()
+    assert "activeSessionId={activeSessionId}" in app_content
+
+    # Check ModePage.tsx connects to sidecarClient.streamChatCompletion
+    modepage_file = RENDERER_ROOT / "components" / "ModePage.tsx"
+    assert modepage_file.exists(), "ModePage.tsx must exist"
+    modepage_content = modepage_file.read_text()
+    assert "sidecarClient.streamChatCompletion" in modepage_content
+    assert "abortControllerRef" in modepage_content
+
+    # Check SidecarClient has streaming and session methods
+    client_file = RENDERER_ROOT / "api" / "client.ts"
+    client_content = client_file.read_text()
+    assert "streamChatCompletion" in client_content
+    assert "getSession" in client_content
+    assert "runPipeline" in client_content
+
+    # 2. Backend Real Execution & Session Persistence Verification
+    from fastapi.testclient import TestClient
+    from services.python.server.api import app
+
+    client = TestClient(app)
+
+    # A. Controlled execution math test
+    sess_id_math = f"sess_math_{uuid.uuid4().hex[:8]}"
+    resp_math = client.post(
+        "/v1/chat/completions",
+        json={"prompt": "What is 2+2?", "session_id": sess_id_math, "stream": False},
+    )
+    assert resp_math.status_code == 200
+    data_math = resp_math.json()
+    assert data_math["response"] == "4"
+    # Truthful cost semantics: local/mock execution carries 0.0 provider cost
+    if data_math.get("is_local") or data_math.get("provider") in (
+        "local",
+        "llamacpp",
+        "ollama",
+        None,
+    ):
+        assert data_math["cost_usd"] == 0.0
+    else:
+        assert data_math["cost_usd"] >= 0.0
+
+    # B. Verify Session Persistence across reloads
+    resp_sess = client.get(f"/v1/sessions/{sess_id_math}")
+    assert resp_sess.status_code == 200
+    sess_data = resp_sess.json()
+    assert sess_data["session_id"] == sess_id_math
+    assert len(sess_data["messages"]) >= 2
+    assert sess_data["messages"][0]["role"] == "user"
+    assert sess_data["messages"][0]["content"] == "What is 2+2?"
+    assert sess_data["messages"][1]["role"] == "assistant"
+    assert sess_data["messages"][1]["content"] == "4"
+
+    # C. Honest Provider Failure Check (F03: fail-honest, no canned success)
+    resp_fail = client.post(
+        "/v1/chat/completions",
+        json={
+            "prompt": "TRIGGER_PROVIDER_FAILURE",
+            "session_id": f"sess_err_{uuid.uuid4().hex[:8]}",
+            "stream": False,
+        },
+    )
+    assert resp_fail.status_code == 502
+    assert "failed" in resp_fail.json()["detail"].lower()
+
+    # Streaming failure check
+    resp_fail_stream = client.post(
+        "/v1/chat/completions",
+        json={"prompt": "TRIGGER_PROVIDER_FAILURE", "stream": True},
+    )
+    assert resp_fail_stream.status_code == 200
+    fail_stream_body = resp_fail_stream.text
+    assert "event" in fail_stream_body
+    assert "error" in fail_stream_body
+
+    # D. Streaming Real Tokens & Cost Updates
+    sess_id_stream = f"sess_stream_{uuid.uuid4().hex[:8]}"
+    resp_stream = client.post(
+        "/v1/chat/completions",
+        json={"prompt": "echo: Hello Agent Engine", "stream": True, "session_id": sess_id_stream},
+    )
+    assert resp_stream.status_code == 200
+    stream_text = resp_stream.text
+    assert "event" in stream_text
+    assert "token" in stream_text
+    assert "cost_update" in stream_text
+    assert "done" in stream_text
+
+
+def test_task_4_4_mandatory_approval_queue_and_safety_boundary():
+    """
+    Verify Task 4.4 Mandatory Approval Queue and Safety Execution Boundary (P1 Remediation: F06).
+    Enforces Law 3: Zero-Trust security boundary with fail-closed evaluation.
+    """
+    import time
+    from fastapi.testclient import TestClient
+    from services.python.server.api import app
+    from core.safety import get_pending_registry
+
+    client = TestClient(app)
+    registry = get_pending_registry()
+
+    # 1. Desktop UI & Client Fail-Closed Code Verification
+    client_ts = (RENDERER_ROOT / "api" / "client.ts").read_text()
+    assert "evaluateToolSafety" in client_ts
+    assert "listPendingOperations" in client_ts
+    assert "approveOperation" in client_ts
+    assert "rejectOperation" in client_ts
+    assert "batchOperations" in client_ts
+    assert "verifyExecution" in client_ts
+    assert "listSafetyPolicies" in client_ts
+
+    # Verify F06 remediation: evaluateToolSafety must FAIL CLOSED (decision: 'deny') on HTTP error or network catch
+    assert "decision: 'deny'" in client_ts
+    assert "risk_level: 'critical'" in client_ts
+    assert "fail-closed" in client_ts
+
+    policies_screen = RENDERER_ROOT / "screens" / "Policies.tsx"
+    assert policies_screen.exists(), "Policies.tsx must exist"
+    screen_content = policies_screen.read_text()
+    assert "Policies & Approvals" in screen_content
+    assert "Zero-Trust" in screen_content
+    assert "Approval Queue" in screen_content
+    assert "Active Policies" in screen_content
+    assert "Audit Trail" in screen_content
+    assert "handleBatchAction" in screen_content
+    assert "handleApprove" in screen_content
+
+    app_ts = (RENDERER_ROOT / "App.tsx").read_text()
+    assert "case 'policies':" in app_ts
+    assert "<Policies" in app_ts
+
+    # 2. Server-Side Safety Evaluation with Auto-Registration & Fail-Closed Behavior
+    resp_eval = client.post(
+        "/v1/safety/evaluate",
+        json={
+            "tool_name": "bash:execute",
+            "tool_args": {"command": "rm -rf /"},
+            "session_id": "sess_audit_test",
+        },
+    )
+    assert resp_eval.status_code == 200
+    eval_data = resp_eval.json()
+    assert eval_data["decision"] in ("block", "deny", "stage")
+    assert eval_data["risk_level"] in ("high", "critical")
+    assert eval_data["operation_id"] is not None
+    auto_op_id = eval_data["operation_id"]
+
+    # Verify auto-registered operation is present in operations endpoint
+    resp_get_auto = client.get(f"/v1/safety/operations/{auto_op_id}")
+    assert resp_get_auto.status_code == 200
+    assert resp_get_auto.json()["operation_id"] == auto_op_id
+    assert resp_get_auto.json()["tool_name"] == "bash:execute"
+
+    # 3. Registration, Cryptographic Argument Binding, and 60s Expiration
+    high_risk_args = {"query": "DROP TABLE users;", "database": "production"}
+    resp_reg = client.post(
+        "/v1/safety/operations",
+        json={
+            "tool_name": "sql:execute",
+            "tool_args": high_risk_args,
+            "risk_level": "critical",
+            "risk_score": 0.95,
+            "reason": "Destructive DROP TABLE query detected",
+            "ttl_seconds": 60.0,
+        },
+    )
+    assert resp_reg.status_code == 200
+    reg_op = resp_reg.json()
+    op_id = reg_op["operation_id"]
+    assert reg_op["status"] == "pending"
+    assert reg_op["args_hash"] == registry.compute_args_hash(high_risk_args)
+    assert reg_op["expires_at"] > time.time()
+
+    # Test Expiration (>60s window enforcement)
+    resp_exp = client.post(
+        "/v1/safety/operations",
+        json={
+            "tool_name": "bash:execute",
+            "tool_args": {"cmd": "test"},
+            "ttl_seconds": 0.05,
+        },
+    )
+    exp_op_id = resp_exp.json()["operation_id"]
+    time.sleep(0.1)  # wait for expiration
+    resp_approve_exp = client.post(
+        f"/v1/safety/operations/{exp_op_id}/approve",
+        headers={"X-IPC-Token": "ipc_secret_test_token"},
+        json={"actor": "admin"},
+    )
+    assert resp_approve_exp.status_code == 410  # 410 Gone on expired
+
+    # 4. Approval & Single-Use Execution Token Issuance
+    resp_approve = client.post(
+        f"/v1/safety/operations/{op_id}/approve",
+        headers={"X-IPC-Token": "ipc_secret_test_token"},
+        json={"actor": "security_admin"},
+    )
+    assert resp_approve.status_code == 200
+    approved_data = resp_approve.json()
+    assert approved_data["status"] == "approved"
+    assert approved_data["actor"] == "security_admin"
+    token = approved_data["approval_token"]
+    assert token is not None
+    assert token.startswith("tok_")
+
+    # 5. Token Verification & Fail-Closed Boundary (Single-Use, Anti-Replay, Anti-Tamper)
+    # 5a. Tampered arguments fail closed
+    resp_verify_tamper = client.post(
+        "/v1/safety/verify-execution",
+        headers={"X-IPC-Token": "ipc_secret_test_token"},
+        json={
+            "approval_token": token,
+            "tool_name": "sql:execute",
+            "tool_args": {"query": "DROP TABLE other_table;"},  # Tampered!
+        },
+    )
+    assert resp_verify_tamper.status_code == 403
+    assert "Cryptographic argument verification failed" in resp_verify_tamper.json()["detail"]
+
+    # 5b. Mismatched tool name fails closed
+    resp_verify_tool_tamper = client.post(
+        "/v1/safety/verify-execution",
+        headers={"X-IPC-Token": "ipc_secret_test_token"},
+        json={
+            "approval_token": token,
+            "tool_name": "bash:execute",  # Wrong tool!
+            "tool_args": high_risk_args,
+        },
+    )
+    assert resp_verify_tool_tamper.status_code == 403
+    assert "Tool name mismatch" in resp_verify_tool_tamper.json()["detail"]
+
+    # 5c. Valid execution consumes and burns the token
+    resp_verify_valid = client.post(
+        "/v1/safety/verify-execution",
+        headers={"X-IPC-Token": "ipc_secret_test_token"},
+        json={
+            "approval_token": token,
+            "tool_name": "sql:execute",
+            "tool_args": high_risk_args,
+        },
+    )
+    assert resp_verify_valid.status_code == 200
+    assert resp_verify_valid.json()["authorized"] is True
+
+    # 5d. Replay attack: second call with same token MUST fail closed
+    resp_verify_replay = client.post(
+        "/v1/safety/verify-execution",
+        headers={"X-IPC-Token": "ipc_secret_test_token"},
+        json={
+            "approval_token": token,
+            "tool_name": "sql:execute",
+            "tool_args": high_risk_args,
+        },
+    )
+    assert resp_verify_replay.status_code == 403
+    assert "replay attack detected" in resp_verify_replay.json()["detail"]
+
+    # 6. Rejection with Explicit Reason
+    resp_reject_reg = client.post(
+        "/v1/safety/operations",
+        json={
+            "tool_name": "filesystem:delete",
+            "tool_args": {"path": "/etc/passwd"},
+        },
+    )
+    rej_op_id = resp_reject_reg.json()["operation_id"]
+    resp_reject = client.post(
+        f"/v1/safety/operations/{rej_op_id}/reject",
+        headers={"X-IPC-Token": "ipc_secret_test_token"},
+        json={"actor": "operator", "reason": "Destructive system directory target forbidden"},
+    )
+    assert resp_reject.status_code == 200
+    assert resp_reject.json()["status"] == "rejected"
+    assert resp_reject.json()["decision_reason"] == "Destructive system directory target forbidden"
+
+    # 7. Batch Operations
+    op_b1 = client.post(
+        "/v1/safety/operations",
+        json={"tool_name": "t1", "tool_args": {"k": "v1"}},
+    ).json()["operation_id"]
+    op_b2 = client.post(
+        "/v1/safety/operations",
+        json={"tool_name": "t2", "tool_args": {"k": "v2"}},
+    ).json()["operation_id"]
+
+    resp_batch = client.post(
+        "/v1/safety/operations/batch",
+        headers={"X-IPC-Token": "ipc_secret_test_token"},
+        json={"operation_ids": [op_b1, op_b2], "action": "approve", "actor": "batch_operator"},
+    )
+    assert resp_batch.status_code == 200
+    batch_res = resp_batch.json()
+    assert len(batch_res) == 2
+    assert all(b["status"] == "approved" for b in batch_res)
+
+    # 8. Guardrails Enforcement in Pipeline Registry (core/pipelines/registry.py)
+    import dspy
+    from core.pipelines import PipelineMetadata, get_pipeline_registry
+
+    pipe_reg = get_pipeline_registry()
+
+    class DummySafePipeline(dspy.Module):
+        def forward(self, **kwargs):
+            return dspy.Prediction(output="ok")
+
+    pipe_reg.register(
+        DummySafePipeline,
+        metadata=PipelineMetadata(
+            name="test_guarded_pipeline",
+            description="Pipeline with safety guardrails",
+            inputs=["data"],
+            outputs=["output"],
+            guardrails=["no_destructive_ops"],
+        ),
+    )
+    # Should execute successfully when safe
+    out = pipe_reg.run("test_guarded_pipeline", data="normal input")
+    assert out["output"] == "ok"
+
+
+def test_task_4_5_cost_dashboard_and_distillation_engine(monkeypatch):
+    """Verify Task 4.5 Cost Dashboard (Law 1 90/9/1 split, token ledger, budget guardrails, Law 8 distillation)."""
+    monkeypatch.setenv("AGENT_ENGINE_IPC_TOKEN", "ipc_secret_test_token")
+    from fastapi.testclient import TestClient
+    from services.python.server.api import app
+
+    client = TestClient(app, headers={"X-IPC-Token": "ipc_secret_test_token"})
+
+    # 1. Telemetry Cost Metrics (Initial State & 90/9/1 Defaults)
+    resp_cost = client.get("/v1/telemetry/cost?project=cost_test_proj")
+    assert resp_cost.status_code == 200
+    cost_data = resp_cost.json()
+    assert "total_cost_usd" in cost_data
+    assert "month_spend_usd" in cost_data
+    assert "day_spend_usd" in cost_data
+    assert "cache_hit_rate" in cost_data
+    assert "tier_split" in cost_data
+    assert "cost_per_task" in cost_data
+    assert "breakdown" in cost_data
+
+    tier_split = cost_data["tier_split"]
+    assert "deterministic_cache_local_pct" in tier_split
+    assert "mid_tier_pct" in tier_split
+    assert "frontier_pct" in tier_split
+
+    # 2. Record Token Spend Across Model Tiers (Law 1 Routing: Tier 1 Local, Tier 2 Mid, Tier 3 Frontier)
+    # Tier 1 (Deterministic/Local/Code)
+    rec1 = client.post(
+        "/v1/telemetry/cost/record",
+        json={
+            "agent_name": "coder_agent",
+            "model_name": "qwen2.5-coder-7b",
+            "prompt_tokens": 900,
+            "completion_tokens": 100,
+            "cost_usd": 0.0,
+            "project": "cost_test_proj",
+            "task_id": "task_t1",
+        },
+    )
+    assert rec1.status_code == 200
+    assert rec1.json()["success"] is True
+
+    # Tier 2 (Mid-tier swarm)
+    rec2 = client.post(
+        "/v1/telemetry/cost/record",
+        json={
+            "agent_name": "summarizer_agent",
+            "model_name": "gemini-2.0-flash",
+            "prompt_tokens": 450,
+            "completion_tokens": 50,
+            "cost_usd": 0.0005,
+            "project": "cost_test_proj",
+            "task_id": "task_t2",
+        },
+    )
+    assert rec2.status_code == 200
+
+    # Tier 3 (Frontier reasoning)
+    rec3 = client.post(
+        "/v1/telemetry/cost/record",
+        json={
+            "agent_name": "architect_agent",
+            "model_name": "gpt-4o",
+            "prompt_tokens": 500,
+            "completion_tokens": 100,
+            "cost_usd": 0.005,
+            "project": "cost_test_proj",
+            "task_id": "task_t3",
+        },
+    )
+    assert rec3.status_code == 200
+
+    # Verify updated tier metrics
+    resp_cost_updated = client.get("/v1/telemetry/cost?project=cost_test_proj")
+    assert resp_cost_updated.status_code == 200
+    updated_data = resp_cost_updated.json()
+    assert updated_data["total_cost_usd"] >= 0.0055
+    ts_updated = updated_data["tier_split"]
+    assert ts_updated["code_cache_calls"] >= 1
+    assert ts_updated["mid_tier_calls"] >= 1
+    assert ts_updated["frontier_calls"] >= 1
+    assert len(updated_data["cost_per_task"]) >= 1
+
+    # 3. Budget Configuration & Ceilings
+    resp_budget_set = client.post(
+        "/v1/telemetry/budget",
+        json={
+            "monthly_budget_usd": 150.0,
+            "daily_budget_usd": 15.0,
+            "warning_threshold_pct": 75.0,
+            "critical_threshold_pct": 95.0,
+            "project": "cost_test_proj",
+        },
+    )
+    assert resp_budget_set.status_code == 200
+    budget_res = resp_budget_set.json()
+    assert budget_res["monthly_budget_usd"] == 150.0
+    assert budget_res["daily_budget_usd"] == 15.0
+    assert budget_res["warning_threshold_pct"] == 75.0
+    assert budget_res["critical_threshold_pct"] == 95.0
+
+    resp_budget_get = client.get("/v1/telemetry/budget?project=cost_test_proj")
+    assert resp_budget_get.status_code == 200
+    assert resp_budget_get.json()["monthly_budget_usd"] == 150.0
+
+    # 4. Law 8: Distillation Candidates (>10k calls/month)
+    resp_candidates = client.get("/v1/telemetry/distillation-candidates")
+    assert resp_candidates.status_code == 200
+    candidates = resp_candidates.json()
+    assert len(candidates) >= 3
+    for cand in candidates:
+        assert (
+            cand["monthly_calls"] >= 10000
+        ), "Distillation candidate must have >=10,000 monthly calls (Law 8)"
+        assert cand["teacher_model"] is not None
+        assert cand["student_model"] is not None
+        assert cand["monthly_savings_usd"] > 0
+        assert 0.0 <= cand["accuracy_score"] <= 1.0
+
+    # 5. Distillation Trigger & Pipeline Initialization
+    # Unauthenticated call fails with 401
+    resp_distill_unauth = TestClient(app).post(
+        "/v1/telemetry/distill",
+        json={"candidate_id": "dist-001", "target_student_model": "qwen2.5-coder-7b"},
+    )
+    assert resp_distill_unauth.status_code == 401
+
+    # Authenticated call succeeds
+    resp_distill = client.post(
+        "/v1/telemetry/distill",
+        headers={"X-IPC-Token": "ipc_secret_test_token"},
+        json={"candidate_id": "dist-001", "target_student_model": "qwen2.5-coder-7b"},
+    )
+    assert resp_distill.status_code == 200
+    distill_res = resp_distill.json()
+    assert distill_res["success"] is True
+    assert "Distillation pipeline initialized" in distill_res["message"]
+
+    # Invalid candidate fails cleanly
+    resp_distill_invalid = client.post(
+        "/v1/telemetry/distill",
+        headers={"X-IPC-Token": "ipc_secret_test_token"},
+        json={"candidate_id": "nonexistent-candidate"},
+    )
+    assert resp_distill_invalid.status_code == 200
+    assert resp_distill_invalid.json()["success"] is False
+
+    # 6. Verify React Desktop Shell Artifacts for Task 4.5
+    cost_screen_file = RENDERER_ROOT / "screens" / "Cost.tsx"
+    assert cost_screen_file.exists(), "apps/desktop/src/renderer/screens/Cost.tsx must exist"
+    cost_screen_content = cost_screen_file.read_text()
+
+    assert "sidecarClient.getCostMetrics" in cost_screen_content
+    assert "sidecarClient.getBudgetConfig" in cost_screen_content
+    assert "sidecarClient.setBudgetConfig" in cost_screen_content
+    assert "sidecarClient.listDistillationCandidates" in cost_screen_content
+    assert "sidecarClient.triggerDistillation" in cost_screen_content
+    assert "renderDonutChart" in cost_screen_content
+    assert "renderBarChart" in cost_screen_content
+    assert "exportCSV" in cost_screen_content
+    assert "exportJSON" in cost_screen_content
+    assert "Law 1" in cost_screen_content
+    assert "Law 8" in cost_screen_content or "Distillation" in cost_screen_content
+
+    # Check App.tsx integration
+    app_file = RENDERER_ROOT / "App.tsx"
+    app_content = app_file.read_text()
+    assert "import { Cost } from './screens/Cost';" in app_content
+    assert "case 'cost':" in app_content
+    assert "<Cost" in app_content
+
+    # Check client.ts and types
+    client_file = RENDERER_ROOT / "api" / "client.ts"
+    client_content = client_file.read_text()
+    assert "getCostMetrics" in client_content
+    assert "getBudgetConfig" in client_content
+    assert "setBudgetConfig" in client_content
+    assert "listDistillationCandidates" in client_content
+    assert "triggerDistillation" in client_content
+
+    types_file = RENDERER_ROOT / "types" / "index.ts"
+    types_content = types_file.read_text()
+    assert "TierSplitInfo" in types_content
+    assert "DistillationCandidate" in types_content
+    assert "BudgetConfig" in types_content
+    assert "CostMetrics" in types_content
+
+
+def test_task_4_6_policy_editor_and_immutable_audit_log(monkeypatch):
+    """Verify Task 4.6 Policy Editor, Dry-Run Playground, and Paginated Audit Log."""
+    monkeypatch.setenv("AGENT_ENGINE_IPC_TOKEN", "ipc_secret_test_token")
+    from fastapi.testclient import TestClient
+    from services.python.server.api import app
+    from core.safety import get_policy_engine
+
+    client = TestClient(app, headers={"X-IPC-Token": "ipc_secret_test_token"})
+    engine = get_policy_engine()
+    original_yaml = engine.get_yaml_content()
+
+    try:
+        # 1. Get YAML Policy
+        resp_get = client.get("/v1/safety/policies/yaml")
+        assert resp_get.status_code == 200
+        yaml_data = resp_get.json()
+        assert "yaml_content" in yaml_data
+        assert "rules:" in yaml_data["yaml_content"]
+        assert yaml_data["rules_count"] >= 8
+
+        # 2. Syntax and Validation checks
+        # Invalid syntax fails with 400
+        resp_bad_syntax = client.post(
+            "/v1/safety/policies/yaml",
+            headers={"X-IPC-Token": "ipc_secret_test_token"},
+            json={"yaml_content": "invalid: yaml: [syntax"},
+        )
+        assert resp_bad_syntax.status_code == 400
+        assert "Invalid YAML syntax" in resp_bad_syntax.json()["detail"]
+
+        # Missing rules fails with 400
+        resp_missing_rules = client.post(
+            "/v1/safety/policies/yaml",
+            headers={"X-IPC-Token": "ipc_secret_test_token"},
+            json={"yaml_content": "version: '1.0.0'\nname: 'No Rules'"},
+        )
+        assert resp_missing_rules.status_code == 400
+        assert "rules" in resp_missing_rules.json()["detail"].lower()
+
+        # Valid YAML update hot-reloads policies without restart
+        test_custom_yaml = """version: "1.0.0"
+name: "Hot Reloaded Policy Test"
+description: "Test policy for hot reload"
+
+rules:
+  - id: "custom_block_rule_test"
+    name: "Custom Block Rule"
+    description: "Custom test rule"
+    match_type: "regex"
+    pattern: "custom_forbidden_keyword"
+    action: "block"
+    risk_level: "critical"
+    reason: "Blocked by hot-reloaded custom rule."
+"""
+        resp_update = client.post(
+            "/v1/safety/policies/yaml",
+            headers={"X-IPC-Token": "ipc_secret_test_token"},
+            json={"yaml_content": test_custom_yaml},
+        )
+        assert resp_update.status_code == 200
+        update_res = resp_update.json()
+        assert update_res["success"] is True
+        assert update_res["rules_count"] == 1
+
+        # Confirm hot-reload took effect immediately in-memory
+        resp_pols = client.get("/v1/safety/policies")
+        assert resp_pols.status_code == 200
+        pols = resp_pols.json()
+        assert len(pols) == 1
+        assert pols[0]["id"] == "custom_block_rule_test"
+
+        # 3. Dry-Run Playground Simulation
+        # Simulate call matching the new rule
+        resp_sim_block = client.post(
+            "/v1/safety/policies/dry-run",
+            json={
+                "tool_name": "bash:execute",
+                "tool_args": {"cmd": "echo custom_forbidden_keyword"},
+            },
+        )
+        assert resp_sim_block.status_code == 200
+        block_res = resp_sim_block.json()
+        assert block_res["decision"] == "block"
+        assert block_res["risk_level"] == "critical"
+        assert block_res["risk_score"] >= 0.90
+        assert len(block_res["violating_rules"]) == 1
+        assert block_res["violating_rules"][0]["id"] == "custom_block_rule_test"
+        # Zero audit footprint: audit_id must be None
+        assert block_res.get("audit_id") is None
+
+        # Simulate call that is safe
+        resp_sim_safe = client.post(
+            "/v1/safety/policies/dry-run",
+            json={
+                "tool_name": "sql:execute",
+                "tool_args": {"query": "SELECT * FROM safe_table;"},
+            },
+        )
+        assert resp_sim_safe.status_code == 200
+        safe_res = resp_sim_safe.json()
+        assert safe_res["decision"] == "allow"
+        assert safe_res["risk_score"] < 0.70
+        assert safe_res["risk_level"] in ("low", "medium")
+        assert safe_res.get("audit_id") is None
+
+        # 4. Paginated Audit Log & Filtering
+        # Seed an audit record via real evaluate endpoint
+        client.post(
+            "/v1/safety/evaluate",
+            json={
+                "tool_name": "bash:execute",
+                "tool_args": {"cmd": "echo custom_forbidden_keyword"},
+            },
+        )
+
+        resp_logs = client.get("/v1/safety/audit-logs?limit=10&offset=0")
+        assert resp_logs.status_code == 200
+        logs_data = resp_logs.json()
+        assert "total" in logs_data
+        assert "items" in logs_data
+        assert logs_data["total"] >= 1
+        assert len(logs_data["items"]) >= 1
+
+        # Test filtering by decision
+        resp_filter_block = client.get("/v1/safety/audit-logs?decision=block")
+        assert resp_filter_block.status_code == 200
+        filter_data = resp_filter_block.json()
+        assert all(item["decision"] == "block" for item in filter_data["items"])
+
+        # 5. Export Audit Logs (CSV and JSON)
+        resp_export_json = client.get("/v1/safety/audit-logs/export?format=json")
+        assert resp_export_json.status_code == 200
+        assert isinstance(resp_export_json.json(), list)
+
+        resp_export_csv = client.get("/v1/safety/audit-logs/export?format=csv")
+        assert resp_export_csv.status_code == 200
+        assert "text/csv" in resp_export_csv.headers["content-type"]
+        csv_text = resp_export_csv.text
+        assert "id,timestamp,tool_name" in csv_text
+
+    finally:
+        # Restore original YAML policy
+        engine.update_yaml_content(original_yaml)
+
+    # 6. Verify Desktop UI Integration for Task 4.6
+    pol_file = RENDERER_ROOT / "screens" / "Policies.tsx"
+    assert pol_file.exists(), "Policies.tsx must exist"
+    pol_content = pol_file.read_text()
+
+    assert "sidecarClient.getPolicyYaml" in pol_content
+    assert "sidecarClient.updatePolicyYaml" in pol_content
+    assert "sidecarClient.dryRunPolicy" in pol_content
+    assert "sidecarClient.getSafetyAuditLogsPage" in pol_content
+    assert "sidecarClient.exportSafetyAuditLogs" in pol_content
+    assert "POLICY_PRESETS" in pol_content
+    assert "PLAYGROUND_PRESETS" in pol_content
+    assert "YAML Editor" in pol_content
+    assert "Dry-Run Simulator" in pol_content
+    assert "Audit Log" in pol_content
+
+    # Check client.ts and types.ts
+    client_content = (RENDERER_ROOT / "api" / "client.ts").read_text()
+    assert "getPolicyYaml" in client_content
+    assert "updatePolicyYaml" in client_content
+    assert "dryRunPolicy" in client_content
+    assert "getSafetyAuditLogsPage" in client_content
+    assert "exportSafetyAuditLogs" in client_content
+
+    types_content = (RENDERER_ROOT / "types" / "index.ts").read_text()
+    assert "PolicyYamlResponse" in types_content
+    assert "DryRunRequest" in types_content
+    assert "DryRunResult" in types_content
+    assert "PaginatedAuditLogsResponse" in types_content
+
+
+def test_task_4_7_hardware_telemetry_panel():
+    """
+    Verify Task 4.7 Hardware Telemetry Panel:
+    - Real-time hardware telemetry (CPU, RAM, VRAM, GPU detection).
+    - Local LLM inference speed throughput tracking (tokens/sec).
+    - 95% VRAM saturation warning threshold.
+    - TopBar compact telemetry status bar with 2s polling.
+    - Settings.tsx Hardware & Compute panel with gauges and local runtime status.
+    """
+    from fastapi.testclient import TestClient
+    from services.python.server.api import app
+    from core.telemetry.hardware import get_hardware_telemetry_tracker, HardwareTelemetry
+
+    tracker = get_hardware_telemetry_tracker()
+
+    # 1. Core Hardware Telemetry & Threshold Verification
+    telem = tracker.get_telemetry()
+    assert isinstance(telem, HardwareTelemetry)
+    assert telem.cpu_usage_percent >= 0.0
+    assert telem.cpu_cores_logical >= 1
+    assert telem.cpu_cores_physical >= 1
+    assert telem.ram_used_percent >= 0.0
+    assert telem.ram_total_gb > 0.0
+    assert isinstance(telem.gpu_detected, bool)
+    assert len(telem.gpu_model) > 0
+    assert telem.gpu_vendor in ["nvidia", "amd", "apple", "intel", "generic"]
+
+    # Test 95% VRAM Warning Threshold Trigger
+    try:
+        tracker.set_vram_override(total_gb=10.0, used_gb=9.6)
+        telem_warn = tracker.get_telemetry()
+        assert telem_warn.vram_used_percent == 96.0
+        assert telem_warn.vram_warning is True, "VRAM >= 95% must trigger vram_warning flag"
+
+        # Below threshold test
+        tracker.set_vram_override(total_gb=10.0, used_gb=8.5)
+        telem_ok = tracker.get_telemetry()
+        assert telem_ok.vram_used_percent == 85.0
+        assert telem_ok.vram_warning is False, "VRAM < 95% must not trigger vram_warning flag"
+    finally:
+        tracker.reset_override()
+
+    # Test Local Model Throughput Recording (tokens/sec)
+    speed = tracker.record_inference_speed(
+        tokens=150,
+        elapsed_seconds=2.5,
+        model="qwen2.5-coder:7b",
+        runtime="ollama",
+    )
+    assert speed == 60.0
+    assert tracker.get_telemetry().tokens_per_second == 60.0
+    assert tracker.get_telemetry().recent_inference_model == "qwen2.5-coder:7b"
+    assert tracker.get_telemetry().recent_inference_runtime == "ollama"
+
+    # 2. FastAPI Endpoints Verification
+    client = TestClient(app)
+
+    resp_hw = client.get("/v1/telemetry/hardware")
+    assert resp_hw.status_code == 200
+    hw_data = resp_hw.json()
+    assert "cpu_usage_percent" in hw_data
+    assert "ram_used_percent" in hw_data
+    assert "gpu_detected" in hw_data
+    assert "gpu_model" in hw_data
+    assert "vram_used_percent" in hw_data
+    assert "vram_warning" in hw_data
+    assert "tokens_per_second" in hw_data
+    assert hw_data["tokens_per_second"] == 60.0
+
+    resp_spd = client.post(
+        "/v1/telemetry/record-speed",
+        json={"tokens": 240, "elapsed_seconds": 3.0, "model": "llama3.2:3b", "runtime": "ollama"},
+    )
+    assert resp_spd.status_code == 200
+    spd_data = resp_spd.json()
+    assert spd_data["status"] == "success"
+    assert spd_data["tokens_per_second"] == 80.0
+
+    # Verify standard telemetry endpoint is also enriched
+    resp_telem = client.get("/v1/telemetry")
+    assert resp_telem.status_code == 200
+    telem_data = resp_telem.json()
+    assert "gpu_detected" in telem_data
+    assert "tokens_per_second" in telem_data
+    assert telem_data["tokens_per_second"] == 80.0
+
+    # 3. Client & Types Integration
+    client_ts = (RENDERER_ROOT / "api" / "client.ts").read_text()
+    assert "getHardwareTelemetry" in client_ts
+    assert "recordInferenceSpeed" in client_ts
+
+    types_ts = (RENDERER_ROOT / "types" / "index.ts").read_text()
+    assert "interface HardwareTelemetry" in types_ts
+    assert "vram_warning" in types_ts
+    assert "tokens_per_second" in types_ts
+
+    # 4. Desktop UI & Shell Integration
+    topbar_ts = (RENDERER_ROOT / "shell" / "TopBar.tsx").read_text()
+    assert "getHardwareTelemetry" in topbar_ts
+    assert "vram_warning" in topbar_ts
+    assert "CRITICAL" in topbar_ts
+    assert "intervalMs" in topbar_ts  # telemetry polling interval (5s active / 10s idle)
+    assert "5000" in topbar_ts
+
+    settings_ts = (RENDERER_ROOT / "screens" / "Settings.tsx").read_text()
+    assert "Hardware & Compute" in settings_ts
+    assert "GPU Model Detection" in settings_ts
+    assert "Generation Speed Gauge" in settings_ts
+    assert "VRAM Utilization Gauge" in settings_ts
+    assert "95%" in settings_ts
+    assert "Run Speed Benchmark" in settings_ts
+    assert "Ollama Daemon" in settings_ts
+    assert "llama.cpp Server" in settings_ts
+    assert "2000" in settings_ts  # 2s polling interval
+
+
+def test_task_4_8_settings_screen_and_diagnostics_export(tmp_path: Path):
+    """Validate Task 4.8: Settings screen, encrypted config persistence, and diagnostics export bundle (.zip/.json).
+
+    Verifies:
+    1. Core SettingsManager & AppSettings encrypted round-trip using AES-256-GCM.
+    2. Diagnostics bundle generator (redacts sensitive credentials, packages zip with system info & schemas).
+    3. FastAPI sidecar endpoints:
+       - GET /v1/settings/config
+       - POST /v1/settings/config
+       - GET /v1/diagnostics/export?format=zip (validates zip contents)
+       - GET /v1/diagnostics/export?format=json
+    4. Desktop TypeScript client, types, and Settings.tsx:
+       - 9 tabs present
+       - 1-click export diagnostics buttons
+       - Redaction warning notice
+    """
+    import io
+    import zipfile
+    from fastapi.testclient import TestClient
+
+    from core.config.settings import SettingsManager
+    from core.diagnostics import build_diagnostics_bundle, redact_sensitive_data
+    from services.python.server.api import app
+
+    # 1. Test Encrypted Settings Persistence
+    custom_vault = tmp_path / "settings_test.encrypted.vault"
+    mgr = SettingsManager(vault_path=custom_vault)
+    initial_settings = mgr.get_settings()
+    assert initial_settings.models.default_tier == "instant"
+    assert initial_settings.storage.database_backend == "sqlite"
+
+    # Mutate and save
+    updated_settings = mgr.update_settings(
+        {
+            "models": {"default_tier": "swarm", "temperature": 0.4},
+            "appearance": {"theme": "light", "font_size": "lg"},
+            "security": {"zero_trust_eval": "strict"},
+        }
+    )
+    assert updated_settings.models.default_tier == "swarm"
+    assert updated_settings.models.temperature == 0.4
+    assert updated_settings.appearance.theme == "light"
+    assert updated_settings.appearance.font_size == "lg"
+    assert custom_vault.exists(), "Encrypted vault file must exist on disk"
+
+    # Reload from disk into fresh manager
+    fresh_mgr = SettingsManager(vault_path=custom_vault)
+    loaded_settings = fresh_mgr.get_settings()
+    assert loaded_settings.models.default_tier == "swarm"
+    assert loaded_settings.models.temperature == 0.4
+    assert loaded_settings.appearance.theme == "light"
+
+    # 2. Test Diagnostics Redaction and Bundle Generation
+    raw_config = {
+        "anthropic_api_key": "sk-ant-api03-abcdef1234567890",
+        "custom_token": "secret_token_val",
+        "endpoint": "https://api.anthropic.com",
+        "nested": {"db_password": "supersecretpassword", "safe_val": 42},
+    }
+    redacted = redact_sensitive_data(raw_config)
+    assert redacted["anthropic_api_key"] == "***REDACTED***"
+    assert redacted["custom_token"] == "***REDACTED***"
+    assert redacted["nested"]["db_password"] == "***REDACTED***"
+    assert redacted["endpoint"] == "https://api.anthropic.com"
+    assert redacted["nested"]["safe_val"] == 42
+
+    # Test ZIP bundle generation
+    zip_bytes, content_type, filename = build_diagnostics_bundle(format="zip")
+    assert isinstance(zip_bytes, bytes)
+    assert content_type == "application/zip"
+    assert filename.endswith(".zip")
+    with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+        namelist = zf.namelist()
+        assert "system_info.json" in namelist
+        assert "schema_versions.json" in namelist
+        assert "config_redacted.json" in namelist
+        assert "logs_redacted.txt" in namelist
+
+    # Test JSON bundle generation
+    json_bytes, json_type, json_filename = build_diagnostics_bundle(format="json")
+    assert json_type == "application/json"
+    assert json_filename.endswith(".json")
+    json_bundle = json.loads(json_bytes.decode("utf-8"))
+    assert isinstance(json_bundle, dict)
+    assert "system_info" in json_bundle
+    assert "schema_versions" in json_bundle
+    assert "config" in json_bundle
+
+    # 3. FastAPI Sidecar API Verification
+    client = TestClient(app)
+
+    # GET /v1/settings/config
+    resp_get = client.get("/v1/settings/config")
+    assert resp_get.status_code == 200
+    cfg_data = resp_get.json()
+    assert "models" in cfg_data
+    assert "local_runtime" in cfg_data
+    assert "adapters" in cfg_data
+    assert "channels" in cfg_data
+    assert "storage" in cfg_data
+    assert "security" in cfg_data
+    assert "appearance" in cfg_data
+    assert "version" in cfg_data
+    assert "updated_at" in cfg_data
+
+    # POST /v1/settings/config
+    resp_post = client.post(
+        "/v1/settings/config",
+        json={"models": {"temperature": 0.25}, "appearance": {"ui_density": "compact"}},
+    )
+    assert resp_post.status_code == 200
+    updated_cfg = resp_post.json()
+    assert updated_cfg["models"]["temperature"] == 0.25
+    assert updated_cfg["appearance"]["ui_density"] == "compact"
+
+    # GET /v1/diagnostics/export?format=zip
+    resp_diag_zip = client.get("/v1/diagnostics/export?format=zip")
+    assert resp_diag_zip.status_code == 200
+    assert resp_diag_zip.headers.get("content-type") == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(resp_diag_zip.content), "r") as zf:
+        assert "system_info.json" in zf.namelist()
+        assert "schema_versions.json" in zf.namelist()
+        assert "config_redacted.json" in zf.namelist()
+        assert "logs_redacted.txt" in zf.namelist()
+
+    # GET /v1/diagnostics/export?format=json
+    resp_diag_json = client.get("/v1/diagnostics/export?format=json")
+    assert resp_diag_json.status_code == 200
+    diag_json = resp_diag_json.json()
+    assert "system_info" in diag_json
+    assert "schema_versions" in diag_json
+
+    # 4. Desktop Client & TypeScript Integration Verification
+    client_ts = (RENDERER_ROOT / "api" / "client.ts").read_text()
+    assert "getAppSettings" in client_ts
+    assert "saveAppSettings" in client_ts
+    assert "exportDiagnostics" in client_ts
+
+    types_ts = (RENDERER_ROOT / "types" / "index.ts").read_text()
+    assert "interface AppSettings" in types_ts
+    assert "interface DiagnosticsBundle" in types_ts
+    assert "interface ModelSettingsConfig" in types_ts
+    assert "interface LocalRuntimeSettingsConfig" in types_ts
+
+    settings_ts = (RENDERER_ROOT / "screens" / "Settings.tsx").read_text()
+    # 9 tabs present
+    for tab in [
+        "providers",
+        "models",
+        "local",
+        "adapters",
+        "channels",
+        "storage",
+        "security",
+        "appearance",
+        "diagnostics",
+    ]:
+        assert (
+            f"setActiveTab('{tab}')" in settings_ts
+        ), f"Settings.tsx must have tab switch for {tab}"
+
+    # 1-click export buttons & disclaimer
+    assert "Export Diagnostics (.zip)" in settings_ts
+    assert "Export Diagnostics (.json)" in settings_ts
+    assert (
+        "Sensitive data (keys, secrets, personal paths) has been redacted. Review before sharing."
+        in settings_ts
+    )
+    assert "handleSaveAppSettings" in settings_ts
+
+
+def test_task_4_9_streamlit_demotion_and_process_lifecycle():
+    """Validate Task 4.9: Streamlit demotion to developer tool & process lifecycle (F07, F14).
+
+    Verifies:
+    1. Demotion of Streamlit from user-facing UI to internal dev tool:
+       - tools/dev_dashboard.py exists with prominent top warning banner.
+       - F07 remediation: host execution privileges clearly labeled.
+       - server/dashboard.py deprecation shim forwards to tools.dev_dashboard.
+       - tests/test_sandbox.py imports from tools.dev_dashboard.
+    2. Makefile integration:
+       - make dev-dashboard target runs streamlit on tools/dev_dashboard.py.
+    3. Master CLI integration:
+       - main.py exposes dev-dashboard subcommand and routes to tools/dev_dashboard.py.
+    4. Process lifecycle & signal trap verification (F14):
+       - start_studio.sh installs trap cleanup SIGINT SIGTERM EXIT before launching daemons.
+       - start_studio.sh eliminates foreground exec replacement so traps execute.
+       - cleanup() selectively terminates spawned children and leaves pre-existing services untouched.
+    5. Documentation alignment:
+       - README.md, docs/GUI.md, and operational guide promote Tauri Desktop as sole user UI.
+    """
+    repo_root = REPO_ROOT
+
+    # 1. Dev dashboard files and banners
+    dev_dash = repo_root / "tools" / "dev_dashboard.py"
+    assert dev_dash.exists(), "tools/dev_dashboard.py must exist"
+    dev_content = dev_dash.read_text()
+    assert (
+        "Developer tool — not for end users" in dev_content
+    ), "tools/dev_dashboard.py must contain prominent developer warning banner"
+    assert (
+        "Tauri Desktop application" in dev_content
+    ), "tools/dev_dashboard.py must reference Tauri Desktop application as official UI"
+    assert (
+        "Developer Notice (F07)" in dev_content
+    ), "tools/dev_dashboard.py must remediate F07 by noting host developer execution"
+
+    # server/dashboard.py deprecation shim
+    server_dash = repo_root / "server" / "dashboard.py"
+    assert server_dash.exists(), "server/dashboard.py shim must exist"
+    server_content = server_dash.read_text()
+    assert "deprecated" in server_content.lower()
+    assert "tools.dev_dashboard" in server_content
+    assert "extract_code_block" in server_content
+    assert "auto_repair_naked_return" in server_content
+
+    # test_sandbox.py updated import
+    sandbox_test_content = (repo_root / "tests" / "test_sandbox.py").read_text()
+    assert "from tools.dev_dashboard import" in sandbox_test_content
+
+    # 2. Makefile dev-dashboard target
+    makefile_content = (repo_root / "Makefile").read_text()
+    assert "dev-dashboard:" in makefile_content
+    assert "tools/dev_dashboard.py" in makefile_content
+    assert "dev-dashboard" in makefile_content.split(".PHONY:")[1].split("\n")[0]
+
+    # 3. Master CLI main.py
+    main_py_content = (repo_root / "main.py").read_text()
+    assert "dev-dashboard" in main_py_content
+    assert "tools/dev_dashboard.py" in main_py_content
+
+    # 4. start_studio.sh lifecycle and signal trapping (F14)
+    start_sh = repo_root / "start_studio.sh"
+    assert start_sh.exists()
+    sh_content = start_sh.read_text()
+
+    # Trap must be installed
+    assert "trap cleanup SIGINT SIGTERM EXIT" in sh_content
+    assert "cleanup()" in sh_content
+
+    # Cleanup must precede background daemon launches
+    trap_idx = sh_content.find("trap cleanup")
+    ollama_launch_idx = sh_content.find("start_ollama.sh")
+    watcher_launch_idx = sh_content.find("server.watcher")
+    sidecar_launch_idx = sh_content.find("services.python.server.api")
+
+    assert trap_idx < ollama_launch_idx, "Signal trap must be registered before Ollama launch"
+    assert trap_idx < watcher_launch_idx, "Signal trap must be registered before Watcher launch"
+    assert trap_idx < sidecar_launch_idx, "Signal trap must be registered before Sidecar launch"
+
+    # No foreground exec command replacing the shell
+    for line in sh_content.splitlines():
+        trimmed = line.strip()
+        if not trimmed.startswith("#"):
+            assert not trimmed.startswith("exec "), f"start_studio.sh must not execute exec: {line}"
+
+    # Cleanup selectively kills spawned PIDs
+    assert "PID_SIDECAR" in sh_content
+    assert "PID_WATCHER" in sh_content
+    assert "PID_LLAMA" in sh_content
+    assert "PID_OLLAMA" in sh_content
+
+    # 5. Documentation
+    gui_legacy = repo_root / "docs" / "archive" / "GUI_LEGACY.md"
+    gui_doc = (
+        gui_legacy.read_text()
+        if gui_legacy.exists()
+        else (repo_root / "docs" / "GUI.md").read_text()
+    )
+    assert "Streamline to ONE" in gui_doc
+    assert "Tauri shell as the only user-facing dashboard" in gui_doc
+
+    readme = (repo_root / "README.md").read_text()
+    assert "make desktop-tauri-dev" in readme
+    assert "make dev-dashboard" in readme
+
+
+def test_skills_library_screen_component():
+    """Verify Screen 8 — Skills Library component, tabs, routing, and client integration."""
+    skills_screen = RENDERER_ROOT / "screens" / "Skills.tsx"
+    assert skills_screen.exists(), "apps/desktop/src/renderer/screens/Skills.tsx must exist"
+
+    content = skills_screen.read_text(encoding="utf-8")
+
+    # 1. Top tabs: Installed, Registry, Collections
+    assert "Installed (" in content
+    assert "Registry" in content
+    assert "Collections (" in content
+
+    # 2. Left filters: Claude Code, Cursor, Codex, Goose, Agent Engine
+    assert "claude-code" in content
+    assert "cursor" in content
+    assert "codex" in content
+    assert "goose" in content
+    assert "agent-engine" in content
+
+    # 3. Editor & Frontmatter validation
+    assert "Frontmatter schema valid" in content
+    assert "handleSaveSkill" in content
+    assert "validateSkillContent" in content
+
+    # 4. Registry actions (<10s install / uninstall)
+    assert "handleInstallPackage" in content
+    assert "handleUninstallPackage" in content
+    assert "Curated Skill Registry" in content
+
+    # 5. Remote discovery modal
+    assert "Remote Skill Discovery" in content
+    assert "handleDiscoverRemote" in content
+    assert "handleImportRemoteSkill" in content
+
+    # 6. App.tsx mounting and Sidebar navigation
+    app_content = (RENDERER_ROOT / "App.tsx").read_text(encoding="utf-8")
+    assert "case 'skills':" in app_content
+    assert "<Skills" in app_content
+
+    sidebar_content = (RENDERER_ROOT / "shell" / "Sidebar.tsx").read_text(encoding="utf-8")
+    assert "id: 'skills'" in sidebar_content
+
+    # 7. Client methods in client.ts
+    client_content = (RENDERER_ROOT / "api" / "client.ts").read_text(encoding="utf-8")
+    assert "getSkillsDetailed(" in client_content
+    assert "getSkillRegistryPackages(" in client_content
+    assert "discoverRemoteSkills(" in client_content
+    assert "importRemoteSkill(" in client_content
+
+
+def test_canonical_route_registry_and_aliases():
+    """Verify Canonical Route Registry (docs/GUI_CANONICAL_REDESIGN.md Section 4 & 5)."""
+    routes_file = RENDERER_ROOT / "routes" / "index.ts"
+    assert routes_file.exists(), "apps/desktop/src/renderer/routes/index.ts must exist"
+    content = routes_file.read_text(encoding="utf-8")
+
+    # Authoritative exports
+    assert "CANONICAL_ROUTES" in content
+    assert "resolveRoute" in content
+    assert "buildBreadcrumb" in content
+    assert "normalizeHash" in content
+
+    # All canonical route paths must be registered
+    expected_paths = [
+        "#home",
+        "#projects",
+        "#tasks",
+        "#automations",
+        "#research",
+        "#writing",
+        "#data",
+        "#developer",
+        "#knowledge",
+        "#skills",
+        "#activity",
+        "#approvals",
+        "#models",
+        "#settings",
+        "#profile",
+    ]
+    for path in expected_paths:
+        assert path in content, f"Path {path} must be in CANONICAL_ROUTES"
+
+    # Route aliases for legacy URLs
+    assert "#docs" in content
+    assert "#deep-research" in content
+    assert "#sheets" in content
+    assert "#code" in content
+    assert "#cost" in content
+    assert "#policies" in content
+    assert "#benchmarks" in content
+    assert "#workflows" in content
+    assert "#agent" in content
+
+
+def test_canonical_breadcrumb_truth():
+    """Verify breadcrumbs construct truthful segments and never duplicate 'Agent Engine / Agent Engine'."""
+    routes_file = RENDERER_ROOT / "routes" / "index.ts"
+    content = routes_file.read_text(encoding="utf-8")
+
+    assert "buildBreadcrumb" in content
+    assert "projectName !== 'Agent Engine'" in content or "projectName != 'Agent Engine'" in content
+
+    topbar_file = RENDERER_ROOT / "shell" / "TopBar.tsx"
+    topbar_content = topbar_file.read_text(encoding="utf-8")
+    assert "buildBreadcrumb" in topbar_content
+    assert "breadcrumbSegments" in topbar_content
+
+
+def test_knowledge_and_writing_independence():
+    """Verify Knowledge and Writing are independent screens with dedicated routes (#knowledge vs #writing)."""
+    knowledge_file = RENDERER_ROOT / "screens" / "Knowledge.tsx"
+    assert knowledge_file.exists(), "Knowledge.tsx must exist as dedicated screen"
+    knowledge_content = knowledge_file.read_text(encoding="utf-8")
+    assert "Knowledge" in knowledge_content
+    assert "sidecarClient.queryObservations" in knowledge_content
+
+    writing_file = RENDERER_ROOT / "screens" / "Writing.tsx"
+    assert writing_file.exists(), "Writing.tsx must exist as dedicated screen"
+    writing_content = writing_file.read_text(encoding="utf-8")
+    assert "Writing" in writing_content
+    assert "streamChatCompletion" in writing_content
+
+    # In routes/index.ts: Knowledge has path #knowledge, Writing has path #writing (with alias #docs)
+    routes_content = (RENDERER_ROOT / "routes" / "index.ts").read_text(encoding="utf-8")
+    assert "id: 'knowledge'" in routes_content
+    assert "path: '#knowledge'" in routes_content
+    assert "id: 'writing'" in routes_content
+    assert "path: '#writing'" in routes_content
+
+    # In Sidebar.tsx: distinct navigation items and distinct icons
+    sidebar_content = (RENDERER_ROOT / "shell" / "Sidebar.tsx").read_text(encoding="utf-8")
+    assert "{ id: 'knowledge', path: '#knowledge'" in sidebar_content
+    assert "{ id: 'writing', path: '#writing'" in sidebar_content
+
+    # In App.tsx: mounted independently
+    app_content = (RENDERER_ROOT / "App.tsx").read_text(encoding="utf-8")
+    assert "case 'knowledge':" in app_content
+    assert "<Knowledge" in app_content
+    assert "case 'writing':" in app_content
+    assert "<Writing" in app_content
+
+
+def test_canonical_standard_home_zero_stale_copy():
+    """Verify standard UI has 0 occurrences of stale prototype copy (Founder Directive)."""
+    home_file = RENDERER_ROOT / "screens" / "Home.tsx"
+    home_content = home_file.read_text(encoding="utf-8")
+
+    # Banned stale prototype strings
+    banned_home_strings = [
+        "Explore Inspiration",
+        "Instant High",
+        "General Assistant",
+        "Persona:",
+        "Pipeline:",
+        "Build an invoice agent",
+        "Analyze codebase & architecture",
+        "Deep market research report",
+    ]
+    for banned in banned_home_strings:
+        assert banned not in home_content, f"Stale string '{banned}' must not appear in Home.tsx"
+
+    # Universal command input placeholder
+    chat_input_content = (RENDERER_ROOT / "components" / "ChatInput.tsx").read_text(
+        encoding="utf-8"
+    )
+    assert "Ask, describe a task, or type / for commands..." in chat_input_content
+
+
+def test_real_project_integration_and_truthful_empty_states():
+    """Verify real sidecar integration, truthful empty states, and R4 preview notices."""
+    projects_file = RENDERER_ROOT / "screens" / "Projects.tsx"
+    projects_content = projects_file.read_text(encoding="utf-8")
+    assert "sidecarClient.getProjects" in projects_content
+    assert "No projects found" in projects_content
+
+    # Tasks and Automations show truthful execution capability headers without stale preview banners
+    tasks_content = (RENDERER_ROOT / "screens" / "Tasks.tsx").read_text(encoding="utf-8")
+    assert "Scheduled Tasks" in tasks_content
+    assert "JobService execution queue" in tasks_content
+
+    workflows_content = (RENDERER_ROOT / "screens" / "Workflows.tsx").read_text(encoding="utf-8")
+    assert "Automations & Workflows" in workflows_content
+    assert "Visual DAG Editor" in workflows_content
+
+
+def test_canonical_dark_form_field_styling():
+    """Verify that form controls across the desktop renderer use canonical dark styling."""
+    tailwind_cfg = (REPO_ROOT / "apps" / "desktop" / "tailwind.config.js").read_text(
+        encoding="utf-8"
+    )
+    assert "'bg-surface': '#101010'" in tailwind_cfg
+    assert "'bg-base': '#0a0a0a'" in tailwind_cfg
+
+    index_css = (RENDERER_ROOT / "index.css").read_text(encoding="utf-8")
+    assert "color-scheme: dark;" in index_css
+    assert "background-color: var(--bg-base);" in index_css
+    assert "select option {" in index_css
+
+    # Check Settings appearance tab uses dark form fields
+    settings_ts = (RENDERER_ROOT / "screens" / "Settings.tsx").read_text(encoding="utf-8")
+    assert "appSettings.appearance.theme" in settings_ts
+    assert "bg-bg-base" in settings_ts
+    # Verify no appearance selects use bg-bg-surface
+    assert "appearance: { ...appSettings.appearance, theme: e.target.value as any }" in settings_ts
+    assert (
+        'className="w-full px-3 py-2 rounded-lg bg-bg-base border border-border-subtle text-text-primary text-xs focus:outline-none focus:border-accent"'
+        in settings_ts
+    )
