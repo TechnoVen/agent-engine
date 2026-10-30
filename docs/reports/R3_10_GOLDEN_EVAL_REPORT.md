@@ -1,6 +1,6 @@
 # Agent Engine R3.10 Golden Evaluation Report
 
-> **Generated:** 2026-10-08T22:41:33.139167+00:00  
+> **Generated:** 2026-10-30T13:41:52.914102+00:00  
 > **Evaluator Version:** `v1_golden_eval`  
 > **Governing Task:** Milestone R3 Task R3.10 (Chain-Level Model Economics & Cost-Per-Success)  
 
